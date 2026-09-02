@@ -1,0 +1,96 @@
+{
+  "id": "ic-eng-overnight-01",
+  "description": "An individual-contributor engineer wakes up to an overnight release thread. The one thing waiting on them — confirming a migration is reversible before the 09:00 deploy train — was asked early in the evening, and the tail of the thread is automated all-clear noise that reads as 'nothing to do here'.",
+  "persona": "ic_engineer",
+  "window_kind": "overnight",
+  "volume": "balanced",
+  "window": { "start": "2026-07-08T21:00:00Z", "end": "2026-07-09T08:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-iceo1-001",
+      "source": "slack",
+      "thread_key": "C0RELEASE:1783372800.000100",
+      "artifact_id": "slack:C0RELEASE:1783372800.000100",
+      "actor": "Hollis Frame",
+      "occurred_at": "2026-07-08T21:20:00Z",
+      "context_label": "#release-train",
+      "text": "Tomorrow's 09:00 train has 14 PRs queued. Biggest one is the ledger schema migration."
+    },
+    {
+      "event_id": "ev-iceo1-002",
+      "source": "slack",
+      "thread_key": "C0RELEASE:1783372800.000100",
+      "artifact_id": "slack:C0RELEASE:1783372800.000200",
+      "actor": "Hollis Frame",
+      "occurred_at": "2026-07-08T21:34:00Z",
+      "context_label": "#release-train",
+      "text": "@kiran-vasquez before I let the ledger migration onto the train I need you to confirm in writing that it's reversible — specifically whether the backfill can be undone once it starts. If I don't have that by 08:45 I'm pulling it from the train."
+    },
+    {
+      "event_id": "ev-iceo1-003",
+      "source": "slack",
+      "thread_key": "C0RELEASE:1783372800.000100",
+      "artifact_id": "slack:C0RELEASE:1783372800.000300",
+      "actor": "Deploy Bot",
+      "occurred_at": "2026-07-08T23:02:00Z",
+      "context_label": "#release-train",
+      "text": "Nightly integration run: 412 passed, 0 failed. Train candidate build is green."
+    },
+    {
+      "event_id": "ev-iceo1-004",
+      "source": "slack",
+      "thread_key": "C0RELEASE:1783372800.000100",
+      "artifact_id": "slack:C0RELEASE:1783372800.000400",
+      "actor": "Deploy Bot",
+      "occurred_at": "2026-07-09T02:15:00Z",
+      "context_label": "#release-train",
+      "text": "Staging soak complete: 3h, no error-budget burn. No blockers detected."
+    },
+    {
+      "event_id": "ev-iceo1-005",
+      "source": "slack",
+      "thread_key": "C0RELEASE:1783372800.000100",
+      "artifact_id": "slack:C0RELEASE:1783372800.000500",
+      "actor": "Deploy Bot",
+      "occurred_at": "2026-07-09T06:00:00Z",
+      "context_label": "#release-train",
+      "text": "Reminder: train departs 09:00. All automated gates currently passing."
+    },
+    {
+      "event_id": "ev-iceo1-006",
+      "source": "gmail",
+      "thread_key": "gm-thread-iceo1-a",
+      "artifact_id": "gmail:gm-thread-iceo1-a:msg-1",
+      "actor": "Hollis Frame",
+      "occurred_at": "2026-07-09T07:12:00Z",
+      "context_label": "Ledger migration — reversibility confirmation needed before 08:45",
+      "text": "Kiran, mailing you as well since Slack was quiet overnight. I only need the one line about whether the backfill is reversible. Nothing else on the train needs you."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Confirm in writing to Hollis, before 08:45, whether the ledger schema migration's backfill is reversible once it starts — otherwise the migration is pulled from the 09:00 release train.",
+        "citation": "slack:C0RELEASE:1783372800.000200"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Hollis Frame needs written confirmation by 08:45 that the ledger migration's backfill is reversible, or she pulls it from the 09:00 train. [artifact:slack:C0RELEASE:1783372800.000200] What moved: the train candidate build is green (412 tests) and a 3-hour staging soak finished with no error-budget burn. [artifact:slack:C0RELEASE:1783372800.000400]"
+    ],
+    "supported_claims": [
+      "The 09:00 release train has 14 PRs queued, including the ledger schema migration.",
+      "Hollis Frame needs written confirmation that the backfill is reversible, by 08:45.",
+      "Without that confirmation the migration is pulled from the train.",
+      "The candidate build passed 412 integration tests with 0 failures.",
+      "A 3-hour staging soak completed with no error-budget burn."
+    ],
+    "unsupported_claims": [
+      "The migration is reversible.",
+      "The migration was pulled from the train.",
+      "The train was delayed.",
+      "All blockers are cleared and nothing is outstanding."
+    ],
+    "notes": "The trap is the shape of the thread tail: three consecutive bot messages saying green, no blockers, all gates passing. A system that weights recency or that treats 'no blockers detected' as a statement about human action items will report a clean night. The only human ask in the window is 12 hours before the end of it, and the Gmail nudge restates the same ask — one pending item, not two. Note also that 'no blockers detected' is a claim about automated gates only; asserting nothing is outstanding is unsupported."
+  },
+  "failure_mode_tags": ["missed_pending_item"]
+}

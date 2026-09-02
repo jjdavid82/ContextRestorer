@@ -1,0 +1,109 @@
+{
+  "id": "am-wrong-citation-01",
+  "description": "Two customers, near-identical renewal asks, and one shared internal thread discussing both. The correct pending item concerns the customer who actually asked the user; the other, louder account is handled by a colleague. Attaching the right summary to the wrong customer's artifact would also mean naming the wrong customer to the user.",
+  "persona": "account_manager",
+  "window_kind": "week",
+  "volume": "balanced",
+  "window": { "start": "2026-10-19T00:00:00Z", "end": "2026-10-23T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-amwc1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-amwc1-a",
+      "artifact_id": "gmail:gm-thread-amwc1-a:msg-1",
+      "actor": "Perrine Lalonde (Lantern Health)",
+      "occurred_at": "2026-10-19T08:45:00Z",
+      "context_label": "Lantern Health renewal — security questionnaire",
+      "text": "Wes, our security team needs the completed vendor questionnaire before we can renew. Our procurement window closes on the 30th. Sending the form separately."
+    },
+    {
+      "event_id": "ev-amwc1-002",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1792540800.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1792540800.000100",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-10-19T11:00:00Z",
+      "context_label": "#accounts-emea",
+      "text": "I've got Lantern Health's questionnaire — I did theirs last year and I have the answers saved. Taking it off your plate Wes, I'll have it back to them today. Nothing needed from you on Lantern."
+    },
+    {
+      "event_id": "ev-amwc1-003",
+      "source": "gmail",
+      "thread_key": "gm-thread-amwc1-b",
+      "artifact_id": "gmail:gm-thread-amwc1-b:msg-1",
+      "actor": "Tobias Wren (Meridian Loom)",
+      "occurred_at": "2026-10-20T09:30:00Z",
+      "context_label": "Meridian Loom renewal — security questionnaire",
+      "text": "Hello Wes. Same situation as I believe you have with others: our security team needs your completed vendor questionnaire before renewal. Ours has three additional questions about subprocessor locations that I gather are specific to us. Our board signs off on the 28th and I need the answers with me by the 26th at the latest. I have been told you are the only person authorised to answer the subprocessor section for our contract."
+    },
+    {
+      "event_id": "ev-amwc1-004",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1792540800.000400",
+      "artifact_id": "slack:C0ACCOUNTS:1792540800.000400",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-10-20T15:20:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Lantern's questionnaire is submitted and acknowledged. That renewal is now just waiting on their procurement. Closing my part."
+    },
+    {
+      "event_id": "ev-amwc1-005",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1792540800.000500",
+      "artifact_id": "slack:C0ACCOUNTS:1792540800.000500",
+      "actor": "Marguerite Salas",
+      "occurred_at": "2026-10-21T10:10:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Note on the questionnaires generally: the standard sections can be answered by anyone with the security pack, but subprocessor-location answers are contract-specific and must come from the named account manager. Don't let those get delegated."
+    },
+    {
+      "event_id": "ev-amwc1-006",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1792540800.000600",
+      "artifact_id": "slack:C0ACCOUNTS:1792540800.000600",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-10-22T16:40:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Renewal board: Lantern Health questionnaire done, Meridian Loom questionnaire outstanding, Ferrous Bay on hold pending verification, Tessellate closed. Two of four need nothing further."
+    },
+    {
+      "event_id": "ev-amwc1-007",
+      "source": "gmail",
+      "thread_key": "gm-thread-amwc1-b",
+      "artifact_id": "gmail:gm-thread-amwc1-b:msg-2",
+      "actor": "Tobias Wren (Meridian Loom)",
+      "occurred_at": "2026-10-23T11:05:00Z",
+      "context_label": "Meridian Loom renewal — security questionnaire",
+      "text": "Just checking this reached you. Still need it by the 26th."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Complete Meridian Loom's vendor security questionnaire — including the three contract-specific subprocessor-location questions, which only the named account manager may answer — and get it to Tobias by the 26th, ahead of their board sign-off on the 28th.",
+        "citation": "gmail:gm-thread-amwc1-b:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Meridian Loom's security questionnaire, needed by Tobias on the 26th for their board sign-off on the 28th. Three of the questions cover subprocessor locations and can't be delegated — only the named account manager may answer those. [artifact:gmail:gm-thread-amwc1-b:msg-1] Handled without you: Bo completed and submitted Lantern Health's questionnaire, so that renewal is just waiting on their procurement. [artifact:slack:C0ACCOUNTS:1792540800.000400]"
+    ],
+    "supported_claims": [
+      "Lantern Health required a completed vendor questionnaire before renewing, with a procurement window closing on the 30th.",
+      "Bo Lindgren took Lantern Health's questionnaire, completed it, and it was submitted and acknowledged.",
+      "Meridian Loom requires a completed vendor questionnaire including three additional subprocessor-location questions.",
+      "Tobias needs the answers by the 26th, ahead of a board sign-off on the 28th.",
+      "Only the named account manager may answer subprocessor-location questions.",
+      "Ferrous Bay is on hold pending verification and Tessellate is closed."
+    ],
+    "unsupported_claims": [
+      "Lantern Health's questionnaire is waiting on Wes.",
+      "The Lantern Health deadline is the 26th.",
+      "The Meridian Loom deadline is the 30th.",
+      "Bo can complete the Meridian Loom subprocessor section.",
+      "Meridian Loom's questionnaire has been submitted.",
+      "Both questionnaires are outstanding."
+    ],
+    "notes": "Deliberately parallel to pm-wrong-citation-01 but with the confusion running the other way: there, two asks came from one author in two threads; here, two near-identical asks come from two customers, and the one that arrives first, has the earlier-sounding urgency and generates the most internal chatter is the one that is not the user's. Four plausible wrong citations exist — Lantern's original email, either of Bo's Slack messages, and Jonah's renewal board roll-up — and each would produce a briefing that either names the wrong customer or attaches the wrong deadline. The 30th and the 26th belong to different accounts, so a citation error here propagates into a date error. Marguerite's policy note is the reason the item cannot simply be handed to Bo as well, which is the natural inference from watching him absorb the first one, and a correct briefing surfaces that constraint rather than leaving the user to rediscover it."
+  },
+  "failure_mode_tags": ["wrong_citation", "false_pending_item"]
+}

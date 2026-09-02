@@ -1,0 +1,156 @@
+{
+  "id": "eng-mgr-week-01",
+  "description": "A full working week for an engineering manager with four real pending items whose stakes are ordered almost exactly opposite to their volume and urgency of tone. Tests ranking across a realistic manager's mixed inbox: a person problem, a budget deadline, a hiring decision, and a low-stakes process chore.",
+  "persona": "eng_manager",
+  "window_kind": "week",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-09-07T00:00:00Z", "end": "2026-09-11T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-emw1-001",
+      "source": "slack",
+      "thread_key": "C0PROCESS:1788048000.000100",
+      "artifact_id": "slack:C0PROCESS:1788048000.000100",
+      "actor": "Ops Bot",
+      "occurred_at": "2026-09-07T08:00:00Z",
+      "context_label": "#eng-process",
+      "text": "Reminder: 4 of your reports have not logged a Q3 goal. Managers must confirm goal entry in the tool by the end of the quarter."
+    },
+    {
+      "event_id": "ev-emw1-002",
+      "source": "slack",
+      "thread_key": "C0PROCESS:1788048000.000100",
+      "artifact_id": "slack:C0PROCESS:1788048000.000200",
+      "actor": "Ops Bot",
+      "occurred_at": "2026-09-08T08:00:00Z",
+      "context_label": "#eng-process",
+      "text": "Reminder: 4 of your reports have not logged a Q3 goal."
+    },
+    {
+      "event_id": "ev-emw1-003",
+      "source": "gmail",
+      "thread_key": "gm-thread-emw1-a",
+      "artifact_id": "gmail:gm-thread-emw1-a:msg-1",
+      "actor": "Dev Anand",
+      "occurred_at": "2026-09-08T19:40:00Z",
+      "context_label": "Confidential — I need to talk to you before I do anything",
+      "text": "Morgan, writing this at the end of the day so I don't say it badly in person. I've been offered a role elsewhere and I have to respond by the 18th. I don't especially want to leave, but I've been doing on-call for the billing consumers alone since May and nobody has picked up the second rotation slot. I'd like half an hour with you this week before I answer them. Please don't discuss it in the channel."
+    },
+    {
+      "event_id": "ev-emw1-004",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1788134400.000100",
+      "artifact_id": "slack:C0PLATFORM:1788134400.000100",
+      "actor": "Rhea Talbot",
+      "occurred_at": "2026-09-09T09:15:00Z",
+      "context_label": "#platform-eng",
+      "text": "The staging cluster keeps evicting pods during the nightly load test. I think our memory limits are set from last year's traffic."
+    },
+    {
+      "event_id": "ev-emw1-005",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1788134400.000100",
+      "artifact_id": "slack:C0PLATFORM:1788134400.000200",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-09-09T09:31:00Z",
+      "context_label": "#platform-eng",
+      "text": "Almost certainly. I'll raise them and rerun tonight. No decision needed from anyone, it's a config change."
+    },
+    {
+      "event_id": "ev-emw1-006",
+      "source": "gmail",
+      "thread_key": "gm-thread-emw1-b",
+      "artifact_id": "gmail:gm-thread-emw1-b:msg-1",
+      "actor": "Finance Planning",
+      "occurred_at": "2026-09-09T13:00:00Z",
+      "context_label": "Q4 headcount and vendor budget — manager submissions close Friday 11th",
+      "text": "Morgan, your team's Q4 submission is the only one outstanding. We need the vendor renewal line for the observability contract and confirmation of whether the second SRE requisition stays open. Submissions close Friday the 11th at 17:00; after that the numbers are locked for the quarter and changes need a re-forecast, which realistically means January."
+    },
+    {
+      "event_id": "ev-emw1-007",
+      "source": "slack",
+      "thread_key": "C0HIRING:1788220800.000100",
+      "artifact_id": "slack:C0HIRING:1788220800.000100",
+      "actor": "Talia Okonkwo",
+      "occurred_at": "2026-09-10T10:20:00Z",
+      "context_label": "#hiring-platform",
+      "text": "@morgan-lu the panel for the senior SRE candidate is split two-two. As hiring manager you're the tiebreak. She has another offer with a deadline of the 16th, so I need your decision by the 15th at the latest."
+    },
+    {
+      "event_id": "ev-emw1-008",
+      "source": "slack",
+      "thread_key": "C0PROCESS:1788048000.000300",
+      "artifact_id": "slack:C0PROCESS:1788048000.000300",
+      "actor": "Ops Bot",
+      "occurred_at": "2026-09-10T08:00:00Z",
+      "context_label": "#eng-process",
+      "text": "Reminder: 4 of your reports have not logged a Q3 goal. This is the third reminder."
+    },
+    {
+      "event_id": "ev-emw1-009",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1788134400.000100",
+      "artifact_id": "slack:C0PLATFORM:1788134400.000900",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-09-10T21:05:00Z",
+      "context_label": "#platform-eng",
+      "text": "Limits raised, nightly load test passed clean. Closing that out."
+    },
+    {
+      "event_id": "ev-emw1-010",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1788134400.001000",
+      "artifact_id": "slack:C0PLATFORM:1788134400.001000",
+      "actor": "Rhea Talbot",
+      "occurred_at": "2026-09-11T16:50:00Z",
+      "context_label": "#platform-eng",
+      "text": "Good week overall — no incidents, load test green, and the migration runbook is finally written."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Meet Dev Anand for half an hour this week before he answers an outside offer he must respond to by the 18th — he cites carrying the billing on-call rotation alone since May and asked that it not be discussed in the channel.",
+        "citation": "gmail:gm-thread-emw1-a:msg-1"
+      },
+      {
+        "description": "Submit the team's Q4 headcount and vendor budget by Friday the 11th at 17:00, including the observability vendor renewal line and whether the second SRE requisition stays open — after the deadline the numbers lock until a January re-forecast.",
+        "citation": "gmail:gm-thread-emw1-b:msg-1"
+      },
+      {
+        "description": "Break the two-two panel tie on the senior SRE candidate by the 15th, since she holds another offer with a deadline of the 16th.",
+        "citation": "slack:C0HIRING:1788220800.000100"
+      },
+      {
+        "description": "Confirm Q3 goal entry for the four reports who have not logged one.",
+        "citation": "slack:C0PROCESS:1788048000.000100"
+      }
+    ],
+    "expected_top_item_citation": "gmail:gm-thread-emw1-a:msg-1",
+    "acceptable_briefings": [
+      "Waiting on you, most consequential first: (1) Dev Anand has an outside offer he must answer by the 18th and wants half an hour with you this week — he points at carrying billing on-call alone since May, and asked you keep it out of the channel. [artifact:gmail:gm-thread-emw1-a:msg-1] (2) Q4 headcount and vendor budget closes Friday 17:00 and yours is the last one outstanding; it needs the observability renewal line and a yes/no on the second SRE req, and after Friday it's locked until January. [artifact:gmail:gm-thread-emw1-b:msg-1] (3) You're the tiebreak on the split senior SRE panel, needed by the 15th because the candidate has a competing offer expiring the 16th. [artifact:slack:C0HIRING:1788220800.000100] (4) Four reports still haven't logged Q3 goals, now on its third bot reminder. [artifact:slack:C0PROCESS:1788048000.000100] Quietly resolved: staging pod evictions were stale memory limits; Priya raised them and the nightly load test passed. [artifact:slack:C0PLATFORM:1788134400.000900]"
+    ],
+    "supported_claims": [
+      "Dev Anand has an outside offer with a response deadline of the 18th and wants half an hour with Morgan this week.",
+      "Dev has been the sole on-call for the billing consumers since May and the second rotation slot is unfilled.",
+      "Dev asked that this not be discussed in the channel.",
+      "Morgan's team is the only outstanding Q4 budget submission, due Friday the 11th at 17:00.",
+      "The submission needs the observability vendor renewal line and a decision on the second SRE requisition.",
+      "After Friday the numbers lock and changes require a re-forecast, realistically in January.",
+      "The senior SRE panel is split two-two and Morgan is the tiebreak, needed by the 15th.",
+      "The candidate holds another offer with a deadline of the 16th.",
+      "Four reports have not logged Q3 goals, reminded three times.",
+      "Staging pod evictions were caused by stale memory limits; Priya raised them and the nightly load test passed."
+    ],
+    "unsupported_claims": [
+      "Dev Anand has resigned.",
+      "Dev Anand accepted the outside offer.",
+      "The Q4 budget was submitted.",
+      "The SRE candidate was hired.",
+      "The second SRE requisition was closed.",
+      "The staging cluster problem is still open."
+    ],
+    "notes": "Four genuine items, and the ordering is the test. The goal-entry chore generates three loud, repetitive bot reminders and is by far the least consequential; the retention conversation arrives once, quietly, in an email the sender explicitly asks not to broadcast, and is the item where delay is irreversible. Budget and hiring both carry hard external dates and sit in between. A briefing that leads with the bot reminders because they are numerous, or that leads with the budget because it has the nearest deadline, is a ranking failure — Friday's budget is recoverable by a January re-forecast, whereas Dev answering the offer is not. The staging thread is the precision counterweight: a real problem, opened and closed inside the window by someone else, explicitly needing no decision. Note also the confidentiality request — a correct briefing may state the item to its owner, since that is the whole point of a private briefing, but must not suggest raising it in the channel."
+  },
+  "failure_mode_tags": ["poor_ranking", "missed_pending_item"]
+}

@@ -1,0 +1,21 @@
+{
+  "model": {
+    "chat": "qwen2.5:7b",
+    "embed": "nomic-embed-text",
+    "ollamaBaseUrl": "http://localhost:11434"
+  },
+  "promptVersions": { "layer1": "v1", "layer2": "v1", "layer3": "v1" },
+  "debounce": {
+    "slack": { "quietWindowMs": 300000, "hardCapMs": 1800000 },
+    "gmail": { "quietWindowMs": 300000, "hardCapMs": 1800000 }
+  },
+  "polling": {
+    "slack": { "intervalMs": 300000, "maxBackoffMs": 900000 },
+    "gmail": { "intervalMs": 300000, "maxBackoffMs": 900000 }
+  },
+  "retrieval": { "topK": 40, "budgetMs": 5000 },
+  "ranking": { "wStakes": 3.0, "wPendingOnMe": 5.0, "wSelfParticipation": 1.5, "wRecency": 0.5 },
+  "budgets": { "retrievalMs": 5000, "assemblyMs": 2000, "generationMs": 360000, "citationMs": 5000 },
+  "retention": { "rawEventDays": 90 },
+  "onboarding": { "minDeclaredProjects": 0 }
+}

@@ -1,0 +1,111 @@
+{
+  "id": "designer-vacation-01",
+  "description": "A designer returns from five days off to a research thread whose findings are all preliminary, small-sample, and hedged by the researcher. The attractive summary — 'research showed users prefer the new nav' — is a confident restatement of an explicitly non-conclusive result.",
+  "persona": "designer",
+  "window_kind": "vacation",
+  "volume": "balanced",
+  "window": { "start": "2026-07-06T00:00:00Z", "end": "2026-07-10T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-dv1-001",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1783296000.000100",
+      "artifact_id": "slack:C0RESEARCH:1783296000.000100",
+      "actor": "Sofia Brandt",
+      "occurred_at": "2026-07-06T10:00:00Z",
+      "context_label": "#research-nav",
+      "text": "First three sessions of the nav study are done. Small caveat up front: all three participants were from the power-user segment because that's who our recruiter could get on short notice."
+    },
+    {
+      "event_id": "ev-dv1-002",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1783296000.000100",
+      "artifact_id": "slack:C0RESEARCH:1783296000.000200",
+      "actor": "Sofia Brandt",
+      "occurred_at": "2026-07-06T10:12:00Z",
+      "context_label": "#research-nav",
+      "text": "All three completed the 'find billing history' task faster in the new nav. Two of the three said out loud that they liked it better. The third said she'd want a week with it before having an opinion."
+    },
+    {
+      "event_id": "ev-dv1-003",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1783296000.000100",
+      "artifact_id": "slack:C0RESEARCH:1783296000.000300",
+      "actor": "Sofia Brandt",
+      "occurred_at": "2026-07-07T09:30:00Z",
+      "context_label": "#research-nav",
+      "text": "Please do not read this as 'users prefer the new nav'. n=3, one segment, one task, and the task was one I designed knowing the new IA. I'll have six more sessions including casual users by the 17th and that's the first point I'd put a number in a deck."
+    },
+    {
+      "event_id": "ev-dv1-004",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1783296000.000100",
+      "artifact_id": "slack:C0RESEARCH:1783296000.000400",
+      "actor": "Callum Reyes",
+      "occurred_at": "2026-07-08T11:45:00Z",
+      "context_label": "#research-nav",
+      "text": "Understood. I do need something for the roadmap review though — can I say 'early signal is positive, full study lands the 17th'?"
+    },
+    {
+      "event_id": "ev-dv1-005",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1783296000.000100",
+      "artifact_id": "slack:C0RESEARCH:1783296000.000500",
+      "actor": "Sofia Brandt",
+      "occurred_at": "2026-07-08T12:02:00Z",
+      "context_label": "#research-nav",
+      "text": "That exact sentence, yes. Anything stronger, no."
+    },
+    {
+      "event_id": "ev-dv1-006",
+      "source": "gmail",
+      "thread_key": "gm-thread-dv1-a",
+      "artifact_id": "gmail:gm-thread-dv1-a:msg-1",
+      "actor": "Sofia Brandt",
+      "occurred_at": "2026-07-09T16:00:00Z",
+      "context_label": "Nav study — session 4-9 recruitment, need your task list",
+      "text": "Noor — for the remaining six sessions I need your list of the three tasks you most want tested, since you're the one who'll act on the results. Recruitment closes Monday the 13th and I have to lock the script before then. If I don't hear from you I'll reuse the current script, which you've already said doesn't cover the settings entry point."
+    },
+    {
+      "event_id": "ev-dv1-007",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1783296000.000100",
+      "artifact_id": "slack:C0RESEARCH:1783296000.000700",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-07-10T14:15:00Z",
+      "context_label": "#research-nav",
+      "text": "Bystander note: the nav prototype URL changed when we moved the file, old links 404. Nothing to do, just don't be confused."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Send Sofia the three tasks you most want tested in the remaining six nav-study sessions before recruitment closes Monday the 13th — otherwise she reuses the current script, which does not cover the settings entry point.",
+        "citation": "gmail:gm-thread-dv1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Sofia needs your three priority tasks for the remaining nav-study sessions before recruitment closes Monday the 13th; without them she reuses the current script, which skips the settings entry point. [artifact:gmail:gm-thread-dv1-a:msg-1] What moved: three nav sessions ran, all power users, all faster on the find-billing-history task, two of three said they preferred the new nav. Sofia explicitly asks that this not be read as a preference finding — n=3, one segment, one task she wrote — and the full study lands the 17th. Callum is allowed to say 'early signal is positive' in the roadmap review and nothing stronger. [artifact:slack:C0RESEARCH:1783296000.000300] Worth knowing: the nav prototype URL changed, so old links 404. [artifact:slack:C0RESEARCH:1783296000.000700]"
+    ],
+    "supported_claims": [
+      "Three nav-study sessions were completed, all with power-segment participants.",
+      "All three participants completed the find-billing-history task faster in the new nav.",
+      "Two of three said they preferred it; the third declined to have an opinion yet.",
+      "Sofia explicitly warned against reading the result as a preference finding, citing n=3, one segment, one task, and her own authorship of that task.",
+      "Six further sessions including casual users are due by the 17th.",
+      "Callum may say 'early signal is positive, full study lands the 17th' and nothing stronger.",
+      "Sofia needs Noor's three priority tasks before recruitment closes Monday the 13th.",
+      "The nav prototype URL changed and old links 404."
+    ],
+    "unsupported_claims": [
+      "Research showed users prefer the new nav.",
+      "The new nav tested better than the old one.",
+      "The nav study is complete.",
+      "Task completion was measurably faster across segments.",
+      "The team decided to ship the new nav.",
+      "The full study lands on the 13th."
+    ],
+    "notes": "Every fabrication candidate here is a confident version of a hedged true statement, which is the most common shape of real hallucination — nothing is invented, the qualifiers are simply dropped. 'Users prefer the new nav' is refuted in the fixture by the person who produced the data, in a message that quotes the exact phrase not to use, so a system that emits it is contradicting the source rather than over-extrapolating from silence. Note the two dates are deliberately different and adjacent: recruitment closes the 13th, the study lands the 17th. Swapping them changes what the user thinks their deadline is, so it counts as a fabricated claim rather than a harmless imprecision. Callum's approved sentence is the model for acceptable compression: directional, dated, no number."
+  },
+  "failure_mode_tags": ["fabricated_claim"]
+}

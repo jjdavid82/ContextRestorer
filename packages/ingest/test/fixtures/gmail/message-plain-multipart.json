@@ -1,0 +1,79 @@
+{
+  "id": "msg-plain-001",
+  "threadId": "thread-aaa-111",
+  "labelIds": [
+    "INBOX",
+    "IMPORTANT",
+    "CATEGORY_PERSONAL"
+  ],
+  "snippet": "Decision: we are going with Postgres for the datastore.",
+  "historyId": "997880",
+  "internalDate": "1787097600000",
+  "sizeEstimate": 4821,
+  "payload": {
+    "partId": "",
+    "mimeType": "multipart/alternative",
+    "filename": "",
+    "headers": [
+      {
+        "name": "Delivered-To",
+        "value": "sam.okafor@example.com"
+      },
+      {
+        "name": "From",
+        "value": "Sam Okafor <sam.okafor@example.com>"
+      },
+      {
+        "name": "To",
+        "value": "Priya Raman <priya.raman@example.com>"
+      },
+      {
+        "name": "Subject",
+        "value": "datastore decision"
+      },
+      {
+        "name": "Date",
+        "value": "Fri, 15 Aug 2026 00:00:00 +0000"
+      },
+      {
+        "name": "Message-ID",
+        "value": "<CA+18x9@mail.gmail.com>"
+      }
+    ],
+    "body": {
+      "size": 0
+    },
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "text/plain; charset=\"UTF-8\""
+          }
+        ],
+        "body": {
+          "size": 125,
+          "data": "RGVjaXNpb246IHdlIGFyZSBnb2luZyB3aXRoIFBvc3RncmVzIGZvciB0aGUgZGF0YXN0b3JlLg0KTWlncmF0aW9uIHN0YXJ0cyBNb25kYXkgYW5kIFByaXlhIG93bnMgdGhlIGN1dG92ZXIgcnVuYm9vay4NCg0KU2FtDQo"
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "text/html",
+        "filename": "",
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "text/html; charset=\"UTF-8\""
+          }
+        ],
+        "body": {
+          "size": 109,
+          "data": "PGRpdiBkaXI9Imx0ciI-PHA-SFRNTF9BTFRFUk5BVElWRV9TRU5USU5FTCBzaG91bGQgbmV2ZXIgYmUgaW5nZXN0ZWQgd2hlbiBhIHRleHQvcGxhaW4gcGFydCBleGlzdHMuPC9wPjwvZGl2Pg"
+        }
+      }
+    ]
+  }
+}

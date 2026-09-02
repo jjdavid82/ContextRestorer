@@ -1,0 +1,23 @@
+{
+  "name": "@cr/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Context Restorer — local-first briefing assistant (POC)",
+  "author": "Context Restorer",
+  "type": "module",
+  "main": "./dist/main.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "electron .",
+    "test": "vitest run",
+    "package": "electron-builder --win"
+  },
+  "dependencies": {
+    "@cr/ai": "*",
+    "@cr/core": "*",
+    "@cr/ingest": "*",
+    "@cr/observability": "*",
+    "@cr/store": "*"
+  }
+}

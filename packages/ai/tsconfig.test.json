@@ -1,0 +1,30 @@
+{
+  // Test sources are excluded from the build project (rootDir: src), which meant
+  // they were never type-checked by the root `tsc -b`. This project puts them
+  // back under the type-checker. It matters for T-1: wrap.test.ts relies on
+  // `@ts-expect-error` to assert that a raw string cannot reach the untrusted
+  // slot of a prompt, and an unused `@ts-expect-error` is only reported if the
+  // file is actually checked.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Composite projects may not set `noEmit` (TS6310), so emit declarations
+    // only, into a throwaway directory.
+    "emitDeclarationOnly": true,
+    "outDir": "dist-test",
+    "rootDir": "."
+  },
+  "include": ["test/**/*.ts"],
+  "references": [
+    { "path": "./tsconfig.json" },
+    { "path": "../core" },
+    { "path": "../redact" },
+    { "path": "../store" },
+    { "path": "../observability" },
+    // Test-only. `injection.e2e.test.ts` drives attacks through the REAL
+    // `IngestionPipeline`, so the corpus lands as a genuine redacted `events`
+    // row rather than as a hand-built fixture. `@cr/ai`'s own sources must not
+    // depend on the connector layer, which is why this reference lives here and
+    // not in `tsconfig.json`.
+    { "path": "../ingest" }
+  ]
+}

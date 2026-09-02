@@ -1,0 +1,50 @@
+{
+  "id": "msg-htmlquote-005",
+  "threadId": "thread-bbb-222",
+  "labelIds": [
+    "INBOX"
+  ],
+  "snippet": "Shipping it today.",
+  "historyId": "998033",
+  "internalDate": "1787356800000",
+  "sizeEstimate": 5120,
+  "payload": {
+    "partId": "",
+    "mimeType": "text/html",
+    "filename": "",
+    "headers": [
+      {
+        "name": "Delivered-To",
+        "value": "sam.okafor@example.com"
+      },
+      {
+        "name": "From",
+        "value": "Sam Okafor <sam.okafor@example.com>"
+      },
+      {
+        "name": "To",
+        "value": "Priya Raman <priya.raman@example.com>"
+      },
+      {
+        "name": "Subject",
+        "value": "Re: sprint review moved"
+      },
+      {
+        "name": "Date",
+        "value": "Wed, 26 Aug 2026 00:00:00 +0000"
+      },
+      {
+        "name": "Message-ID",
+        "value": "<CA+23x9@mail.gmail.com>"
+      },
+      {
+        "name": "Content-Type",
+        "value": "text/html; charset=\"UTF-8\""
+      }
+    ],
+    "body": {
+      "size": 301,
+      "data": "PGRpdiBkaXI9Imx0ciI-U2hpcHBpbmcgaXQgdG9kYXkuPC9kaXY-PGJyPjxkaXYgY2xhc3M9ImdtYWlsX3F1b3RlIj48ZGl2IGRpcj0ibHRyIiBjbGFzcz0iZ21haWxfYXR0ciI-T24gVHVlLCBBdWcgMjUsIDIwMjYgYXQgOToxMiBBTSBQcml5YSBSYW1hbiAmbHQ7cHJpeWEucmFtYW5AZXhhbXBsZS5jb20mZ3Q7IHdyb3RlOjxicj48L2Rpdj48YmxvY2txdW90ZSBjbGFzcz0iZ21haWxfcXVvdGUiPjxwPkhUTUxfUVVPVEVEX1NFTlRJTkVMX0RPX05PVF9JTkdFU1Qgb3JpZ2luYWwgYm9keS48L3A-PC9ibG9ja3F1b3RlPjwvZGl2Pg"
+    }
+  }
+}

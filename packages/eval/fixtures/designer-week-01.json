@@ -1,0 +1,98 @@
+{
+  "id": "designer-week-01",
+  "description": "Three separate requests for design sign-off on 'the settings redesign' land in one week, from three people, in three threads, with only the middle one addressed to the user — and the other two are visible restatements of it. The summary is nearly impossible to get wrong; the citation is easy to get wrong.",
+  "persona": "designer",
+  "window_kind": "week",
+  "volume": "balanced",
+  "window": { "start": "2026-06-15T00:00:00Z", "end": "2026-06-19T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-dw1-001",
+      "source": "slack",
+      "thread_key": "C0SETTINGS:1781740800.000100",
+      "artifact_id": "slack:C0SETTINGS:1781740800.000100",
+      "actor": "Callum Reyes",
+      "occurred_at": "2026-06-15T09:30:00Z",
+      "context_label": "#proj-settings-redesign",
+      "text": "Engineering can't start the settings redesign build until design sign-off lands. Who owns that sign-off? Asking so I can chase the right person."
+    },
+    {
+      "event_id": "ev-dw1-002",
+      "source": "slack",
+      "thread_key": "C0SETTINGS:1781740800.000100",
+      "artifact_id": "slack:C0SETTINGS:1781740800.000200",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-06-15T09:52:00Z",
+      "context_label": "#proj-settings-redesign",
+      "text": "Noor owns it. I'd ask directly rather than in here, this channel is noisy."
+    },
+    {
+      "event_id": "ev-dw1-003",
+      "source": "gmail",
+      "thread_key": "gm-thread-dw1-a",
+      "artifact_id": "gmail:gm-thread-dw1-a:msg-1",
+      "actor": "Callum Reyes",
+      "occurred_at": "2026-06-16T08:10:00Z",
+      "context_label": "Settings redesign — design sign-off needed to start build",
+      "text": "Noor — I need your sign-off on the settings redesign specs before engineering can start the build. Specifically the two-column form layout and the new save-behavior spec. Sprint planning is Thursday the 18th; if I don't have sign-off by then the work slides a sprint. This is the only thing I need from you."
+    },
+    {
+      "event_id": "ev-dw1-004",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1781827200.000100",
+      "artifact_id": "slack:C0DESIGN:1781827200.000100",
+      "actor": "Priyanka Sethi",
+      "occurred_at": "2026-06-17T14:05:00Z",
+      "context_label": "#design-crit",
+      "text": "FYI the settings redesign is still waiting on design sign-off, which is apparently blocking the build. Flagging in case it's fallen off someone's list."
+    },
+    {
+      "event_id": "ev-dw1-005",
+      "source": "slack",
+      "thread_key": "C0SETTINGS:1781740800.000100",
+      "artifact_id": "slack:C0SETTINGS:1781740800.000500",
+      "actor": "Callum Reyes",
+      "occurred_at": "2026-06-18T07:45:00Z",
+      "context_label": "#proj-settings-redesign",
+      "text": "Sprint planning is at 14:00 today. Still no design sign-off on settings, so I'm provisionally planning without it."
+    },
+    {
+      "event_id": "ev-dw1-006",
+      "source": "slack",
+      "thread_key": "C0SETTINGS:1781740800.000100",
+      "artifact_id": "slack:C0SETTINGS:1781740800.000600",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-06-19T11:20:00Z",
+      "context_label": "#proj-settings-redesign",
+      "text": "Unrelated to the sign-off: I've updated the icon set in the shared library, so pull the latest before you export anything. No action needed beyond that."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Sign off on the settings redesign specs — specifically the two-column form layout and the new save-behavior spec — so engineering can start the build; without it by Thursday sprint planning the work slides a sprint.",
+        "citation": "gmail:gm-thread-dw1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Callum needs your sign-off on the settings redesign specs — the two-column form layout and the new save-behavior spec — before engineering can start. He planned Thursday's sprint provisionally without it, so the work slides a sprint until you sign. [artifact:gmail:gm-thread-dw1-a:msg-1] Worth knowing: Yuki updated the shared icon library, so pull the latest before exporting. [artifact:slack:C0SETTINGS:1781740800.000600]"
+    ],
+    "supported_claims": [
+      "Engineering cannot start the settings redesign build without design sign-off.",
+      "Noor owns the design sign-off.",
+      "The sign-off covers the two-column form layout and the new save-behavior spec.",
+      "Sprint planning was Thursday the 18th and Callum planned provisionally without the sign-off.",
+      "Without sign-off the work slides a sprint.",
+      "Yuki updated the shared icon library and asks people to pull the latest before exporting."
+    ],
+    "unsupported_claims": [
+      "The design sign-off was given.",
+      "The settings redesign build has started.",
+      "The work definitely slipped a sprint.",
+      "Priyanka is waiting on Noor.",
+      "The sign-off deadline is Friday the 19th."
+    ],
+    "notes": "Four artifacts describe the same obligation and only one of them is the ask. The correct citation is gmail:gm-thread-dw1-a:msg-1 — the message that is addressed to the user, names the specific artifacts to sign off, and states the deadline and consequence. Each distractor fails for a different reason: ev-dw1-001 asks who the owner is rather than asking the user (and predates knowing it is them); ev-dw1-002 is a third party naming the owner, not making the request; ev-dw1-004 is a bystander's FYI in a different channel; ev-dw1-005 is a status update stating the consequence, not the ask. Note that ev-dw1-002 even instructs Callum to move the request out of Slack, which is the in-fixture explanation for why the real ask is the email. A pending item with a correct description and any of these four citations is a citation failure against AC-6 and must not be scored as a pass."
+  },
+  "failure_mode_tags": ["wrong_citation"]
+}

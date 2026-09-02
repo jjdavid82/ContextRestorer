@@ -1,0 +1,123 @@
+{
+  "id": "ic-eng-afternoon-01",
+  "description": "A single busy afternoon in a high-traffic engineering channel: 9 messages, four of them @-mentioning the user, and not one of them is actually waiting on the user. Tests over-triggering resistance under high message volume — the correct answer is the explicit negative.",
+  "persona": "ic_engineer",
+  "window_kind": "afternoon",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-07-14T12:00:00Z", "end": "2026-07-14T18:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-icea1-001",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000100",
+      "artifact_id": "slack:C0BACKEND:1784030400.000100",
+      "actor": "Tova Lindqvist",
+      "occurred_at": "2026-07-14T12:04:00Z",
+      "context_label": "#backend-guild",
+      "text": "@here reminder the guild sync moved to Thursdays. No prep needed, just show up."
+    },
+    {
+      "event_id": "ev-icea1-002",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000100",
+      "artifact_id": "slack:C0BACKEND:1784030400.000200",
+      "actor": "Tova Lindqvist",
+      "occurred_at": "2026-07-14T12:31:00Z",
+      "context_label": "#backend-guild",
+      "text": "Also @channel: the shared dev cluster is being rebuilt tonight, so don't leave long-running jobs on it. FYI only."
+    },
+    {
+      "event_id": "ev-icea1-003",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000300",
+      "artifact_id": "slack:C0BACKEND:1784030400.000300",
+      "actor": "Ravi Sundaram",
+      "occurred_at": "2026-07-14T13:15:00Z",
+      "context_label": "#backend-guild",
+      "text": "Does anyone know why the rate limiter counts preflight OPTIONS requests? @kiran-vasquez @tova-lindqvist you two touched that file last."
+    },
+    {
+      "event_id": "ev-icea1-004",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000300",
+      "artifact_id": "slack:C0BACKEND:1784030400.000400",
+      "actor": "Tova Lindqvist",
+      "occurred_at": "2026-07-14T13:22:00Z",
+      "context_label": "#backend-guild",
+      "text": "That's a leftover from the CORS work — it's intentional, the upstream proxy already strips them so the count is harmless. I'll add a comment so the next person doesn't wonder."
+    },
+    {
+      "event_id": "ev-icea1-005",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000300",
+      "artifact_id": "slack:C0BACKEND:1784030400.000500",
+      "actor": "Ravi Sundaram",
+      "occurred_at": "2026-07-14T13:26:00Z",
+      "context_label": "#backend-guild",
+      "text": "Perfect, that's what I needed. Thanks, disregard the ping Kiran."
+    },
+    {
+      "event_id": "ev-icea1-006",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000600",
+      "artifact_id": "slack:C0BACKEND:1784030400.000600",
+      "actor": "Kiran Vasquez",
+      "actor_is_self": true,
+      "occurred_at": "2026-07-14T14:40:00Z",
+      "context_label": "#backend-guild",
+      "text": "Pushed the retry-jitter change. @ravi-sundaram could you take a look when you have a minute? Not urgent, nothing depends on it this week."
+    },
+    {
+      "event_id": "ev-icea1-007",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000600",
+      "artifact_id": "slack:C0BACKEND:1784030400.000700",
+      "actor": "Ravi Sundaram",
+      "occurred_at": "2026-07-14T15:02:00Z",
+      "context_label": "#backend-guild",
+      "text": "Reviewed and approved, ship it whenever. Left one non-blocking nit about the variable name, take it or leave it."
+    },
+    {
+      "event_id": "ev-icea1-008",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000800",
+      "artifact_id": "slack:C0BACKEND:1784030400.000800",
+      "actor": "Mika Osei",
+      "occurred_at": "2026-07-14T16:20:00Z",
+      "context_label": "#backend-guild",
+      "text": "Anyone free to pair on the ledger flake for 30 min? @kiran-vasquez if you're heads-down ignore me, I'll grab whoever answers first."
+    },
+    {
+      "event_id": "ev-icea1-009",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784030400.000800",
+      "artifact_id": "slack:C0BACKEND:1784030400.000900",
+      "actor": "Tova Lindqvist",
+      "occurred_at": "2026-07-14T16:24:00Z",
+      "context_label": "#backend-guild",
+      "text": "I'm free, grabbing you now Mika."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing is waiting on you. Worth knowing: the shared dev cluster is rebuilt tonight, so don't leave long-running jobs on it. [artifact:slack:C0BACKEND:1784030400.000200] Your retry-jitter change was reviewed and approved with one non-blocking nit. [artifact:slack:C0BACKEND:1784030400.000700]",
+      "No open asks for you this afternoon. Your retry-jitter PR is approved and clear to ship. [artifact:slack:C0BACKEND:1784030400.000700] The dev cluster rebuild is tonight — move long-running jobs off it. [artifact:slack:C0BACKEND:1784030400.000200]"
+    ],
+    "supported_claims": [
+      "The backend guild sync moved to Thursdays and needs no prep.",
+      "The shared dev cluster is being rebuilt tonight.",
+      "The rate limiter counting preflight OPTIONS requests is intentional and harmless; Tova answered it.",
+      "Kiran's retry-jitter change was reviewed and approved by Ravi with one non-blocking nit.",
+      "Tova picked up Mika's request to pair on the ledger flake."
+    ],
+    "unsupported_claims": [
+      "Kiran needs to explain the rate limiter's OPTIONS handling.",
+      "Kiran needs to pair with Mika on the ledger flake.",
+      "Kiran needs to address a review comment before shipping.",
+      "Kiran needs to move jobs off the dev cluster."
+    ],
+    "notes": "Four distinct reasons an @-mention is not a pending item, one per distractor: (1) @here/@channel broadcasts are not addressed to anyone in particular; (2) the OPTIONS question was addressed to two people and answered by the other one within 7 minutes, with an explicit 'disregard the ping'; (3) the review request originated from the user, so the ball is not in their court, and it came back approved; (4) Mika's pairing ask is explicitly opt-out ('if you're heads-down ignore me') and was claimed by Tova. The non-blocking nit is deliberately borderline — a nit the reviewer says to take or leave, on the user's own already-approved PR, is not something waiting on the user. Any pending item here is a false positive against AC-4, and the volume of the channel is the pressure that makes one tempting."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

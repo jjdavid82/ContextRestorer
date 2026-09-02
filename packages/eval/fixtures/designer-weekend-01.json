@@ -1,0 +1,71 @@
+{
+  "id": "designer-weekend-01",
+  "description": "A designer's quiet weekend containing one message that looks exactly like an ask — 'can you take a look?' — but is addressed to a group, answered by someone else, and explicitly closed out before the window ends. Low volume makes the single distractor disproportionately tempting.",
+  "persona": "designer",
+  "window_kind": "weekend",
+  "volume": "low",
+  "window": { "start": "2026-06-06T00:00:00Z", "end": "2026-06-07T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-dwk1-001",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1780963200.000100",
+      "artifact_id": "slack:C0DESIGN:1780963200.000100",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-06-06T10:15:00Z",
+      "context_label": "#design-crit",
+      "text": "Sorry for the weekend post. The empty-state illustration for the reports page renders at 2x on Windows and looks blurry. Can somebody take a look before Monday's demo? Not fussed who."
+    },
+    {
+      "event_id": "ev-dwk1-002",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1780963200.000100",
+      "artifact_id": "slack:C0DESIGN:1780963200.000200",
+      "actor": "Priyanka Sethi",
+      "occurred_at": "2026-06-06T12:40:00Z",
+      "context_label": "#design-crit",
+      "text": "I'm at my desk anyway, taking it. The SVG has a hardcoded width — easy fix."
+    },
+    {
+      "event_id": "ev-dwk1-003",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1780963200.000100",
+      "artifact_id": "slack:C0DESIGN:1780963200.000300",
+      "actor": "Priyanka Sethi",
+      "occurred_at": "2026-06-06T13:30:00Z",
+      "context_label": "#design-crit",
+      "text": "Fixed and exported. Checked it on Windows and macOS, crisp on both. Closing this out, nothing needed from anyone else."
+    },
+    {
+      "event_id": "ev-dwk1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-dwk1-a",
+      "artifact_id": "gmail:gm-thread-dwk1-a:msg-1",
+      "actor": "Figma Digest",
+      "occurred_at": "2026-06-07T08:00:00Z",
+      "context_label": "Weekly activity in Product Design",
+      "text": "12 files edited, 4 comments resolved, 0 comments awaiting your reply. Have a good week."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing is waiting on you. Priyanka fixed a blurry empty-state illustration on the reports page over the weekend — a hardcoded SVG width — and verified it on both platforms before Monday's demo. [artifact:slack:C0DESIGN:1780963200.000300]",
+      "Nothing needs you. One weekend fix: the reports empty-state illustration was rendering blurry on Windows and Priyanka resolved it. [artifact:slack:C0DESIGN:1780963200.000300]"
+    ],
+    "supported_claims": [
+      "The reports-page empty-state illustration rendered blurry on Windows because of a hardcoded SVG width.",
+      "Priyanka Sethi fixed and re-exported it and verified it on Windows and macOS.",
+      "The issue was closed out with nothing needed from anyone else.",
+      "No design comments are awaiting Noor's reply."
+    ],
+    "unsupported_claims": [
+      "Noor needs to fix the empty-state illustration.",
+      "Noor needs to review Priyanka's fix.",
+      "The illustration is still blurry ahead of Monday's demo.",
+      "There are design comments awaiting Noor's reply."
+    ],
+    "notes": "One distractor, chosen because it has the strongest possible surface features: a direct 'can somebody take a look', a deadline ('before Monday's demo'), a weekend apology that signals urgency, and a design problem squarely in the user's area. All three defusing facts are present — it is addressed to nobody in particular, it is claimed within two hours, and it is explicitly closed with 'nothing needed from anyone else' — and the Gmail digest independently confirms zero comments awaiting reply. Low-volume windows are where over-triggering is most damaging to trust, because the user can see at a glance that the one thing surfaced was not real."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

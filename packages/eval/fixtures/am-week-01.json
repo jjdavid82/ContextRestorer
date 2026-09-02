@@ -1,0 +1,111 @@
+{
+  "id": "am-week-01",
+  "description": "A week of negotiation chatter in which a discount, a contract term and an expansion are all discussed and none is agreed. The attractive summary — 'the customer agreed to a 3-year term at 15% off' — is stitched from three separate conditional statements by three different people, each of which is real in isolation.",
+  "persona": "account_manager",
+  "window_kind": "week",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-06-08T00:00:00Z", "end": "2026-06-12T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-amw1-001",
+      "source": "slack",
+      "thread_key": "C0DEAL:1781308800.000100",
+      "artifact_id": "slack:C0DEAL:1781308800.000100",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-06-08T09:00:00Z",
+      "context_label": "#deal-caldera",
+      "text": "Caldera Logistics wants to talk terms again. Opening position from them: 20% off list if they commit to three years."
+    },
+    {
+      "event_id": "ev-amw1-002",
+      "source": "slack",
+      "thread_key": "C0DEAL:1781308800.000100",
+      "artifact_id": "slack:C0DEAL:1781308800.000200",
+      "actor": "Marguerite Salas",
+      "occurred_at": "2026-06-08T09:40:00Z",
+      "context_label": "#deal-caldera",
+      "text": "Deal desk: I can pre-approve up to 15% on a three-year term without going to the VP. Anything past that needs her and she's out until the 22nd. To be clear, 15% is a ceiling I'm willing to approve, not an offer anyone has made."
+    },
+    {
+      "event_id": "ev-amw1-003",
+      "source": "slack",
+      "thread_key": "C0DEAL:1781308800.000100",
+      "artifact_id": "slack:C0DEAL:1781308800.000300",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-06-09T11:20:00Z",
+      "context_label": "#deal-caldera",
+      "text": "Their procurement lead said on the call that three years is 'probably fine' but that he can't speak for their CFO, and the CFO has previously refused anything over two."
+    },
+    {
+      "event_id": "ev-amw1-004",
+      "source": "slack",
+      "thread_key": "C0DEAL:1781308800.000100",
+      "artifact_id": "slack:C0DEAL:1781308800.000400",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-06-09T15:05:00Z",
+      "context_label": "#deal-caldera",
+      "text": "They also floated adding the analytics module for 40 more seats. Floated, not asked for a quote. I didn't price it."
+    },
+    {
+      "event_id": "ev-amw1-005",
+      "source": "gmail",
+      "thread_key": "gm-thread-amw1-a",
+      "artifact_id": "gmail:gm-thread-amw1-a:msg-1",
+      "actor": "Idris Vance (Caldera Logistics)",
+      "occurred_at": "2026-06-10T08:30:00Z",
+      "context_label": "Terms discussion — where we are",
+      "text": "Wes, to summarise our side honestly: nothing is agreed yet. I am advocating internally for the longer term, our CFO has not signed off, and the discount number is still open. I'd rather not have either side treat this as settled."
+    },
+    {
+      "event_id": "ev-amw1-006",
+      "source": "slack",
+      "thread_key": "C0DEAL:1781308800.000100",
+      "artifact_id": "slack:C0DEAL:1781308800.000600",
+      "actor": "Marguerite Salas",
+      "occurred_at": "2026-06-11T10:15:00Z",
+      "context_label": "#deal-caldera",
+      "text": "@wes-okonjo before this goes any further I need the deal desk form from you: term length you're actually proposing, discount you're actually proposing, and whether the analytics module is in scope. I can't hold the 15% pre-approval open indefinitely and the VP's absence means anything above it stalls until the 22nd. Send it by Friday."
+    },
+    {
+      "event_id": "ev-amw1-007",
+      "source": "slack",
+      "thread_key": "C0DEAL:1781308800.000100",
+      "artifact_id": "slack:C0DEAL:1781308800.000700",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-06-12T16:30:00Z",
+      "context_label": "#deal-caldera",
+      "text": "No further movement from them today. Next call is Tuesday."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Send Marguerite the deal desk form for Caldera by Friday, stating the term length and discount you are actually proposing and whether the analytics module is in scope — the 15% pre-approval will not stay open indefinitely and anything above it stalls until the VP returns on the 22nd.",
+        "citation": "slack:C0DEAL:1781308800.000600"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Marguerite needs the Caldera deal desk form by Friday — proposed term, proposed discount, and whether the analytics module is in scope. She can pre-approve up to 15% on a three-year term; above that it waits for the VP, who is back on the 22nd. [artifact:slack:C0DEAL:1781308800.000600] Where the deal actually stands: nothing is agreed. Caldera opened at 20% off for three years, their procurement lead called three years 'probably fine' but cannot speak for a CFO who has previously refused terms over two years, and Idris wrote to say explicitly that neither the term nor the discount is settled. [artifact:gmail:gm-thread-amw1-a:msg-1] An analytics module for 40 seats was floated but never quoted. [artifact:slack:C0DEAL:1781308800.000400]"
+    ],
+    "supported_claims": [
+      "Caldera's opening position was 20% off list for a three-year commitment.",
+      "Deal desk can pre-approve up to 15% on a three-year term; more requires the VP, who returns on the 22nd.",
+      "Marguerite described 15% as a ceiling she would approve, not an offer that has been made.",
+      "Caldera's procurement lead called three years 'probably fine' but cannot speak for their CFO.",
+      "Caldera's CFO has previously refused terms longer than two years.",
+      "An analytics module for 40 additional seats was floated and not priced.",
+      "Idris Vance wrote that nothing is agreed and asked that neither side treat it as settled.",
+      "Marguerite needs the deal desk form from Wes by Friday."
+    ],
+    "unsupported_claims": [
+      "Caldera agreed to a three-year term at 15% off.",
+      "A 15% discount was offered to Caldera.",
+      "Caldera's CFO approved the three-year term.",
+      "The analytics module was added to the deal.",
+      "Deal desk approved the discount.",
+      "The deal is closed pending signature."
+    ],
+    "notes": "The headline fabrication — 'agreed to three years at 15%' — requires three hops, each landing on a real fragment: the 15% comes from an internal approval ceiling that the speaker explicitly disclaims as not an offer, the three years comes from a counterpart who explicitly says he cannot speak for his CFO, and 'agreed' comes from nowhere at all. The customer then states in writing that nothing is agreed, so this is a fixture where the fabrication is directly contradicted rather than merely unsupported. For an account manager this class of error is the most expensive one in the taxonomy: a briefing that says a discount was offered can cause the user to honour it. Only one item is genuinely pending, and it is the internal form, not the negotiation itself; the Tuesday call is a scheduled event, not an item."
+  },
+  "failure_mode_tags": ["fabricated_claim"]
+}

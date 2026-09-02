@@ -1,0 +1,73 @@
+{
+  "id": "pm-weekend-01",
+  "description": "A product manager's weekend with a genuinely empty inbox except for automated reports and one colleague explicitly deferring a question to Monday. Tests that a deferral is recorded as not-yet-pending rather than converted into a weekend obligation.",
+  "persona": "pm",
+  "window_kind": "weekend",
+  "volume": "low",
+  "window": { "start": "2026-05-02T00:00:00Z", "end": "2026-05-03T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-pmwk1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmwk1-a",
+      "artifact_id": "gmail:gm-thread-pmwk1-a:msg-1",
+      "actor": "Product Analytics",
+      "occurred_at": "2026-05-02T07:00:00Z",
+      "context_label": "Weekly metrics — Atlas",
+      "text": "Activation rate 41.2% (down 0.3pp week over week, within normal variance). Weekly actives 18,340 (up 1.1%). No anomalies flagged. Full dashboard linked."
+    },
+    {
+      "event_id": "ev-pmwk1-002",
+      "source": "slack",
+      "thread_key": "C0LAUNCH:1777680000.000100",
+      "artifact_id": "slack:C0LAUNCH:1777680000.000100",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-05-02T16:30:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Dana — I have a question about whether we hold the payment-step copy for the next localization pass, but it is genuinely a Monday question and I do not want you thinking about it this weekend. Posting now only so I don't forget. Will bring it to standup."
+    },
+    {
+      "event_id": "ev-pmwk1-003",
+      "source": "slack",
+      "thread_key": "C0LAUNCH:1777680000.000200",
+      "artifact_id": "slack:C0LAUNCH:1777680000.000200",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-05-03T11:15:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Agreed, that's a standup item. Nothing else outstanding on Atlas from my side."
+    },
+    {
+      "event_id": "ev-pmwk1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmwk1-b",
+      "artifact_id": "gmail:gm-thread-pmwk1-b:msg-1",
+      "actor": "Support Digest",
+      "occurred_at": "2026-05-03T18:00:00Z",
+      "context_label": "Weekend support summary",
+      "text": "14 tickets opened, 14 resolved by the support team. 0 escalations to product. 0 bugs filed."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing is waiting on you. Iris has a question about holding the payment-step copy for the next localization pass and is deliberately saving it for Monday standup. [artifact:slack:C0LAUNCH:1777680000.000100] Metrics were flat and within variance, and support resolved all 14 weekend tickets with no escalations.",
+      "Quiet weekend, nothing needs you before Monday. One standup item is queued: the payment-step copy and the next localization pass. [artifact:slack:C0LAUNCH:1777680000.000100]"
+    ],
+    "supported_claims": [
+      "Activation rate is 41.2%, down 0.3pp week over week and within normal variance.",
+      "Weekly actives are 18,340, up 1.1%, with no anomalies flagged.",
+      "Iris has a question about holding the payment-step copy for the next localization pass and has deferred it to Monday standup.",
+      "Ben agrees it is a standup item and has nothing else outstanding on Atlas.",
+      "Support opened and resolved 14 tickets over the weekend with no escalations to product and no bugs filed."
+    ],
+    "unsupported_claims": [
+      "Dana needs to decide about the payment-step copy this weekend.",
+      "Activation rate has dropped meaningfully.",
+      "There is an unresolved support escalation.",
+      "The next localization pass is blocked.",
+      "Dana needs to review the metrics dashboard."
+    ],
+    "notes": "The interesting case is Iris's message: it contains a real question, addressed to the user by name, about a real decision they will have to make — and the sender explicitly places it outside the window with 'genuinely a Monday question', reinforced by Ben. This is a deferral, and the correct handling is to note it as queued for standup rather than to list it as waiting on the user, because presenting it as pending would tell the user something is outstanding when a colleague has deliberately protected their weekend. Getting this wrong is not a small precision error; it is the system overriding a human's explicit judgment about urgency. The metrics email is the second trap: a 0.3pp decline is a real number that self-describes as within variance, and reporting it as a drop needing attention is a fabricated framing."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

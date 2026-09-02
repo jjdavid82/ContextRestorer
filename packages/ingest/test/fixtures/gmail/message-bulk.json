@@ -1,0 +1,55 @@
+{
+  "id": "msg-bulk-007",
+  "threadId": "thread-eee-555",
+  "labelIds": [
+    "INBOX",
+    "CATEGORY_PROMOTIONS"
+  ],
+  "snippet": "Your weekly digest",
+  "historyId": "998041",
+  "internalDate": "1787616000000",
+  "sizeEstimate": 18022,
+  "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+      {
+        "name": "Delivered-To",
+        "value": "sam.okafor@example.com"
+      },
+      {
+        "name": "From",
+        "value": "Widget Weekly <no-reply@widgetweekly.example.com>"
+      },
+      {
+        "name": "To",
+        "value": "sam.okafor@example.com"
+      },
+      {
+        "name": "Subject",
+        "value": "Widget Weekly #212"
+      },
+      {
+        "name": "Date",
+        "value": "Sat, 29 Aug 2026 00:00:00 +0000"
+      },
+      {
+        "name": "Message-ID",
+        "value": "<CA+18x9@mail.gmail.com>"
+      },
+      {
+        "name": "List-Unsubscribe",
+        "value": "<https://widgetweekly.example.com/u/abc>"
+      },
+      {
+        "name": "Content-Type",
+        "value": "text/plain; charset=\"UTF-8\""
+      }
+    ],
+    "body": {
+      "size": 51,
+      "data": "WW91ciB3ZWVrbHkgZGlnZXN0IG9mIHRoaW5ncyB5b3UgZGlkIG5vdCBhc2sgZm9yLg0K"
+    }
+  }
+}

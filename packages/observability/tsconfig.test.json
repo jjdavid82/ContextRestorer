@@ -1,0 +1,29 @@
+{
+  // Test sources are excluded from the build project (`rootDir: src`), which
+  // meant they were never type-checked by the root `tsc -b`. This project puts
+  // them back under the type-checker, mirroring `packages/ai/tsconfig.test.json`.
+  //
+  // It matters most for `e2eTrace.test.ts`, which constructs the real Layer 1/2/3
+  // objects: the trace-id parameters this task added are optional and additive,
+  // so a wiring mistake there would show up as a silently untested code path
+  // rather than as a failure.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Composite projects may not set `noEmit` (TS6310), so emit declarations
+    // only, into a throwaway directory.
+    "emitDeclarationOnly": true,
+    "outDir": "dist-test",
+    "rootDir": "."
+  },
+  "include": ["test/**/*.ts"],
+  "references": [
+    { "path": "./tsconfig.json" },
+    { "path": "../core" },
+    { "path": "../store" },
+    // Test-only, and the reverse of the production dependency direction:
+    // `@cr/ai` depends on `@cr/observability`, never the other way round. This
+    // reference exists so the end-to-end trace test can drive the real layers;
+    // it is why it lives here and not in `tsconfig.json`.
+    { "path": "../ai" }
+  ]
+}

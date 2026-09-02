@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts", "src/**/*.cts"],
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/ai" },
+    { "path": "../../packages/ingest" },
+    { "path": "../../packages/store" },
+    // `ipc/metrics.ts` reads the trace log back through `readTraceMetrics`.
+    { "path": "../../packages/observability" }
+  ]
+}

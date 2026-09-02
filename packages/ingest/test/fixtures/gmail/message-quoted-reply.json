@@ -1,0 +1,55 @@
+{
+  "id": "msg-quoted-003",
+  "threadId": "thread-aaa-111",
+  "labelIds": [
+    "INBOX",
+    "UNREAD"
+  ],
+  "snippet": "Confirmed, Thursday works for me.",
+  "historyId": "998010",
+  "internalDate": "1787270400000",
+  "sizeEstimate": 7422,
+  "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+      {
+        "name": "Delivered-To",
+        "value": "sam.okafor@example.com"
+      },
+      {
+        "name": "From",
+        "value": "Sam Okafor <sam.okafor@example.com>"
+      },
+      {
+        "name": "To",
+        "value": "Priya Raman <priya.raman@example.com>"
+      },
+      {
+        "name": "Subject",
+        "value": "Re: sprint review moved"
+      },
+      {
+        "name": "Date",
+        "value": "Tue, 25 Aug 2026 14:00:00 +0000"
+      },
+      {
+        "name": "Message-ID",
+        "value": "<CA+23x9@mail.gmail.com>"
+      },
+      {
+        "name": "In-Reply-To",
+        "value": "<CA+19x9@mail.gmail.com>"
+      },
+      {
+        "name": "Content-Type",
+        "value": "text/plain; charset=\"UTF-8\""
+      }
+    ],
+    "body": {
+      "size": 427,
+      "data": "Q29uZmlybWVkLCBUaHVyc2RheSB3b3JrcyBmb3IgbWUuDQoNCk9uIFR1ZSwgQXVnIDI1LCAyMDI2IGF0IDk6MTIgQU0gUHJpeWEgUmFtYW4gPHByaXlhLnJhbWFuQGV4YW1wbGUuY29tPiB3cm90ZToNCg0KPiBRVU9URURfU0VOVElORUxfRE9fTk9UX0lOR0VTVCDigJQgdGhpcyBpcyB0aGUgb3JpZ2luYWwgbWVzc2FnZSBib2R5IHRoYXQNCj4gZXZlcnkgY2xpZW50IHJlLWF0dGFjaGVzIHRvIGV2ZXJ5IHJlcGx5IGluIHRoZSB0aHJlYWQuDQo-DQo-IE9uIE1vbiwgQXVnIDI0LCAyMDI2IGF0IDQ6MDIgUE0gU2FtIE9rYWZvciA8c2FtLm9rYWZvckBleGFtcGxlLmNvbT4gd3JvdGU6DQo-DQo-PiBRVU9URURfU0VOVElORUxfRE9fTk9UX0lOR0VTVCDigJQgYW5kIGhlcmUgaXQgaXMgYWdhaW4sIG9uZSBsZXZlbCBkZWVwZXIuDQo-DQo-IC0tDQo-IFByaXlhDQo"
+    }
+  }
+}

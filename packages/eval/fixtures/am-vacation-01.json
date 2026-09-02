@@ -1,0 +1,104 @@
+{
+  "id": "am-vacation-01",
+  "description": "An account manager returns from five days off. A customer's renewal question arrived by email on day one, was politely followed up once, and then the thread went silent — the absence of further nagging is what makes it easy to miss, since nothing in the window restates it.",
+  "persona": "account_manager",
+  "window_kind": "vacation",
+  "volume": "balanced",
+  "window": { "start": "2026-05-18T00:00:00Z", "end": "2026-05-22T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-amv1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-amv1-a",
+      "artifact_id": "gmail:gm-thread-amv1-a:msg-1",
+      "actor": "Delphine Ruiz (Northwind Cooperative)",
+      "occurred_at": "2026-05-18T09:20:00Z",
+      "context_label": "Renewal — two questions before we sign",
+      "text": "Hi Wes. Our procurement team will sign the renewal this month, but they've asked two things first. One: can you confirm in writing that the data-residency clause still covers our EU entity after your platform migration. Two: we need the invoice split across two cost centres. Our board approves spend on the 29th, so I need the written confirmation before then or it rolls to the next cycle in August."
+    },
+    {
+      "event_id": "ev-amv1-002",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1779148800.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1779148800.000100",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-05-18T14:30:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Quarter pipeline is looking fine, no fire drills. Everyone's numbers are where they should be."
+    },
+    {
+      "event_id": "ev-amv1-003",
+      "source": "gmail",
+      "thread_key": "gm-thread-amv1-a",
+      "artifact_id": "gmail:gm-thread-amv1-a:msg-2",
+      "actor": "Delphine Ruiz (Northwind Cooperative)",
+      "occurred_at": "2026-05-20T11:05:00Z",
+      "context_label": "Renewal — two questions before we sign",
+      "text": "Following up gently — I know you may be away. No rush this week, but I do need the residency confirmation in hand before the 29th."
+    },
+    {
+      "event_id": "ev-amv1-004",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1779148800.000400",
+      "artifact_id": "slack:C0ACCOUNTS:1779148800.000400",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-05-21T10:15:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Legal published the updated data-residency addendum for post-migration accounts. It's in the shared drive, EU entities are explicitly covered. Grab it if a customer asks."
+    },
+    {
+      "event_id": "ev-amv1-005",
+      "source": "gmail",
+      "thread_key": "gm-thread-amv1-b",
+      "artifact_id": "gmail:gm-thread-amv1-b:msg-1",
+      "actor": "Billing Operations",
+      "occurred_at": "2026-05-21T16:40:00Z",
+      "context_label": "Multi-cost-centre invoicing — self-service now available",
+      "text": "Reminder to all account managers: invoice splitting across cost centres no longer needs a ticket. You can configure it yourself in the billing console, takes about two minutes, effective immediately."
+    },
+    {
+      "event_id": "ev-amv1-006",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1779148800.000600",
+      "artifact_id": "slack:C0ACCOUNTS:1779148800.000600",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-05-22T17:00:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Wrapping the week. Nothing escalated, no churn signals, have a good weekend all."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Send Delphine at Northwind Cooperative written confirmation that the data-residency clause still covers their EU entity after the platform migration, before their board approves spend on the 29th, or the renewal rolls to the August cycle.",
+        "citation": "gmail:gm-thread-amv1-a:msg-1"
+      },
+      {
+        "description": "Set up the Northwind renewal invoice to split across their two cost centres — this is now self-service in the billing console and no longer needs a ticket.",
+        "citation": "gmail:gm-thread-amv1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Northwind's renewal is gated on two things from you before their board approves spend on the 29th — written confirmation that the data-residency clause still covers their EU entity post-migration, and an invoice split across two cost centres. Miss the 29th and it rolls to August. [artifact:gmail:gm-thread-amv1-a:msg-1] Both got easier while you were out: Legal published a post-migration residency addendum that explicitly covers EU entities [artifact:slack:C0ACCOUNTS:1779148800.000400], and invoice splitting is now self-service in the billing console. [artifact:gmail:gm-thread-amv1-b:msg-1]"
+    ],
+    "supported_claims": [
+      "Northwind's procurement will sign the renewal this month subject to two conditions.",
+      "The first condition is written confirmation that the data-residency clause covers their EU entity after the platform migration.",
+      "The second condition is an invoice split across two cost centres.",
+      "Northwind's board approves spend on the 29th; missing it rolls the renewal to August.",
+      "Legal published an updated data-residency addendum in which EU entities are explicitly covered.",
+      "Invoice splitting across cost centres is now self-service in the billing console.",
+      "No accounts escalated and no churn signals were reported during the week."
+    ],
+    "unsupported_claims": [
+      "Northwind has signed the renewal.",
+      "The residency confirmation was sent.",
+      "Northwind is a churn risk.",
+      "The renewal has been pushed to August.",
+      "Legal confirmed coverage specifically for Northwind's EU entity.",
+      "The invoice has been split."
+    ],
+    "notes": "Two pending items in one message, which is the recall trap: a system that emits one item per artifact reports the residency confirmation and silently drops the invoice split. Both cite the same artifact legitimately — the ask is genuinely a single email with two numbered conditions. The follow-up on the 20th is the same asks restated, not a third item. The other trap is tone: the customer is warm and says 'no rush this week', and both bookend Slack messages say the quarter is calm and nothing escalated, so the whole window reads relaxed while containing a dated revenue deadline. Note the distinction the unsupported claims draw: Legal's addendum covers EU entities generally, and Bo's message is the resource that makes the reply easy — it is not a confirmation to Northwind, and treating the item as resolved by it is the subtle failure here."
+  },
+  "failure_mode_tags": ["missed_pending_item"]
+}

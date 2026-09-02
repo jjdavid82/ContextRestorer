@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "has_more": false,
+  "messages": [
+    {
+      "type": "message",
+      "user": "U03CAROL",
+      "text": "Deploy to staging is green.",
+      "ts": "1700000100.000300"
+    },
+    {
+      "type": "message",
+      "user": "U01ALICE",
+      "text": "Closing the loop on the rewrite.",
+      "ts": "1700000150.000400"
+    }
+  ],
+  "response_metadata": {
+    "next_cursor": ""
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "messages": [
+    {
+      "id": "msg-plain-001",
+      "threadId": "thread-aaa-111"
+    },
+    {
+      "id": "msg-html-002",
+      "threadId": "thread-bbb-222"
+    },
+    {
+      "id": "msg-quoted-003",
+      "threadId": "thread-aaa-111"
+    }
+  ],
+  "resultSizeEstimate": 3
+}

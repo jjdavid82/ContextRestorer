@@ -1,0 +1,35 @@
+{
+  "ok": true,
+  "has_more": false,
+  "messages": [
+    {
+      "type": "message",
+      "user": "U01ALICE",
+      "text": "Kicking off the indexer rewrite today. Thread here for details.",
+      "ts": "1699999999.000100",
+      "thread_ts": "1699999999.000100",
+      "reply_count": 2,
+      "reply_users_count": 2,
+      "latest_reply": "1700000260.000600"
+    },
+    {
+      "type": "message",
+      "user": "U02BOB",
+      "text": "Do we keep the old index around for a week?",
+      "ts": "1700000200.000500",
+      "thread_ts": "1699999999.000100",
+      "parent_user_id": "U01ALICE"
+    },
+    {
+      "type": "message",
+      "user": "U03CAROL",
+      "text": "Yes, then drop it once metrics look flat.",
+      "ts": "1700000260.000600",
+      "thread_ts": "1699999999.000100",
+      "parent_user_id": "U01ALICE"
+    }
+  ],
+  "response_metadata": {
+    "next_cursor": ""
+  }
+}

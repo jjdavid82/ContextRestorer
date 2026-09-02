@@ -1,0 +1,103 @@
+{
+  "id": "eng-mgr-vacation-01",
+  "description": "An engineering manager returns from a 5-day vacation. A direct, explicitly addressed question to them is buried mid-thread under a burst of unrelated chatter; a system that only reads the last few messages of the thread will miss it.",
+  "persona": "eng_manager",
+  "window_kind": "vacation",
+  "volume": "balanced",
+  "window": { "start": "2026-03-09T00:00:00Z", "end": "2026-03-13T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-emv1-001",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1773040800.000100",
+      "artifact_id": "slack:C0PLATFORM:1773040800.000100",
+      "actor": "Rhea Talbot",
+      "occurred_at": "2026-03-09T14:00:00Z",
+      "context_label": "#platform-eng",
+      "text": "Kicking off the queue-migration cutover thread. Plan is still to move the billing consumers over the weekend of the 21st."
+    },
+    {
+      "event_id": "ev-emv1-002",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1773040800.000100",
+      "artifact_id": "slack:C0PLATFORM:1773040800.000200",
+      "actor": "Rhea Talbot",
+      "occurred_at": "2026-03-09T14:06:00Z",
+      "context_label": "#platform-eng",
+      "text": "@morgan-lu you're the approver on the platform side while you're out next week — I need a yes/no from you on whether we hold the cutover for the audit freeze, or go ahead on the 21st. I can't schedule the on-call rotation until you answer."
+    },
+    {
+      "event_id": "ev-emv1-003",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1773040800.000100",
+      "artifact_id": "slack:C0PLATFORM:1773040800.000300",
+      "actor": "Dev Anand",
+      "occurred_at": "2026-03-09T15:11:00Z",
+      "context_label": "#platform-eng",
+      "text": "Unrelated but the staging consumer group keeps rebalancing every ~40s, I think the session timeout is too low. Bumping it to 45s to test."
+    },
+    {
+      "event_id": "ev-emv1-004",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1773040800.000100",
+      "artifact_id": "slack:C0PLATFORM:1773040800.000400",
+      "actor": "Dev Anand",
+      "occurred_at": "2026-03-10T09:24:00Z",
+      "context_label": "#platform-eng",
+      "text": "45s fixed it. Rebalance storm gone. Leaving it there and I'll write it up in the runbook."
+    },
+    {
+      "event_id": "ev-emv1-005",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1773040800.000100",
+      "artifact_id": "slack:C0PLATFORM:1773040800.000500",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-03-11T11:02:00Z",
+      "context_label": "#platform-eng",
+      "text": "Dashboards for the new consumers are up. Nothing alarming, p99 is flat."
+    },
+    {
+      "event_id": "ev-emv1-006",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1773040800.000100",
+      "artifact_id": "slack:C0PLATFORM:1773040800.000600",
+      "actor": "Rhea Talbot",
+      "occurred_at": "2026-03-12T16:45:00Z",
+      "context_label": "#platform-eng",
+      "text": "Still need that call on the freeze. Nobody else can sign off on it, so we're blocked until Morgan is back."
+    },
+    {
+      "event_id": "ev-emv1-007",
+      "source": "gmail",
+      "thread_key": "gm-thread-emv1-a",
+      "artifact_id": "gmail:gm-thread-emv1-a:msg-1",
+      "actor": "Rhea Talbot",
+      "occurred_at": "2026-03-13T08:15:00Z",
+      "context_label": "Re: Queue migration — approver sign-off needed",
+      "text": "Morgan — forwarding the Slack thread by email in case you filter Slack while you're away. The only open item for you is the freeze decision. Everything else is handled."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Decide whether the billing queue-migration cutover holds for the audit freeze or proceeds on the 21st — Rhea is blocked on this sign-off and cannot schedule the on-call rotation without it.",
+        "citation": "slack:C0PLATFORM:1773040800.000200"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Rhea Talbot needs a yes/no on holding the queue-migration cutover for the audit freeze; she has been blocked on it since Monday and cannot set the on-call rotation until you answer. [artifact:slack:C0PLATFORM:1773040800.000200] What moved: Dev raised the staging consumer session timeout to 45s, which stopped the rebalance storm. [artifact:slack:C0PLATFORM:1773040800.000400]"
+    ],
+    "supported_claims": [
+      "Rhea Talbot asked Morgan for a yes/no on holding the cutover for the audit freeze.",
+      "The on-call rotation cannot be scheduled until that decision is made.",
+      "Dev Anand raised the staging consumer session timeout to 45s and it resolved the rebalance storm.",
+      "The cutover is currently planned for the weekend of the 21st."
+    ],
+    "unsupported_claims": [
+      "The cutover was rescheduled.",
+      "The audit freeze was confirmed to apply to the platform team."
+    ],
+    "notes": "Exactly one pending item. The follow-up at 2026-03-12T16:45Z and the Gmail nudge both restate the same ask — a correct system reports one item, not three. The failure this fixture catches is the opposite one: reading only the tail of the thread (dashboards are fine, timeout fixed) and concluding nothing is waiting on the user. Citation must be the original ask, not the follow-up nudge."
+  },
+  "failure_mode_tags": ["missed_pending_item"]
+}

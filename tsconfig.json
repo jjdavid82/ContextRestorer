@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/store" },
+    { "path": "./packages/redact" },
+    { "path": "./packages/ingest" },
+    { "path": "./packages/ai" },
+    { "path": "./packages/ai/tsconfig.test.json" },
+    { "path": "./packages/observability" },
+    { "path": "./packages/observability/tsconfig.test.json" },
+    { "path": "./packages/eval" },
+    { "path": "./apps/desktop" },
+    { "path": "./apps/ui" },
+    { "path": "./apps/ui/tsconfig.test.json" }
+  ]
+}

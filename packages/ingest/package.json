@@ -1,0 +1,14 @@
+{
+  "name": "@cr/ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": { "build": "tsc -b", "test": "vitest run" },
+  "dependencies": {
+    "@cr/core": "*",
+    "@cr/redact": "*",
+    "@cr/store": "*"
+  }
+}

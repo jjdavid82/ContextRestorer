@@ -1,0 +1,134 @@
+{
+  "id": "am-afternoon-01",
+  "description": "A correct-but-unusable briefing test. One afternoon, one real pending item, and a lot of near-identical status chatter that invites a briefing to restate every message. Everything a system could say here is true and citable; the failure mode is style — length, hedging, and burying the one actionable line.",
+  "persona": "account_manager",
+  "window_kind": "afternoon",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-06-30T12:00:00Z", "end": "2026-06-30T18:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-ama1-001",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000100",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-06-30T12:10:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Quarter-end check-in thread. Post your account statuses here as you get to them."
+    },
+    {
+      "event_id": "ev-ama1-002",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000200",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-06-30T12:22:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Harbourline: freeze ended, usage back to normal. Nothing needed."
+    },
+    {
+      "event_id": "ev-ama1-003",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000300",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-06-30T12:24:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Tessellate: renewed last week, invoice sent. Nothing needed."
+    },
+    {
+      "event_id": "ev-ama1-004",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000400",
+      "actor": "Marguerite Salas",
+      "occurred_at": "2026-06-30T13:05:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Caldera: deal desk form received, pricing under review, nothing needed from the account team today."
+    },
+    {
+      "event_id": "ev-ama1-005",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000500",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-06-30T13:40:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Sable & Roe: dormant, no contact this quarter, no action. Vantage Grid: healthy, QBR booked for July. Ferrous Bay: healthy. Lantern Health: healthy."
+    },
+    {
+      "event_id": "ev-ama1-006",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000600",
+      "actor": "Marguerite Salas",
+      "occurred_at": "2026-06-30T14:15:00Z",
+      "context_label": "#accounts-emea",
+      "text": "@wes-okonjo one thing genuinely needs you today: Northwind's signed order form has the wrong legal entity name on it. Finance will not book the revenue this quarter unless a corrected form is countersigned by 18:00 today. I've put the corrected form in your queue; it's a signature, not a negotiation."
+    },
+    {
+      "event_id": "ev-ama1-007",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000700",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-06-30T15:00:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Meridian Loom: healthy, expansion conversation starting next month, nothing needed now."
+    },
+    {
+      "event_id": "ev-ama1-008",
+      "source": "gmail",
+      "thread_key": "gm-thread-ama1-a",
+      "artifact_id": "gmail:gm-thread-ama1-a:msg-1",
+      "actor": "Finance Operations",
+      "occurred_at": "2026-06-30T15:30:00Z",
+      "context_label": "Quarter-end cut-off reminder",
+      "text": "All order forms must be fully executed and in the system by 18:00 today to land in this quarter. Anything after that books next quarter. No exceptions this time."
+    },
+    {
+      "event_id": "ev-ama1-009",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1782864000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1782864000.000900",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-06-30T16:45:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Thanks all, thread's complete. Statuses collected for every account."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Countersign the corrected Northwind order form — the signed version has the wrong legal entity name — before the 18:00 cut-off today, or finance books the revenue next quarter.",
+        "citation": "slack:C0ACCOUNTS:1782864000.000600"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: countersign the corrected Northwind order form before 18:00 today — the signed one has the wrong legal entity name, and after the cut-off the revenue books next quarter. It's in your queue and it's a signature, not a negotiation. [artifact:slack:C0ACCOUNTS:1782864000.000600] Everything else in the quarter-end thread was reported healthy or explicitly no-action.",
+      "One thing today: the corrected Northwind order form needs your countersignature by 18:00 or the revenue slips a quarter. [artifact:slack:C0ACCOUNTS:1782864000.000600] No other account needs you — the rest of the quarter-end thread was status-only."
+    ],
+    "unacceptable_briefings": [
+      "In the #accounts-emea channel, Jonah Peck opened a quarter-end check-in thread and asked colleagues to post account statuses. Bo Lindgren then reported that Harbourline's freeze has ended and usage has returned to normal, with nothing needed. Bo Lindgren also reported that Tessellate renewed last week and the invoice was sent, with nothing needed. Marguerite Salas reported that Caldera's deal desk form was received and pricing is under review. Jonah Peck reported that Sable & Roe is dormant with no contact this quarter, that Vantage Grid is healthy with a QBR booked for July, that Ferrous Bay is healthy, and that Lantern Health is healthy. Marguerite Salas then noted that Northwind's signed order form has an incorrect legal entity name and that a corrected form requires countersignature by 18:00. Bo Lindgren reported that Meridian Loom is healthy with an expansion conversation starting next month. Finance Operations sent a quarter-end cut-off reminder. Jonah Peck confirmed the thread was complete.",
+      "It appears that there may possibly be an item that could potentially require your attention, although this is not entirely certain. Based on the available information, it seems that there might be an issue relating to a document associated with an account, which may or may not need to be signed at some point, possibly today. You may wish to review the relevant channel to determine whether any action is appropriate on your part."
+    ],
+    "supported_claims": [
+      "Northwind's signed order form has the wrong legal entity name.",
+      "A corrected form must be countersigned by 18:00 today or the revenue books next quarter.",
+      "The corrected form is already in Wes's queue and requires only a signature.",
+      "Harbourline's freeze ended and usage returned to normal.",
+      "Tessellate renewed last week and the invoice was sent.",
+      "Caldera's deal desk form was received and pricing is under review.",
+      "Sable & Roe is dormant; Vantage Grid, Ferrous Bay, Lantern Health and Meridian Loom were reported healthy.",
+      "Order forms must be fully executed by 18:00 to land in this quarter."
+    ],
+    "unsupported_claims": [
+      "The corrected Northwind order form was signed.",
+      "Northwind's revenue booked this quarter.",
+      "Wes needs to act on Caldera, Harbourline or Tessellate.",
+      "Meridian Loom's expansion needs attention now."
+    ],
+    "notes": "This is the bad_style fixture: recall, precision, citation accuracy and hallucination rate can all be perfect while the output is unusable, so none of the numeric metrics catch it. Two named anti-patterns are stored in `unacceptable_briefings`. The first is the transcription failure — every message faithfully restated in speaker-by-speaker order, with the one actionable sentence sitting seventh out of nine and reading like all the others. The second is the hedging failure — so qualified that the user learns nothing and must go read the channel anyway, which defeats the entire product. Both are factually clean. The correct output leads with the signature and the 18:00 cut-off, compresses eight healthy accounts into one clause or drops them, and is short enough to read on a phone. Nine 'nothing needed' style messages against one real item is deliberately the ratio at which a system tuned for completeness produces the first anti-pattern."
+  },
+  "failure_mode_tags": ["bad_style", "poor_ranking"]
+}

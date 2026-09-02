@@ -1,0 +1,46 @@
+{
+  "history": [
+    {
+      "id": "998010",
+      "messages": [
+        {
+          "id": "msg-quoted-003",
+          "threadId": "thread-aaa-111"
+        }
+      ],
+      "messagesAdded": [
+        {
+          "message": {
+            "id": "msg-quoted-003",
+            "threadId": "thread-aaa-111",
+            "labelIds": [
+              "INBOX",
+              "UNREAD"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "998031",
+      "messages": [
+        {
+          "id": "msg-attach-004",
+          "threadId": "thread-ccc-333"
+        }
+      ],
+      "messagesAdded": [
+        {
+          "message": {
+            "id": "msg-attach-004",
+            "threadId": "thread-ccc-333",
+            "labelIds": [
+              "INBOX"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "historyId": "998042"
+}

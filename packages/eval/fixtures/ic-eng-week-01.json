@@ -1,0 +1,117 @@
+{
+  "id": "ic-eng-week-01",
+  "description": "A full week for an IC engineer with three genuine pending items of wildly different stakes. The trivial ones are loud (repeated, chatty, multiple reminders) and the consequential one — a compliance-gated dependency patch with a hard Friday deadline — is stated once, quietly. Surfacing all three but ranking the survey above the patch is a poor-ranking failure even though recall is perfect.",
+  "persona": "ic_engineer",
+  "window_kind": "week",
+  "volume": "balanced",
+  "window": { "start": "2026-07-20T00:00:00Z", "end": "2026-07-24T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-icew1-001",
+      "source": "slack",
+      "thread_key": "C0TOOLING:1784592000.000100",
+      "artifact_id": "slack:C0TOOLING:1784592000.000100",
+      "actor": "Bex Nordahl",
+      "occurred_at": "2026-07-20T09:05:00Z",
+      "context_label": "#tooling",
+      "text": "@kiran-vasquez you're one of four people who haven't filled in the developer-tooling survey. It's 6 questions, takes 3 minutes. Please do it this week."
+    },
+    {
+      "event_id": "ev-icew1-002",
+      "source": "slack",
+      "thread_key": "C0TOOLING:1784592000.000100",
+      "artifact_id": "slack:C0TOOLING:1784592000.000200",
+      "actor": "Bex Nordahl",
+      "occurred_at": "2026-07-21T09:05:00Z",
+      "context_label": "#tooling",
+      "text": "Survey nudge #2 — still waiting on Kiran, Mika and two others. I will keep posting this daily, sorry."
+    },
+    {
+      "event_id": "ev-icew1-003",
+      "source": "gmail",
+      "thread_key": "gm-thread-icew1-a",
+      "artifact_id": "gmail:gm-thread-icew1-a:msg-1",
+      "actor": "Ines Cardoso",
+      "occurred_at": "2026-07-21T14:40:00Z",
+      "context_label": "Patch required: crypto-utils 2.x — service owners must merge by Friday 24th",
+      "text": "Kiran — you are listed as the owner of the ledger-api service, which pins crypto-utils 2.4.1. The advisory is exploitable via the signature-verification path, which ledger-api uses. Patched release is 2.4.9. Our SOC 2 window closes Friday the 24th; any service still on an affected version after that goes on the exception register and I have to file a written deviation with your name on it. You are the only person who can merge for ledger-api."
+    },
+    {
+      "event_id": "ev-icew1-004",
+      "source": "slack",
+      "thread_key": "C0BROWNBAG:1784764800.000100",
+      "artifact_id": "slack:C0BROWNBAG:1784764800.000100",
+      "actor": "Mika Osei",
+      "occurred_at": "2026-07-22T11:10:00Z",
+      "context_label": "#brown-bag",
+      "text": "@kiran-vasquez do you want the August 6th or August 13th slot for your retry-semantics talk? Either works, I just need to put a name in the calendar."
+    },
+    {
+      "event_id": "ev-icew1-005",
+      "source": "slack",
+      "thread_key": "C0BROWNBAG:1784764800.000100",
+      "artifact_id": "slack:C0BROWNBAG:1784764800.000200",
+      "actor": "Mika Osei",
+      "occurred_at": "2026-07-23T11:10:00Z",
+      "context_label": "#brown-bag",
+      "text": "Bumping — August 6 or August 13? Genuinely no wrong answer, I'll take a coin flip if you'd rather."
+    },
+    {
+      "event_id": "ev-icew1-006",
+      "source": "slack",
+      "thread_key": "C0TOOLING:1784592000.000100",
+      "artifact_id": "slack:C0TOOLING:1784592000.000300",
+      "actor": "Bex Nordahl",
+      "occurred_at": "2026-07-23T09:05:00Z",
+      "context_label": "#tooling",
+      "text": "Survey nudge #3. Two left. You know who you are."
+    },
+    {
+      "event_id": "ev-icew1-007",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1784937600.000100",
+      "artifact_id": "slack:C0BACKEND:1784937600.000100",
+      "actor": "Ravi Sundaram",
+      "occurred_at": "2026-07-24T10:02:00Z",
+      "context_label": "#backend-guild",
+      "text": "Heads up, I bumped crypto-utils in payments-api and the only breaking change was the return type on verifyDetached. Ten-minute fix if anyone else is on 2.4.x."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Merge the crypto-utils 2.4.9 patch for ledger-api before Friday the 24th — the advisory is exploitable through a code path ledger-api uses, Kiran is the only person who can merge it, and missing the date puts the service on the SOC 2 exception register with a written deviation in Kiran's name.",
+        "citation": "gmail:gm-thread-icew1-a:msg-1"
+      },
+      {
+        "description": "Tell Mika whether you want the August 6th or August 13th brown-bag slot so it can go in the calendar.",
+        "citation": "slack:C0BROWNBAG:1784764800.000100"
+      },
+      {
+        "description": "Fill in the six-question developer-tooling survey.",
+        "citation": "slack:C0TOOLING:1784592000.000100"
+      }
+    ],
+    "expected_top_item_citation": "gmail:gm-thread-icew1-a:msg-1",
+    "acceptable_briefings": [
+      "Waiting on you, in order: (1) merge the crypto-utils 2.4.9 patch for ledger-api before Friday — it's exploitable through a path ledger-api uses, you're the only one who can merge it, and missing the date files a SOC 2 deviation in your name. [artifact:gmail:gm-thread-icew1-a:msg-1] (2) pick the August 6 or August 13 brown-bag slot for Mika. [artifact:slack:C0BROWNBAG:1784764800.000100] (3) the tooling survey, now on its third nudge. [artifact:slack:C0TOOLING:1784592000.000100] Useful context: Ravi already did the same bump in payments-api and says the only breaking change is the verifyDetached return type. [artifact:slack:C0BACKEND:1784937600.000100]"
+    ],
+    "supported_claims": [
+      "ledger-api pins crypto-utils 2.4.1 and the patched release is 2.4.9.",
+      "The advisory is exploitable via the signature-verification path, which ledger-api uses.",
+      "The SOC 2 window closes Friday the 24th, after which affected services go on the exception register with a written deviation.",
+      "Kiran is the only person who can merge for ledger-api.",
+      "Mika needs a choice between the August 6 and August 13 brown-bag slots.",
+      "The developer-tooling survey has been nudged three times and is six questions.",
+      "Ravi bumped crypto-utils in payments-api and found only one breaking change, the verifyDetached return type."
+    ],
+    "unsupported_claims": [
+      "The crypto-utils patch has been merged for ledger-api.",
+      "ledger-api is not affected by the advisory.",
+      "The SOC 2 deadline was extended.",
+      "The brown-bag slot was assigned to August 6."
+    ],
+    "notes": "Recall is easy here; ranking is the whole test. The survey generates three messages and the brown-bag two, while the patch is a single email — so message count, mention count and recency all point the wrong way. AC-7 asks for top-3 relevance: all three items belong in the briefing, but the patch must be first. A briefing that opens with the survey, or that mentions the patch only after both trivia items, fails this fixture even with perfect recall, precision and citations. Ravi's message is not a pending item — it is context that makes the real item cheaper to act on, and a good briefing attaches it to the patch item rather than listing it separately."
+  },
+  "failure_mode_tags": ["poor_ranking"]
+}

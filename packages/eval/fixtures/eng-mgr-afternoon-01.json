@@ -1,0 +1,132 @@
+{
+  "id": "eng-mgr-afternoon-01",
+  "description": "A single busy afternoon during a partial outage. The manager's obligation is created by implication — a decision only they can make is stated as a constraint by someone else, never as a request — and it sits under a fast-moving incident narrative that is otherwise fully owned by the on-call.",
+  "persona": "eng_manager",
+  "window_kind": "afternoon",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-09-24T12:00:00Z", "end": "2026-09-24T18:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-ema1-001",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000100",
+      "actor": "Pager Bot",
+      "occurred_at": "2026-09-24T12:40:00Z",
+      "context_label": "#incident-search",
+      "text": "SEV2 opened: search latency p99 at 9.4s, error rate 1.8%. Paging the search on-call."
+    },
+    {
+      "event_id": "ev-ema1-002",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000200",
+      "actor": "Sanjay Rao",
+      "occurred_at": "2026-09-24T12:48:00Z",
+      "context_label": "#incident-search",
+      "text": "I have it. Index rebuild from this morning is still running and eating the disk IO budget."
+    },
+    {
+      "event_id": "ev-ema1-003",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000300",
+      "actor": "Sanjay Rao",
+      "occurred_at": "2026-09-24T13:05:00Z",
+      "context_label": "#incident-search",
+      "text": "Two options. Kill the rebuild and latency recovers in minutes, but we run on a stale index until we can redo it — which realistically means degraded relevance for two or three days. Or let it finish, another four hours of slow search."
+    },
+    {
+      "event_id": "ev-ema1-004",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000400",
+      "actor": "Talia Okonkwo",
+      "occurred_at": "2026-09-24T13:19:00Z",
+      "context_label": "#incident-search",
+      "text": "Worth knowing that the retail customer demo is at 15:00 and they will be searching live."
+    },
+    {
+      "event_id": "ev-ema1-005",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000500",
+      "actor": "Sanjay Rao",
+      "occurred_at": "2026-09-24T13:26:00Z",
+      "context_label": "#incident-search",
+      "text": "Then somebody above me has to pick, because accepting degraded relevance for three days is a product-quality tradeoff and I'm not authorised to make that call on my own. Morgan owns this service. I'll hold the current state until I hear otherwise, which means we stay slow through the demo by default."
+    },
+    {
+      "event_id": "ev-ema1-006",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000600",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-09-24T13:44:00Z",
+      "context_label": "#incident-search",
+      "text": "I've put a banner on the status page saying search may be slow. That part's handled."
+    },
+    {
+      "event_id": "ev-ema1-007",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000700",
+      "actor": "Sanjay Rao",
+      "occurred_at": "2026-09-24T14:30:00Z",
+      "context_label": "#incident-search",
+      "text": "Rebuild is at 61%. Still holding. No decision yet."
+    },
+    {
+      "event_id": "ev-ema1-008",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000800",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000800",
+      "actor": "Rhea Talbot",
+      "occurred_at": "2026-09-24T15:50:00Z",
+      "context_label": "#platform-eng",
+      "text": "Unrelated to the incident: I'm taking the queue-migration runbook review off next week's agenda, we don't need it. No action for anyone."
+    },
+    {
+      "event_id": "ev-ema1-009",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1789689600.000100",
+      "artifact_id": "slack:C0INCIDENT:1789689600.000900",
+      "actor": "Sanjay Rao",
+      "occurred_at": "2026-09-24T17:15:00Z",
+      "context_label": "#incident-search",
+      "text": "Rebuild at 88%, latency unchanged, still no decision. If nothing comes back tonight it finishes on its own and the question becomes moot, but the demo already happened on slow search."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Decide whether to kill the search index rebuild — fast recovery at the cost of two to three days of degraded relevance — or let it finish and accept about four hours of slow search. Sanjay is not authorised to make the product-quality tradeoff and is holding the current state until Morgan, who owns the service, responds.",
+        "citation": "slack:C0INCIDENT:1789689600.000500"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Sanjay needs your call on the search SEV2 — kill the index rebuild and recover latency within minutes at the cost of two to three days of degraded relevance, or let it finish and stay slow for about four hours. He can't make the product-quality tradeoff himself and is holding the current state, so the default is staying slow. The 15:00 retail demo ran on slow search. [artifact:slack:C0INCIDENT:1789689600.000500] Handled without you: Priya put a status-page banner up. [artifact:slack:C0INCIDENT:1789689600.000600] As of 17:15 the rebuild was at 88%, so the question may resolve itself overnight. [artifact:slack:C0INCIDENT:1789689600.000900]"
+    ],
+    "supported_claims": [
+      "A SEV2 opened at 12:40 with search p99 latency at 9.4s and 1.8% errors.",
+      "The cause is a still-running index rebuild consuming the disk IO budget.",
+      "Killing the rebuild recovers latency in minutes but leaves a stale index and degraded relevance for two to three days.",
+      "Letting it finish means about four more hours of slow search.",
+      "A retail customer demo at 15:00 involved live search.",
+      "Sanjay is not authorised to make the product-quality tradeoff and named Morgan as the service owner.",
+      "Sanjay is holding the current state until he hears otherwise, so the default is staying slow.",
+      "Priya put a banner on the status page.",
+      "At 17:15 the rebuild was at 88% and no decision had been made."
+    ],
+    "unsupported_claims": [
+      "The rebuild was killed.",
+      "The incident was resolved.",
+      "Morgan approved letting the rebuild finish.",
+      "The retail demo was cancelled.",
+      "Search relevance is degraded.",
+      "The status-page banner requires Morgan's approval."
+    ],
+    "notes": "The obligation is never phrased as a question to the user. Sanjay says 'somebody above me has to pick' and names the user as the service owner — that is the ask, and it is the citation. The two most likely wrong citations are the message enumerating the options (which is information, not a request) and the 17:15 status update (which restates that no decision has been made). Two distractors: Priya's banner is a completed action by someone else, and Rhea's agenda change explicitly needs nobody. The subtle correctness detail is the default: inaction is not neutral here, because holding means staying slow, and a briefing that omits that framing understates the item even if it surfaces it. Note that the demo has already happened by the end of the window — the item is still live because the tradeoff remains open, not because the demo can be saved."
+  },
+  "failure_mode_tags": ["missed_pending_item", "wrong_citation"]
+}

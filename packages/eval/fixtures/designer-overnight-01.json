@@ -1,0 +1,89 @@
+{
+  "id": "designer-overnight-01",
+  "description": "An overnight handoff from a designer in another timezone. The ask is phrased politely and indirectly — no question mark, no @-mention, no imperative — and a system keyed on interrogatives will not see it as a request at all.",
+  "persona": "designer",
+  "window_kind": "overnight",
+  "volume": "low",
+  "window": { "start": "2026-07-28T20:00:00Z", "end": "2026-07-29T08:30:00Z" },
+  "events": [
+    {
+      "event_id": "ev-do1-001",
+      "source": "slack",
+      "thread_key": "C0HANDOFF:1785009600.000100",
+      "artifact_id": "slack:C0HANDOFF:1785009600.000100",
+      "actor": "Ade Okpara",
+      "occurred_at": "2026-07-28T21:40:00Z",
+      "context_label": "#design-handoff-apac",
+      "text": "End of my day here. I've taken the onboarding flow as far as I can without a decision on the progress indicator — stepper versus percentage bar. I've built both, they're in the file as variants A and B."
+    },
+    {
+      "event_id": "ev-do1-002",
+      "source": "slack",
+      "thread_key": "C0HANDOFF:1785009600.000100",
+      "artifact_id": "slack:C0HANDOFF:1785009600.000200",
+      "actor": "Ade Okpara",
+      "occurred_at": "2026-07-28T21:44:00Z",
+      "context_label": "#design-handoff-apac",
+      "text": "Leaving this with you overnight, Noor. Whichever one you pick I'll build out the remaining nine screens against it tomorrow my time, which is roughly ten hours after you read this. I'd rather not pick myself because you own the flow and I'd just be guessing at your intent."
+    },
+    {
+      "event_id": "ev-do1-003",
+      "source": "slack",
+      "thread_key": "C0HANDOFF:1785009600.000100",
+      "artifact_id": "slack:C0HANDOFF:1785009600.000300",
+      "actor": "Ade Okpara",
+      "occurred_at": "2026-07-28T21:51:00Z",
+      "context_label": "#design-handoff-apac",
+      "text": "One more thing that does not need you: I fixed the misaligned checkbox on screen 3, it was a stale component instance. Already pushed."
+    },
+    {
+      "event_id": "ev-do1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-do1-a",
+      "artifact_id": "gmail:gm-thread-do1-a:msg-1",
+      "actor": "Figma Notifications",
+      "occurred_at": "2026-07-29T02:15:00Z",
+      "context_label": "Ade Okpara commented in Onboarding v4",
+      "text": "New comment on frame 'Progress indicator — A/B': 'Both variants use the same tokens so switching later is cheap, but the copy length differs and the percentage bar needs shorter step labels.'"
+    },
+    {
+      "event_id": "ev-do1-005",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1785096000.000100",
+      "artifact_id": "slack:C0DESIGN:1785096000.000100",
+      "actor": "Priyanka Sethi",
+      "occurred_at": "2026-07-29T07:50:00Z",
+      "context_label": "#design-crit",
+      "text": "Morning. Reminder there's no crit today, the room is booked for the all-hands."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Choose between the stepper and the percentage-bar progress indicator (variants A and B) for the onboarding flow, so Ade can build the remaining nine screens against it when his day starts in about ten hours.",
+        "citation": "slack:C0HANDOFF:1785009600.000200"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Ade needs you to pick the stepper or the percentage bar for the onboarding progress indicator — both are built as variants A and B, and he'll build the remaining nine screens against whichever you choose when his day starts, roughly ten hours from now. He won't pick himself because you own the flow. [artifact:slack:C0HANDOFF:1785009600.000200] Useful detail: both variants share tokens so switching later is cheap, but the percentage bar needs shorter step labels. [artifact:gmail:gm-thread-do1-a:msg-1] Quietly resolved: Ade fixed the misaligned checkbox on screen 3, a stale component instance. [artifact:slack:C0HANDOFF:1785009600.000300]"
+    ],
+    "supported_claims": [
+      "Ade built both a stepper and a percentage-bar progress indicator as variants A and B.",
+      "Ade is waiting on Noor's choice before building the remaining nine onboarding screens.",
+      "Ade declines to choose because Noor owns the flow.",
+      "Both variants use the same tokens, so switching later is cheap.",
+      "The percentage bar needs shorter step labels because copy length differs.",
+      "Ade already fixed a misaligned checkbox on screen 3, caused by a stale component instance.",
+      "There is no design crit today because the room is booked for the all-hands."
+    ],
+    "unsupported_claims": [
+      "The stepper was chosen.",
+      "Ade will pick a variant if he doesn't hear back.",
+      "The remaining nine screens are built.",
+      "Noor needs to fix the checkbox on screen 3.",
+      "The onboarding flow is blocked indefinitely."
+    ],
+    "notes": "The ask contains no question mark, no @-mention and no imperative verb. It is a statement of dependency — 'whichever one you pick I'll build against it' — which is how handoffs between timezones are actually phrased, and it is the single hardest pending-item shape to detect. Two counterweights sit next to it: an explicit non-ask ('one more thing that does not need you'), and a Figma comment that is genuinely useful supporting detail but is not itself the request, so citing the comment instead of the handoff message is a citation error. Note there is no stated deadline, only an implied one from the timezone gap; a correct briefing conveys the urgency without inventing a clock time. Also note Ade never says he will decide by default, so claiming a fallback is a fabrication."
+  },
+  "failure_mode_tags": ["missed_pending_item"]
+}

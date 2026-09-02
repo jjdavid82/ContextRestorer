@@ -1,0 +1,31 @@
+{
+  // The build project (tsconfig.json) only includes app/components/lib/types, so
+  // component tests were invisible to the root `tsc -b`. This project puts them
+  // under the type-checker, which is the point: `briefingView.test.tsx` types its
+  // mock as `ContextRestorerBridge`, and that assertion is only enforced if the
+  // file is actually checked. A test mock that has silently drifted from the
+  // preload's shape is worse than no test.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Mirror the renderer's resolution settings; vitest bundles like Next does.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // Not "preserve": nothing downstream compiles this project's JSX, so the
+    // checker uses the automatic runtime directly (as vitest's esbuild does).
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "isolatedModules": true,
+    // Composite projects may not set `noEmit` (TS6310), so emit declarations
+    // only, into a throwaway directory.
+    "emitDeclarationOnly": true,
+    "outDir": "dist-test",
+    "rootDir": "."
+  },
+  // `types/bridge.d.ts` is listed explicitly rather than inherited through the
+  // reference: it carries the `declare global { Window }` augmentation the tests
+  // rely on to install the mock bridge, and declaration files are not re-emitted
+  // into the referenced project's output.
+  "include": ["test/**/*.ts", "test/**/*.tsx", "types/**/*.ts"],
+  "references": [{ "path": "./tsconfig.json" }]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@cr/eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "eval": "tsc -b && node dist/cli.js",
+    "bench": "tsc -b && node dist/bench-cli.js"
+  },
+  "dependencies": {
+    "@cr/ai": "*",
+    "@cr/core": "*",
+    "@cr/ingest": "*",
+    "@cr/store": "*"
+  }
+}

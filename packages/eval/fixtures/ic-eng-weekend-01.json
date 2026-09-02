@@ -1,0 +1,71 @@
+{
+  "id": "ic-eng-weekend-01",
+  "description": "A genuinely quiet weekend for an IC engineer: four messages, all automated or social, none addressed to anyone. Tests that 'silence is the default' survives eval pressure — the correct briefing says nothing is waiting and does not manufacture an item out of a dependency-bot PR or a green CI run.",
+  "persona": "ic_engineer",
+  "window_kind": "weekend",
+  "volume": "low",
+  "window": { "start": "2026-08-01T00:00:00Z", "end": "2026-08-02T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-icewk1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-icewk1-a",
+      "artifact_id": "gmail:gm-thread-icewk1-a:msg-1",
+      "actor": "dependency-bot",
+      "occurred_at": "2026-08-01T04:00:00Z",
+      "context_label": "[ledger-api] 3 dependency updates available",
+      "text": "Weekly digest: 3 minor version bumps available (fastjson 1.9.2 -> 1.9.4, timelib 0.8.1 -> 0.8.3, uuidgen 4.0.0 -> 4.0.1). No security advisories. PRs opened automatically; they will merge themselves on green after 7 days unless a human intervenes."
+    },
+    {
+      "event_id": "ev-icewk1-002",
+      "source": "slack",
+      "thread_key": "C0BACKEND:1785283200.000100",
+      "artifact_id": "slack:C0BACKEND:1785283200.000100",
+      "actor": "Deploy Bot",
+      "occurred_at": "2026-08-01T11:30:00Z",
+      "context_label": "#backend-guild",
+      "text": "Weekly scheduled build for ledger-api: green. 418 passed, 0 failed, 0 skipped."
+    },
+    {
+      "event_id": "ev-icewk1-003",
+      "source": "slack",
+      "thread_key": "C0RANDOM:1785369600.000100",
+      "artifact_id": "slack:C0RANDOM:1785369600.000100",
+      "actor": "Tova Lindqvist",
+      "occurred_at": "2026-08-02T15:45:00Z",
+      "context_label": "#random",
+      "text": "Photo dump from the team hike yesterday. Somebody's dog stole an entire sandwich."
+    },
+    {
+      "event_id": "ev-icewk1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-icewk1-b",
+      "artifact_id": "gmail:gm-thread-icewk1-b:msg-1",
+      "actor": "Engineering Newsletter",
+      "occurred_at": "2026-08-02T18:00:00Z",
+      "context_label": "This week in engineering — issue 44",
+      "text": "In this issue: the platform team's caching write-up, two new internal libraries, and a reminder that the office is closed on the 17th. No action items in this newsletter."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing happened this weekend that needs you. Three routine dependency bumps opened as auto-merging PRs with no advisories, and the scheduled ledger-api build was green. [artifact:gmail:gm-thread-icewk1-a:msg-1]",
+      "Quiet weekend — nothing is waiting on you."
+    ],
+    "supported_claims": [
+      "Three minor dependency bumps are available for ledger-api with no security advisories.",
+      "The dependency PRs auto-merge on green after 7 days without human action.",
+      "The weekly scheduled ledger-api build passed with 418 tests.",
+      "The office is closed on the 17th."
+    ],
+    "unsupported_claims": [
+      "Kiran needs to review the dependency PRs.",
+      "There is a security advisory to address.",
+      "The scheduled build failed.",
+      "Kiran needs to respond to the newsletter or the hike thread."
+    ],
+    "notes": "A deliberately boring fixture, and that is the point: the system's most valuable property is producing nothing when nothing happened, and an eval set full of interesting scenarios quietly trains the opposite. Each event carries an explicit disclaimer of action ('no security advisories', 'they will merge themselves unless a human intervenes', 'no action items in this newsletter') so there is no ambiguity to hide behind. The dependency digest is the strongest distractor because 'PRs opened' pattern-matches to review work; the text states they merge without a human. Any pending item, and any briefing longer than about two sentences, is a failure here."
+  },
+  "failure_mode_tags": ["false_pending_item", "bad_style"]
+}

@@ -1,0 +1,89 @@
+{
+  "id": "pm-overnight-01",
+  "description": "An overnight window where the pending item is created by a deadline rather than by a request: a legal review will lapse at 09:00 unless the PM re-confirms scope, and the only artifact saying so is an automated notice nobody addressed to anyone.",
+  "persona": "pm",
+  "window_kind": "overnight",
+  "volume": "balanced",
+  "window": { "start": "2026-08-25T20:00:00Z", "end": "2026-08-26T08:30:00Z" },
+  "events": [
+    {
+      "event_id": "ev-pmo1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmo1-a",
+      "artifact_id": "gmail:gm-thread-pmo1-a:msg-1",
+      "actor": "Legal Review Workflow",
+      "occurred_at": "2026-08-25T20:15:00Z",
+      "context_label": "Review REV-4471 expires in 13 hours — action required by requester",
+      "text": "Automated notice. Review REV-4471 (Atlas data-retention copy) was opened by Dana Reyes and has been in 'awaiting requester confirmation' for 6 days. If the requester does not re-confirm the scope by 09:00 tomorrow the review closes as withdrawn and a new request must be filed, which re-enters the queue at the back (current queue depth: 4 weeks). Only the requester can re-confirm."
+    },
+    {
+      "event_id": "ev-pmo1-002",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1787011200.000100",
+      "artifact_id": "slack:C0ATLAS:1787011200.000100",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-08-25T21:40:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Shipping the retention-copy strings behind a flag tonight so they're ready the moment legal clears them. Nothing needed from anyone, the flag stays off."
+    },
+    {
+      "event_id": "ev-pmo1-003",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1787011200.000200",
+      "artifact_id": "slack:C0ATLAS:1787011200.000200",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-08-26T06:50:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Morning. Reminder that the retention copy is the last gate on the EU rollout — everything else is done and waiting."
+    },
+    {
+      "event_id": "ev-pmo1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmo1-b",
+      "artifact_id": "gmail:gm-thread-pmo1-b:msg-1",
+      "actor": "Product Analytics",
+      "occurred_at": "2026-08-26T07:00:00Z",
+      "context_label": "Daily metrics — Atlas",
+      "text": "Daily actives 19,110 (up 0.4%). Wizard completion 73.5%. No anomalies. No action required."
+    },
+    {
+      "event_id": "ev-pmo1-005",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1787011200.000500",
+      "artifact_id": "slack:C0ATLAS:1787011200.000500",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-08-26T08:05:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Flag is deployed and off, strings are in. Ready whenever legal comes back."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Re-confirm the scope of legal review REV-4471 (Atlas data-retention copy) before 09:00 this morning — only the requester can do it, and otherwise the review closes as withdrawn and a refiled request re-enters a four-week queue, with the retention copy being the last gate on the EU rollout.",
+        "citation": "gmail:gm-thread-pmo1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you, in the next hour: re-confirm the scope of legal review REV-4471 for the Atlas retention copy. It closes as withdrawn at 09:00, only you can re-confirm as the requester, and refiling means going to the back of a four-week queue. [artifact:gmail:gm-thread-pmo1-a:msg-1] That matters because the retention copy is the last gate on the EU rollout — everything else is done and waiting, and Iris has already shipped the strings behind an off flag. [artifact:slack:C0ATLAS:1787011200.000200]"
+    ],
+    "supported_claims": [
+      "Review REV-4471 covers the Atlas data-retention copy and was opened by Dana Reyes.",
+      "It has been awaiting requester confirmation for 6 days and closes as withdrawn at 09:00 if not re-confirmed.",
+      "Only the requester can re-confirm.",
+      "A refiled request re-enters the queue at the back, with a current queue depth of four weeks.",
+      "The retention copy is the last gate on the EU rollout.",
+      "Iris shipped the retention-copy strings behind a flag that remains off.",
+      "Daily actives are 19,110, up 0.4%, with wizard completion at 73.5% and no anomalies."
+    ],
+    "unsupported_claims": [
+      "Legal approved the retention copy.",
+      "The EU rollout is blocked on engineering.",
+      "The review was extended.",
+      "Iris can re-confirm the review scope.",
+      "The retention copy strings are live to users."
+    ],
+    "notes": "Three properties make this a hard miss. First, the obligation lives in an automated workflow email — the class of message most likely to be down-weighted as noise, and the fixture deliberately surrounds it with two genuinely ignorable automated messages. Second, nobody asks the user for anything; the item exists because a clock is running. Third, the cost of the miss is not the missed deadline but the four-week queue behind it, which is stated once, parenthetically, in the same email. The severity of the item is only visible by joining the notice to Ben's morning message about the EU rollout gate — a briefing that surfaces the re-confirmation without that context is correct but understates it, and the acceptable briefing shows the join. Iris's two messages are the precision counterweight: work completed by someone else, explicitly needing nothing, and mentioning 'ready whenever legal comes back' which invites the false inference that the ball is with legal rather than with the user."
+  },
+  "failure_mode_tags": ["missed_pending_item"]
+}

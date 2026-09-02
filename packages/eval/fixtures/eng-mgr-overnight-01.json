@@ -1,0 +1,89 @@
+{
+  "id": "eng-mgr-overnight-01",
+  "description": "An overnight incident thread that superficially looks like it has an open question for the user: the question is addressed to a different person, and it is answered and resolved later in the same thread before the user ever wakes up. Ground truth is that nothing is waiting on the user.",
+  "persona": "eng_manager",
+  "window_kind": "overnight",
+  "volume": "low",
+  "window": { "start": "2026-04-02T22:00:00Z", "end": "2026-04-03T08:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-emo1-001",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1775166000.000100",
+      "artifact_id": "slack:C0INCIDENT:1775166000.000100",
+      "actor": "Pager Bot",
+      "occurred_at": "2026-04-02T23:12:00Z",
+      "context_label": "#incident-checkout",
+      "text": "SEV3 opened: checkout-api error rate 4.1% over 5m. Paging the on-call for payments."
+    },
+    {
+      "event_id": "ev-emo1-002",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1775166000.000100",
+      "artifact_id": "slack:C0INCIDENT:1775166000.000200",
+      "actor": "Sanjay Rao",
+      "occurred_at": "2026-04-02T23:19:00Z",
+      "context_label": "#incident-checkout",
+      "text": "On it. Looks like the 22:40 config push flipped the retry budget to 0. @tanya-vos can you confirm you own that change and whether it's safe to roll back?"
+    },
+    {
+      "event_id": "ev-emo1-003",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1775166000.000100",
+      "artifact_id": "slack:C0INCIDENT:1775166000.000300",
+      "actor": "Tanya Vos",
+      "occurred_at": "2026-04-02T23:26:00Z",
+      "context_label": "#incident-checkout",
+      "text": "Yes that's mine, and yes it's safe to roll back — nothing depends on it yet. Rolling now."
+    },
+    {
+      "event_id": "ev-emo1-004",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1775166000.000100",
+      "artifact_id": "slack:C0INCIDENT:1775166000.000400",
+      "actor": "Tanya Vos",
+      "occurred_at": "2026-04-02T23:41:00Z",
+      "context_label": "#incident-checkout",
+      "text": "Rollback is out. Error rate back to 0.2% and holding."
+    },
+    {
+      "event_id": "ev-emo1-005",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1775166000.000100",
+      "artifact_id": "slack:C0INCIDENT:1775166000.000500",
+      "actor": "Sanjay Rao",
+      "occurred_at": "2026-04-03T00:05:00Z",
+      "context_label": "#incident-checkout",
+      "text": "SEV3 resolved. Writeup is drafted, I'll own the follow-up ticket for a retry-budget guardrail. Morgan — nothing needed from you on this one, posting here just so it's on the record."
+    },
+    {
+      "event_id": "ev-emo1-006",
+      "source": "gmail",
+      "thread_key": "gm-thread-emo1-a",
+      "artifact_id": "gmail:gm-thread-emo1-a:msg-1",
+      "actor": "Status Digest",
+      "occurred_at": "2026-04-03T06:00:00Z",
+      "context_label": "Nightly incident digest — 2026-04-02",
+      "text": "1 incident overnight (SEV3, checkout-api, resolved 00:05, duration 53m). No action items assigned outside the payments on-call rotation."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Quietly resolved: an overnight SEV3 on checkout-api was traced to a 22:40 config push that zeroed the retry budget; Tanya rolled it back and the error rate returned to 0.2% by 23:41. [artifact:slack:C0INCIDENT:1775166000.000400] Sanjay owns the writeup and the retry-budget guardrail follow-up. [artifact:slack:C0INCIDENT:1775166000.000500]"
+    ],
+    "supported_claims": [
+      "A SEV3 on checkout-api opened at 23:12 and was resolved at 00:05.",
+      "The cause was a 22:40 config push that set the retry budget to 0.",
+      "Tanya Vos owned the change and rolled it back.",
+      "Sanjay Rao owns the writeup and the follow-up guardrail ticket."
+    ],
+    "unsupported_claims": [
+      "Morgan needs to approve the rollback.",
+      "Morgan is asked to confirm ownership of the config change.",
+      "The follow-up guardrail ticket is assigned to Morgan."
+    ],
+    "notes": "The question at 23:19 ('can you confirm you own that change and whether it's safe to roll back?') is the trap: it is a real, explicit, unanswered-looking question, but it is addressed to Tanya, not to the user, and it is answered seven minutes later in the same thread. Both independent reasons for it not being a pending item are present, so a system that only checks addressee OR only checks later resolution still fails this fixture correctly. Any pending item produced here is a false positive against AC-4."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

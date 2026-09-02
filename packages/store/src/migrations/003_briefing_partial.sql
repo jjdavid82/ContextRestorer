@@ -1,0 +1,30 @@
+-- ============ §7.8: a briefing can be cut short and still be an LLM briefing ============
+--
+-- 001 gave `briefings` a two-state `mode` column ('llm' | 'template'). That
+-- encodes HOW the narrative was produced, and it is the only knob §7.8 left us.
+-- But the generation-budget path produces a third, genuinely different state:
+--
+--   mode='llm',      partial=0  → the model finished; the briefing is complete.
+--   mode='llm',      partial=1  → the model was aborted at `budgets.generationMs`;
+--                                 every claim shown is real and cited, but claims
+--                                 the model had not yet produced are missing.
+--   mode='template', partial=0  → the deterministic Phase-4 fallback ran instead.
+--
+-- Neither existing column can carry that third state honestly:
+--
+--   * Reusing mode='template' would be a lie — no template ran, and the fallback
+--     telemetry ('how often does the model fail us?') would be corrupted by runs
+--     where the model worked fine and merely ran long.
+--   * Overloading `threads_still_processing > 0` would be worse. That column is
+--     the OI-1 disclosure — "N threads had unsynthesized work when you asked" —
+--     and it is a property of the INPUT backlog, not of this generation attempt.
+--     A briefing can be complete with a backlog, or truncated with none, so the
+--     two are independent and conflating them would make both unreadable.
+--
+-- Hence a dedicated boolean. Default 0 so every briefing written before this
+-- migration reads back as "complete", which is what it was.
+--
+-- `ALTER TABLE ... ADD COLUMN` with a constant DEFAULT is supported by every
+-- SQLite version we target and rewrites no rows, so no table rebuild is needed.
+
+ALTER TABLE briefings ADD COLUMN partial INTEGER NOT NULL DEFAULT 0;

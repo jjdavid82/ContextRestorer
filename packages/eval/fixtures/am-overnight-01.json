@@ -1,0 +1,72 @@
+{
+  "id": "am-overnight-01",
+  "description": "An overnight window for an account manager containing an alarming-sounding automated alert that is, on its own terms, already handled. Tests that severity-flavoured language does not by itself manufacture a pending item.",
+  "persona": "account_manager",
+  "window_kind": "overnight",
+  "volume": "low",
+  "window": { "start": "2026-05-26T21:00:00Z", "end": "2026-05-27T08:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-amo1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-amo1-a",
+      "artifact_id": "gmail:gm-thread-amo1-a:msg-1",
+      "actor": "Account Health Alerts",
+      "occurred_at": "2026-05-26T23:30:00Z",
+      "context_label": "URGENT: usage drop detected — Harbourline Freight",
+      "text": "Automated alert: Harbourline Freight API calls fell 74% week over week. Severity: high. This alert fires on any drop above 50% and does not account for planned maintenance."
+    },
+    {
+      "event_id": "ev-amo1-002",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1779840000.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1779840000.000100",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-05-27T00:12:00Z",
+      "context_label": "#accounts-emea",
+      "text": "For anyone who got the Harbourline alert: that's their scheduled warehouse-system freeze, they told us about it in April and it runs to the 31st. I've already replied to the alert thread and muted it. No action needed from anyone, and specifically not from Wes."
+    },
+    {
+      "event_id": "ev-amo1-003",
+      "source": "gmail",
+      "thread_key": "gm-thread-amo1-a",
+      "artifact_id": "gmail:gm-thread-amo1-a:msg-2",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-05-27T00:20:00Z",
+      "context_label": "URGENT: usage drop detected — Harbourline Freight",
+      "text": "Closing this alert: expected drop, planned freeze through the 31st, customer notified us in advance. No follow-up required."
+    },
+    {
+      "event_id": "ev-amo1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-amo1-b",
+      "artifact_id": "gmail:gm-thread-amo1-b:msg-1",
+      "actor": "CRM Digest",
+      "occurred_at": "2026-05-27T06:00:00Z",
+      "context_label": "Your accounts — overnight summary",
+      "text": "0 new inbound messages. 0 tasks due today. 1 alert raised and closed by a colleague. Next scheduled customer call: Thursday, Northwind Cooperative."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing is waiting on you. A high-severity usage-drop alert fired overnight for Harbourline Freight; Bo closed it — the 74% drop is their planned warehouse-system freeze through the 31st, which they told us about in April. [artifact:gmail:gm-thread-amo1-a:msg-2]"
+    ],
+    "supported_claims": [
+      "An automated alert reported Harbourline Freight API calls down 74% week over week at high severity.",
+      "The alert fires on any drop above 50% and does not account for planned maintenance.",
+      "The drop is a scheduled warehouse-system freeze running to the 31st, which the customer disclosed in April.",
+      "Bo Lindgren replied to the alert thread, closed it, and stated no action is needed.",
+      "The next scheduled customer call is Thursday with Northwind Cooperative."
+    ],
+    "unsupported_claims": [
+      "Harbourline Freight is at risk of churning.",
+      "Wes needs to contact Harbourline about the usage drop.",
+      "The usage drop is unexplained.",
+      "The alert is still open.",
+      "Wes needs to prepare for the Thursday call."
+    ],
+    "notes": "The alert says URGENT and 'Severity: high', which is the strongest possible false signal for an account manager, and a 74% usage drop is exactly the pattern that should normally produce a pending item. Three separate facts defuse it: the alert itself discloses that it ignores planned maintenance, a colleague explains the cause and names the user as specifically not needing to act, and the alert thread is closed in writing. The CRM digest independently reports zero tasks due. The Thursday call is a scheduled event, not an item waiting on the user, and surfacing it as a pending item is the second-order false positive this fixture watches for — it belongs in context at most. A correct briefing may mention the alert precisely because the user will otherwise see the URGENT email and wonder; the value is in saying it is handled."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

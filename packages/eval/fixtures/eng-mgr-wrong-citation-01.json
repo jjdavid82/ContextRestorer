@@ -1,0 +1,88 @@
+{
+  "id": "eng-mgr-wrong-citation-01",
+  "description": "One obligation, three artifacts stating three different deadlines for it, two of which are superseded. The description is easy and the citation determines whether the user is told the right date — so the wrong citation here is not a cosmetic error, it changes the action.",
+  "persona": "eng_manager",
+  "window_kind": "overnight",
+  "volume": "balanced",
+  "window": { "start": "2026-10-13T18:00:00Z", "end": "2026-10-14T09:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-emwc1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-emwc1-a",
+      "artifact_id": "gmail:gm-thread-emwc1-a:msg-1",
+      "actor": "Ines Cardoso",
+      "occurred_at": "2026-10-13T18:20:00Z",
+      "context_label": "Access recertification — platform team",
+      "text": "Morgan, the platform team's production access recertification is open. You need to review and attest to 23 role assignments. Original deadline is the 31st."
+    },
+    {
+      "event_id": "ev-emwc1-002",
+      "source": "slack",
+      "thread_key": "C0COMPLIANCE:1791835200.000100",
+      "artifact_id": "slack:C0COMPLIANCE:1791835200.000100",
+      "actor": "Compliance Bot",
+      "occurred_at": "2026-10-13T20:00:00Z",
+      "context_label": "#compliance-notices",
+      "text": "Access recertification cycle open. Standard window is 14 days from opening. Managers with outstanding attestations will be reminded daily."
+    },
+    {
+      "event_id": "ev-emwc1-003",
+      "source": "gmail",
+      "thread_key": "gm-thread-emwc1-a",
+      "artifact_id": "gmail:gm-thread-emwc1-a:msg-2",
+      "actor": "Ines Cardoso",
+      "occurred_at": "2026-10-13T22:45:00Z",
+      "context_label": "Access recertification — platform team",
+      "text": "Correction, and I'm sorry for the churn: the external auditor moved their evidence request forward, so platform's attestation deadline is the 20th, not the 31st. This supersedes both my earlier mail and the standard 14-day window the bot quotes. The 20th is the date that matters and it is not movable — please treat the earlier dates as void."
+    },
+    {
+      "event_id": "ev-emwc1-004",
+      "source": "slack",
+      "thread_key": "C0COMPLIANCE:1791835200.000400",
+      "artifact_id": "slack:C0COMPLIANCE:1791835200.000400",
+      "actor": "Compliance Bot",
+      "occurred_at": "2026-10-14T07:00:00Z",
+      "context_label": "#compliance-notices",
+      "text": "Outstanding attestations: platform (23), search (0), billing (4). Deadline per policy: the 31st."
+    },
+    {
+      "event_id": "ev-emwc1-005",
+      "source": "slack",
+      "thread_key": "C0COMPLIANCE:1791835200.000500",
+      "artifact_id": "slack:C0COMPLIANCE:1791835200.000500",
+      "actor": "Ines Cardoso",
+      "occurred_at": "2026-10-14T08:10:00Z",
+      "context_label": "#compliance-notices",
+      "text": "The bot has not been updated and will keep saying the 31st. Ignore it. Platform is the 20th."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Review and attest to the platform team's 23 production access role assignments by the 20th — the auditor moved their evidence request forward, so the 20th supersedes the previously stated 31st and the standard 14-day window, and it is not movable.",
+        "citation": "gmail:gm-thread-emwc1-a:msg-2"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: attest to the platform team's 23 production access role assignments by the 20th. Ines corrected the date last night — the auditor pulled their evidence request forward, so the 20th replaces the 31st, and the compliance bot will keep quoting the old date because it hasn't been updated. [artifact:gmail:gm-thread-emwc1-a:msg-2]"
+    ],
+    "supported_claims": [
+      "Morgan must review and attest to 23 platform production role assignments.",
+      "The deadline was originally stated as the 31st.",
+      "The deadline was corrected to the 20th because the external auditor moved their evidence request forward.",
+      "The 20th supersedes both the earlier email and the bot's standard 14-day window.",
+      "The compliance bot has not been updated and will continue reporting the 31st.",
+      "Search has 0 outstanding attestations and billing has 4."
+    ],
+    "unsupported_claims": [
+      "The attestation deadline is the 31st.",
+      "The attestation deadline is 14 days from the cycle opening.",
+      "The attestations were completed.",
+      "The deadline can be extended.",
+      "Billing's 4 outstanding attestations are Morgan's responsibility."
+    ],
+    "notes": "Four artifacts describe the same obligation with three different dates, and the newest bot message — the most recent artifact in the window — carries the wrong one. Recency heuristics therefore actively select the superseded date. The correct citation is the correction email, which is the only artifact that both states the operative date and explains why it supersedes the others. Citing the original email, either bot message, or Ines's Slack clarification produces a briefing that is either wrong about the date or right by accident without supporting evidence at the cited artifact — the clarification says 'platform is the 20th' but does not contain the reason or the scope, so it is a weaker citation and should be scored as incorrect under strict matching. This fixture is the clearest case in the set of why citation accuracy (AC-6) is a user-facing property rather than an audit nicety: an eleven-day error in a non-movable compliance deadline follows directly from citing the wrong artifact."
+  },
+  "failure_mode_tags": ["wrong_citation", "fabricated_claim"]
+}

@@ -1,0 +1,171 @@
+{
+  "id": "pm-week-01",
+  "description": "A high-volume week for a PM: two real pending items inside twelve messages of cross-functional detail. Style is the failure mode — the content is rich enough that a complete, accurate, fully cited summary is also unreadable, and the compression choices are what separate a usable briefing from a transcript.",
+  "persona": "pm",
+  "window_kind": "week",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-08-03T00:00:00Z", "end": "2026-08-07T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-pmw1-001",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.000100",
+      "artifact_id": "slack:C0ATLAS:1785715200.000100",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-08-03T09:10:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Post-launch week one numbers: 2,140 accounts onboarded, 71% completed the setup wizard, median time to first value 6 minutes."
+    },
+    {
+      "event_id": "ev-pmw1-002",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.000100",
+      "artifact_id": "slack:C0ATLAS:1785715200.000200",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-08-03T09:35:00Z",
+      "context_label": "#launch-atlas",
+      "text": "The 29% who don't complete the wizard nearly all drop on the data-source step. Roughly two thirds of those never come back."
+    },
+    {
+      "event_id": "ev-pmw1-003",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.000100",
+      "artifact_id": "slack:C0ATLAS:1785715200.000300",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-08-03T14:20:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Sales anecdote matching that: three prospects this week said they couldn't find where to add a warehouse connection."
+    },
+    {
+      "event_id": "ev-pmw1-004",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.000100",
+      "artifact_id": "slack:C0ATLAS:1785715200.000400",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-08-04T10:05:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Support ticket volume is 3.2x baseline, but 80% of it is password resets from the migration, which will decay on its own."
+    },
+    {
+      "event_id": "ev-pmw1-005",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmw1-a",
+      "artifact_id": "gmail:gm-thread-pmw1-a:msg-1",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-08-04T16:40:00Z",
+      "context_label": "Atlas — need your call on the data-source step before Thursday",
+      "text": "Dana, engineering has capacity for exactly one Atlas fix in this sprint and they need to know by Thursday which one. The candidates are the data-source step redesign, which is the drop-off Priya found, or the bulk-import performance issue that three enterprise accounts have complained about. I'm not going to choose for you — it's a product call about whether we optimise acquisition or retain the accounts we already landed. Thursday is a real deadline because the sprint starts Friday."
+    },
+    {
+      "event_id": "ev-pmw1-006",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.000600",
+      "artifact_id": "slack:C0ATLAS:1785715200.000600",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-08-05T11:15:00Z",
+      "context_label": "#launch-atlas",
+      "text": "I built a quick prototype of a simplified data-source step. Not asking for a decision on it, just so you know the redesign isn't a big unknown — it's about four days of work."
+    },
+    {
+      "event_id": "ev-pmw1-007",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.000700",
+      "artifact_id": "slack:C0ATLAS:1785715200.000700",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-08-05T13:50:00Z",
+      "context_label": "#launch-atlas",
+      "text": "For the record the three enterprise accounts complaining about bulk import are 340k of ARR between them. Not trying to put my thumb on the scale, but you should have the number."
+    },
+    {
+      "event_id": "ev-pmw1-008",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.000800",
+      "artifact_id": "slack:C0ATLAS:1785715200.000800",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-08-05T15:30:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Localization: the nine payment-step strings from before launch are now translated and shipped. That thread is closed."
+    },
+    {
+      "event_id": "ev-pmw1-009",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmw1-b",
+      "artifact_id": "gmail:gm-thread-pmw1-b:msg-1",
+      "actor": "Marisol Vega (Comms)",
+      "occurred_at": "2026-08-06T09:00:00Z",
+      "context_label": "Atlas launch retrospective blog — approval needed by Monday",
+      "text": "Dana, the launch retrospective post is drafted and quotes you twice. I need your sign-off on the quotes and on the onboarding numbers we cite before it goes out Monday morning. If you'd rather not be quoted, say so and I'll rewrite around it."
+    },
+    {
+      "event_id": "ev-pmw1-010",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.001000",
+      "artifact_id": "slack:C0ATLAS:1785715200.001000",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-08-06T14:10:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Small thing, handled: the onboarding email had a broken unsubscribe link. Fixed and redeployed."
+    },
+    {
+      "event_id": "ev-pmw1-011",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.001100",
+      "artifact_id": "slack:C0ATLAS:1785715200.001100",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-08-07T10:20:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Two more prospects mentioned the data-source step. Adding to the pile, no action needed from you beyond what Ben already asked."
+    },
+    {
+      "event_id": "ev-pmw1-012",
+      "source": "slack",
+      "thread_key": "C0ATLAS:1785715200.001200",
+      "artifact_id": "slack:C0ATLAS:1785715200.001200",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-08-07T17:00:00Z",
+      "context_label": "#launch-atlas",
+      "text": "Week's done. Reminder the sprint choice is the only thing I need from you, and I need it Thursday."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Choose which single Atlas fix engineering takes into this sprint — the data-source step redesign that is causing wizard drop-off, or the bulk-import performance issue affecting three enterprise accounts — and tell Ben by Thursday, because the sprint starts Friday.",
+        "citation": "gmail:gm-thread-pmw1-a:msg-1"
+      },
+      {
+        "description": "Sign off on the two quotes attributed to you and the onboarding numbers cited in the launch retrospective blog post before it publishes Monday morning, or ask Marisol to rewrite without the quotes.",
+        "citation": "gmail:gm-thread-pmw1-b:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: (1) By Thursday, tell Ben which single fix engineering takes this sprint — the data-source step redesign or bulk-import performance. It's acquisition versus retention: 29% of new accounts drop on the data-source step and two thirds of those never return, against three enterprise accounts worth 340k ARR complaining about bulk import. Priya has prototyped the redesign and puts it at about four days. [artifact:gmail:gm-thread-pmw1-a:msg-1] (2) Sign off the two quotes and the onboarding numbers in the launch retrospective post before Monday, or ask Marisol to drop the quotes. [artifact:gmail:gm-thread-pmw1-b:msg-1] Week one otherwise: 2,140 accounts onboarded, 71% finished the wizard, median time to first value 6 minutes. Support volume is 3.2x baseline but four fifths of it is migration password resets that will decay. Payment-step localization shipped and the broken unsubscribe link is fixed. [artifact:slack:C0ATLAS:1785715200.000400]"
+    ],
+    "unacceptable_briefings": [
+      "This week in #launch-atlas, Iris Kwan reported post-launch week one numbers of 2,140 accounts onboarded with 71% completing the setup wizard and a median time to first value of 6 minutes. Priya Bhatt then noted that the 29% who do not complete the wizard nearly all drop on the data-source step and that roughly two thirds of those never return. Omar Feld added a sales anecdote that three prospects this week said they could not find where to add a warehouse connection. Iris Kwan reported that support ticket volume is 3.2x baseline, with 80% attributable to password resets from the migration. Ben Oduya emailed regarding the need for a decision on the data-source step before Thursday. Priya Bhatt built a prototype of a simplified data-source step and estimated approximately four days of work. Omar Feld provided the figure of 340k of ARR for the three enterprise accounts. Iris Kwan reported that the nine payment-step strings are now translated and shipped. Marisol Vega emailed regarding the launch retrospective blog. Priya Bhatt fixed a broken unsubscribe link. Omar Feld reported two more prospects mentioning the data-source step. Ben Oduya reminded that the sprint choice is needed Thursday."
+    ],
+    "supported_claims": [
+      "2,140 accounts were onboarded in week one; 71% completed the setup wizard; median time to first value was 6 minutes.",
+      "Nearly all non-completions drop on the data-source step, and about two thirds of those never return.",
+      "Three prospects, and later two more, mentioned difficulty finding where to add a warehouse connection.",
+      "Support ticket volume is 3.2x baseline, 80% of it migration password resets expected to decay.",
+      "Engineering has capacity for one Atlas fix this sprint and needs Dana's choice by Thursday, with the sprint starting Friday.",
+      "The candidates are the data-source step redesign and the bulk-import performance issue.",
+      "Priya prototyped a simplified data-source step and estimates about four days of work.",
+      "The three enterprise accounts complaining about bulk import represent 340k of ARR.",
+      "The nine payment-step localization strings are translated and shipped.",
+      "The broken unsubscribe link in the onboarding email is fixed and redeployed.",
+      "Marisol needs sign-off on two quotes and the cited onboarding numbers before Monday's blog post."
+    ],
+    "unsupported_claims": [
+      "Dana chose the data-source step redesign.",
+      "Engineering will fix both issues.",
+      "Support volume is a cause for concern.",
+      "The data-source drop-off is costing 340k of ARR.",
+      "The blog post has been approved.",
+      "Bulk import is broken for all customers."
+    ],
+    "notes": "Two real items in twelve messages, and every one of the other ten is a true, quotable, citable fact — which is precisely the condition under which a system produces the transcript stored in `unacceptable_briefings`. That anti-pattern would score perfectly on recall, precision, citation accuracy and hallucination rate while being something no user reads to the end. The specific style judgments this fixture rewards: state the sprint choice as a tradeoff with the two numbers that actually bear on it rather than as a list of everything said about it; attach Priya's estimate and Omar's ARR figure to that decision instead of listing them as separate events; compress the four resolved or self-resolving items into one clause; and drop the sales anecdotes entirely, since they duplicate the drop-off data. Note the 340k figure belongs to the bulk-import complaints, not the drop-off — the unsupported claims include that misattribution because it is the natural error when two numbers are collapsed too aggressively, and it inverts the decision the user has to make."
+  },
+  "failure_mode_tags": ["bad_style", "missed_pending_item"]
+}

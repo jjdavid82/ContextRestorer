@@ -1,0 +1,143 @@
+{
+  "id": "ic-eng-vacation-01",
+  "description": "An IC engineer returns from a 5-day vacation to a very busy channel. Two real items are waiting on them, separated by four days and about twenty messages of unrelated debate. A system that finds only the most recent one has 50% recall, which is the failure this fixture measures.",
+  "persona": "ic_engineer",
+  "window_kind": "vacation",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-08-10T00:00:00Z", "end": "2026-08-14T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-icev1-001",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000100",
+      "actor": "Hollis Frame",
+      "occurred_at": "2026-08-10T08:40:00Z",
+      "context_label": "#ledger-api",
+      "text": "@kiran-vasquez the auditors came back on the ledger export format. They need the currency field as an ISO 4217 code instead of our internal symbol, and they'll only accept the change from the service owner. Can you either make the change or tell me who should? Hard stop is the 21st."
+    },
+    {
+      "event_id": "ev-icev1-002",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000200",
+      "actor": "Mika Osei",
+      "occurred_at": "2026-08-10T09:15:00Z",
+      "context_label": "#ledger-api",
+      "text": "Separately: I think our idempotency keys are too coarse. Two writes in the same millisecond with the same payload collapse into one."
+    },
+    {
+      "event_id": "ev-icev1-003",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000300",
+      "actor": "Ravi Sundaram",
+      "occurred_at": "2026-08-10T09:31:00Z",
+      "context_label": "#ledger-api",
+      "text": "Is that a bug though? Two identical writes in the same millisecond is exactly what idempotency is supposed to collapse."
+    },
+    {
+      "event_id": "ev-icev1-004",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000400",
+      "actor": "Mika Osei",
+      "occurred_at": "2026-08-10T09:44:00Z",
+      "context_label": "#ledger-api",
+      "text": "Not if they're genuinely distinct transfers that happen to have the same amount and counterparty. Which does happen — payroll runs do it constantly."
+    },
+    {
+      "event_id": "ev-icev1-005",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000500",
+      "actor": "Ravi Sundaram",
+      "occurred_at": "2026-08-11T10:12:00Z",
+      "context_label": "#ledger-api",
+      "text": "Fair. Then the client should be sending a request id and we should stop deriving the key from the payload at all."
+    },
+    {
+      "event_id": "ev-icev1-006",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000600",
+      "actor": "Tova Lindqvist",
+      "occurred_at": "2026-08-11T13:50:00Z",
+      "context_label": "#ledger-api",
+      "text": "We tried client-supplied request ids in 2024 and three integrations sent constants. I'd rather widen the key to include a client timestamp."
+    },
+    {
+      "event_id": "ev-icev1-007",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000700",
+      "actor": "Mika Osei",
+      "occurred_at": "2026-08-12T11:05:00Z",
+      "context_label": "#ledger-api",
+      "text": "Writing up both options as an ADR. Nobody has to decide today, I'll bring it to guild review in September."
+    },
+    {
+      "event_id": "ev-icev1-008",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.000800",
+      "actor": "Ravi Sundaram",
+      "occurred_at": "2026-08-12T11:30:00Z",
+      "context_label": "#ledger-api",
+      "text": "Works for me. Parking it."
+    },
+    {
+      "event_id": "ev-icev1-009",
+      "source": "gmail",
+      "thread_key": "gm-thread-icev1-a",
+      "artifact_id": "gmail:gm-thread-icev1-a:msg-1",
+      "actor": "Ines Cardoso",
+      "occurred_at": "2026-08-13T16:20:00Z",
+      "context_label": "Access review — ledger-api production role",
+      "text": "Kiran, the quarterly access review flagged that you hold the ledger-api production write role. I need you to reply confirming you still need it, or it gets revoked automatically on the 20th. This is a one-line reply; I cannot confirm it on your behalf."
+    },
+    {
+      "event_id": "ev-icev1-010",
+      "source": "slack",
+      "thread_key": "C0LEDGER:1786060800.000100",
+      "artifact_id": "slack:C0LEDGER:1786060800.001000",
+      "actor": "Tova Lindqvist",
+      "occurred_at": "2026-08-14T17:10:00Z",
+      "context_label": "#ledger-api",
+      "text": "Quiet week otherwise. Everything's green, no incidents, enjoy the rest of your time off."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Change the ledger export's currency field to an ISO 4217 code, or tell Hollis who should — the auditors will only accept the change from the service owner and the hard stop is the 21st.",
+        "citation": "slack:C0LEDGER:1786060800.000100"
+      },
+      {
+        "description": "Reply to the quarterly access review confirming you still need the ledger-api production write role, or it is revoked automatically on the 20th.",
+        "citation": "gmail:gm-thread-icev1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: (1) Hollis needs the ledger export's currency field switched to ISO 4217 codes, or a name to hand it to — auditors will only take it from the service owner, hard stop the 21st. [artifact:slack:C0LEDGER:1786060800.000100] (2) A one-line reply to the access review confirming you still need the ledger-api production write role, or it is revoked on the 20th. [artifact:gmail:gm-thread-icev1-a:msg-1] Worth knowing: Mika opened a debate about idempotency-key granularity and is writing it up as an ADR for September guild review — explicitly nothing to decide now. [artifact:slack:C0LEDGER:1786060800.000700]"
+    ],
+    "supported_claims": [
+      "Auditors require the ledger export currency field as an ISO 4217 code rather than an internal symbol.",
+      "The auditors will only accept the change from the service owner, with a hard stop on the 21st.",
+      "The quarterly access review requires Kiran to confirm the ledger-api production write role or lose it on the 20th.",
+      "Mika raised that idempotency keys derived from the payload collapse distinct same-millisecond transfers.",
+      "Two options were discussed: client-supplied request ids, and widening the key with a client timestamp.",
+      "Mika is writing the options up as an ADR for September guild review and nobody needs to decide now.",
+      "There were no incidents during the week."
+    ],
+    "unsupported_claims": [
+      "The idempotency-key design was decided.",
+      "Client-supplied request ids were rejected.",
+      "The export format change was already made.",
+      "The access review deadline is the 21st.",
+      "The auditors approved the current export format."
+    ],
+    "notes": "Two pending items, four days and eight messages apart, in two different sources, with a long technical argument between them that is genuinely interesting and genuinely not actionable. The last message in the window says 'quiet week otherwise, everything's green' — true about incidents, and the trap for anything that reads the tail first. The ADR discussion is the precision counterweight: it contains the words 'decide' and options, but Mika explicitly parks it for September, so surfacing it as a pending item is a false positive. Note the two deadlines differ (21st for the export, 20th for the access role) — swapping them is a fabricated claim, not a rounding error."
+  },
+  "failure_mode_tags": ["missed_pending_item", "poor_ranking"]
+}

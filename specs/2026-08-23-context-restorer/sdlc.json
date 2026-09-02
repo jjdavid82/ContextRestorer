@@ -1,0 +1,95 @@
+{
+  "feature": "context-restorer",
+  "created": "2026-08-23",
+  "folder": "specs/2026-08-23-context-restorer/",
+  "worktree": null,
+  "notes": [
+    "Working directory is not a git repository. Per user decision on 2026-08-23, version control is skipped entirely: create-worktree, per-phase commits, and submit-changes are not-applicable.",
+    "Feature entered the SDLC with an approved design doc (source/context_restorer_design.docx) and an implementation prompt. Per user decision, the workflow fast-tracked to /plan: requirements and technical-design artifacts were PORTED from those sources rather than re-derived through interactive brainstorming.",
+    "Five open items resolved with the design owner: OI-1 latency split (thin sync path, 45s cap), OI-2 model config (fixed stack, config-file only), OI-3 onboarding (mandatory, assisted) on 2026-08-23; OI-4 FR-3 scheduling (time-based recurrence in scope, calendar auto-trigger deferred) and OI-5 eval-set size (~70 examples) on 2026-08-24. See requirements section 8.",
+    "Design section 12 deviations ACKNOWLEDGED by owner 2026-08-24: 12.1 (one database file) and 12.2 (claim-level streaming) accepted as written; 12.3 revised to include time-based scheduling. Plan gained Task 3.8; design section 4.2 gained the briefing_schedules table.",
+    "One open item remains: RO-1, the tuned per-source debounce VALUES. Approach is decided (ship D-7 defaults identically, tune against real traffic in Phase 5); the values themselves stay empirical. RO-2 is now a reporting rule, not an open size question."
+  ],
+  "steps": [
+    {
+      "id": "brainstorm",
+      "status": "not-applicable",
+      "reason": "Superseded by the pre-existing approved design doc and implementation prompt supplied as input.",
+      "artifacts": [
+        "specs/2026-08-23-context-restorer/source/context_restorer_design.docx",
+        "specs/2026-08-23-context-restorer/source/context_restorer_design.extracted.md",
+        "specs/2026-08-23-context-restorer/source/context_restorer_implementation_prompt.md"
+      ]
+    },
+    {
+      "id": "requirements",
+      "status": "complete",
+      "completedBy": "jdavid",
+      "completedAt": "2026-08-23T00:00:00Z",
+      "provenance": "ported-from-source",
+      "artifacts": ["specs/2026-08-23-context-restorer/context-restorer-requirements.md"]
+    },
+    {
+      "id": "create-worktree",
+      "status": "not-applicable",
+      "reason": "Not a git repository; version control skipped by user decision."
+    },
+    {
+      "id": "technical-design",
+      "status": "complete",
+      "completedBy": "jdavid",
+      "completedAt": "2026-08-23T00:00:00Z",
+      "provenance": "derived-from-source",
+      "dependencies": ["requirements"],
+      "artifacts": ["specs/2026-08-23-context-restorer/context-restorer-design.md"]
+    },
+    {
+      "id": "plan",
+      "status": "complete",
+      "completedBy": "jdavid",
+      "completedAt": "2026-08-23T00:00:00Z",
+      "dependencies": ["technical-design"],
+      "artifacts": ["specs/2026-08-23-context-restorer/context-restorer-plan.md"]
+    },
+    {
+      "id": "build",
+      "status": "complete",
+      "dependencies": ["plan"],
+      "taskFile": "specs/2026-08-23-context-restorer/context-restorer-tasks.json",
+      "notes": "All 6 phases (Foundation, Ingestion, Understanding, Briefing, Guardrails, Validation) complete. Every phase passed both spec-compliance and integration review (Phase 3's integration review failed once on real main.ts wiring gaps, fixed and re-verified; Phase 5's spec review found one line-number citation error, fixed). 1152/1153 tests passing repo-wide. Live-verified at multiple checkpoints (app launches, DB/vector store open correctly under Electron, briefing generation pipeline wired end to end). Known, explicitly-disclosed limitations carried into the acceptance doc: Slack/Gmail OAuth was never live-connected (deferred by user decision in Phase 1) so several live-data checkpoints (AC-8 ingestion lag, live burst/reversal tests, live fallback banner) were never exercised against real traffic; AC-1 (latency) measured FAIL on this hardware (~254s P95 vs 60s target, attributable to local model decode speed); AC-11 not measured (this machine has ~40GB RAM, not the required 16GB); eval set reached 35 of the ~70 target and a full eval pass over even 35 fixtures could not complete unattended in this environment (killed by the environment after ~14/35, several hours in) -- AC-3 through AC-7 are measured on n=5. See specs/2026-08-23-context-restorer/context-restorer-acceptance.md for the full, honest accounting. POST-HOC ADDITION (2026-08-28): the Task 1.7 gap (Slack polling had no channel selection) was closed by adding a Slack channel selector -- `channels:read` added to SLACK_SCOPES (user decision), `SlackClient.listChannels()`, migration 004 (`slack_selected_channels`) + `SlackChannelsRepo`, `slack:listAvailable`/`slack:getSelected`/`slack:setSelected` IPC, `VaultBackedSlackClient` reworked to poll every selected channel per cycle via a JSON-encoded per-channel cursor map, and a settings-page channel picker. Requirements FR-1 updated to reflect the added scope. All affected packages typecheck and build clean; full ingest/store/desktop suites re-run and pass (134+144+178 tests); app launch re-verified with no startup regression. Not yet exercised against a live Slack workspace -- Slack OAuth remains unconnected in this environment per the same Phase 1 deferral."
+    },
+    {
+      "id": "review",
+      "status": "complete",
+      "dependencies": ["build"],
+      "fixCycles": 1,
+      "artifacts": ["specs/2026-08-23-context-restorer/context-restorer-review.md"],
+      "notes": "No git diff available; reviewed against the working tree directly, with special focus on the just-added Slack channel selector. Initial pass found 1 blocker (repo-wide typecheck failure from a stale UI test mock) and 3 high-risk issues (unhandled per-channel Slack error could wedge all ingestion; zero test coverage for the new feature; SEC-8 right-to-delete missed the new slack_selected_channels table). All 4 fixed and re-verified in the same cycle: typecheck exits 0, full suite passes (1180 passed, 1 pre-existing skip, 0 failing, up from 1152), apps/ui and apps/desktop both rebuild clean. 2 medium-risk items also fixed (Slack health read ok before checking connection state; design doc's scope line was stale). 2 medium and 5 low-risk items consciously deferred with reasoning (onboarding disclosure of zero-channels-selected; unbounded per-channel backfill, pre-existing and only made proportionally worse; assorted settings-UI polish). See context-restorer-review.md for full detail."
+    },
+    {
+      "id": "fix",
+      "status": "not-applicable",
+      "dependencies": ["review"]
+    },
+    {
+      "id": "document",
+      "status": "complete",
+      "dependencies": ["review"],
+      "artifacts": [
+        "README.md",
+        "specs/2026-08-23-context-restorer/context-restorer-doc-summary.md"
+      ]
+    },
+    {
+      "id": "learn",
+      "status": "pending",
+      "dependencies": ["review"]
+    },
+    {
+      "id": "submit-changes",
+      "status": "not-applicable",
+      "reason": "Not a git repository; version control skipped by user decision.",
+      "dependencies": ["review", "document", "learn"]
+    }
+  ]
+}

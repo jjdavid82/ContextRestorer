@@ -1,0 +1,145 @@
+{
+  "id": "pm-afternoon-01",
+  "description": "A busy afternoon of roadmap debate in which the PM is @-mentioned six times and asked, in form, for a decision — but every ask is either answered inside the window, delegated to a scheduled forum, or withdrawn by its author. Tests precision under sustained direct address, which is the hardest case for the negative label.",
+  "persona": "pm",
+  "window_kind": "afternoon",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-05-19T12:00:00Z", "end": "2026-05-19T18:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-pma1-001",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000100",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000100",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-05-19T12:10:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "@dana-reyes are we committing to the bulk-import feature in H2 or not? Engineering wants to know whether to spike it."
+    },
+    {
+      "event_id": "ev-pma1-002",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000100",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000200",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-05-19T12:24:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "That's already answered — bulk import is committed, it's in the H2 doc I circulated last month and nothing has changed. Iris, no need to ask Dana again."
+    },
+    {
+      "event_id": "ev-pma1-003",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000100",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000300",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-05-19T12:28:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "Great, that's all I needed. Withdrawing the question."
+    },
+    {
+      "event_id": "ev-pma1-004",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000400",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000400",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-05-19T13:40:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "@dana-reyes sales wants to know the priority order between SSO and audit logs. Which comes first?"
+    },
+    {
+      "event_id": "ev-pma1-005",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000400",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000500",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-05-19T13:55:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "Ignore me, I found it in the prioritisation doc. SSO first, audit logs second. Sorry for the noise."
+    },
+    {
+      "event_id": "ev-pma1-006",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000600",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000600",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-05-19T14:35:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "@dana-reyes bigger question: should we keep investing in the legacy importer at all, or let it decay? This will take a proper conversation."
+    },
+    {
+      "event_id": "ev-pma1-007",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000600",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000700",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-05-19T14:50:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "Agreed it's a real question and agreed it's not a Slack question. I've put it on the quarterly planning agenda for the 4th of June with Dana as owner. Nothing needed before then, and please don't relitigate it here in the meantime."
+    },
+    {
+      "event_id": "ev-pma1-008",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000800",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000800",
+      "actor": "Iris Kwan",
+      "occurred_at": "2026-05-19T15:20:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "@dana-reyes one for awareness only, no reply needed: the design team has started exploring the bulk-import flow. I'll share when there's something to look at."
+    },
+    {
+      "event_id": "ev-pma1-009",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000900",
+      "artifact_id": "slack:C0ROADMAP:1779192000.000900",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-05-19T16:10:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "@dana-reyes @ben-oduya do either of you want to take the customer advisory board slot in July? Genuinely optional, I'll take it myself if nobody bites."
+    },
+    {
+      "event_id": "ev-pma1-010",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1779192000.000900",
+      "artifact_id": "slack:C0ROADMAP:1779192000.001000",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-05-19T16:22:00Z",
+      "context_label": "#roadmap-h2",
+      "text": "I'll take it. Done, that one's off everyone's list."
+    },
+    {
+      "event_id": "ev-pma1-011",
+      "source": "gmail",
+      "thread_key": "gm-thread-pma1-a",
+      "artifact_id": "gmail:gm-thread-pma1-a:msg-1",
+      "actor": "Ben Oduya",
+      "occurred_at": "2026-05-19T17:30:00Z",
+      "context_label": "Roadmap channel — end of day state",
+      "text": "Recap so nobody carries phantom work overnight: bulk import already committed, SSO before audit logs already documented, legacy importer parked to the 4th of June, advisory board taken by me. Nothing outstanding for Dana today."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing is waiting on you. Four things were put to you this afternoon and all four closed without you: bulk import was already committed, the SSO-before-audit-logs order was already documented, the legacy-importer question is parked for the 4th of June planning session with you as owner, and Ben took the July advisory board slot. [artifact:gmail:gm-thread-pma1-a:msg-1]",
+      "No open asks. Worth knowing: the legacy importer's future is on the 4th of June planning agenda with you as owner — nothing needed before then. [artifact:slack:C0ROADMAP:1779192000.000700]"
+    ],
+    "supported_claims": [
+      "Bulk import is committed for H2 and was documented in the H2 doc.",
+      "Iris withdrew her question about bulk import after Ben answered it.",
+      "SSO is prioritised before audit logs, per the prioritisation doc, and Omar withdrew his question.",
+      "The legacy importer question was placed on the 4th of June quarterly planning agenda with Dana as owner.",
+      "Ben asked that the legacy importer not be relitigated in Slack before then.",
+      "Ben took the July customer advisory board slot.",
+      "The design team has started exploring the bulk-import flow, for awareness only."
+    ],
+    "unsupported_claims": [
+      "Dana needs to confirm the bulk-import commitment.",
+      "Dana needs to set the priority order between SSO and audit logs.",
+      "Dana needs to decide the legacy importer's future now.",
+      "Dana needs to take the advisory board slot.",
+      "Dana needs to review the design team's bulk-import exploration."
+    ],
+    "notes": "Six direct @-mentions of the user in six hours, four of them syntactically decision requests, and the correct answer is the explicit negative — this is the highest-pressure precision fixture in the set. Each ask is neutralised by a different real-world mechanism: answered from existing documentation and withdrawn by its author; self-resolved by the asker; deferred to a dated forum with an owner assigned; and claimed by a colleague after being offered optionally. The legacy-importer item is the finest distinction: it is genuinely the user's decision and genuinely important, but it has a date, a forum and an owner, and the person who set that up asked explicitly for nothing before then — so it belongs in context, not in 'waiting on you'. Surfacing it as pending would be defensible-sounding and still wrong, because it would tell the user to act on something a colleague has already scheduled. Ben's end-of-day recap exists so a human reviewer can verify the negative label without re-reading the thread."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "has_more": false,
+  "messages": [
+    {
+      "type": "message",
+      "subtype": "bot_message",
+      "bot_id": "B07BUILDBOT",
+      "username": "CI",
+      "text": "Build #4271 passed in 3m12s.",
+      "ts": "1700000300.000700"
+    },
+    {
+      "type": "message",
+      "subtype": "channel_join",
+      "user": "U04DAVE",
+      "text": "<@U04DAVE> has joined the channel",
+      "ts": "1700000360.000800"
+    },
+    {
+      "type": "message",
+      "subtype": "channel_leave",
+      "user": "U05ERIN",
+      "text": "<@U05ERIN> has left the channel",
+      "ts": "1700000390.000850"
+    },
+    {
+      "type": "message",
+      "user": "U01ALICE",
+      "text": "Welcome Dave!",
+      "ts": "1700000420.000900"
+    }
+  ],
+  "response_metadata": {
+    "next_cursor": ""
+  }
+}

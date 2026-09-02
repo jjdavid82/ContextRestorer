@@ -1,0 +1,95 @@
+{
+  "id": "am-weekend-01",
+  "description": "A weekend escalation from a customer executive, sent to a shared alias rather than to the user directly, with the user named only in the body. Tests that recipient-based heuristics do not lose an item that is unambiguously the user's by content.",
+  "persona": "account_manager",
+  "window_kind": "weekend",
+  "volume": "balanced",
+  "window": { "start": "2026-07-11T00:00:00Z", "end": "2026-07-12T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-amwk1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-amwk1-a",
+      "artifact_id": "gmail:gm-thread-amwk1-a:msg-1",
+      "actor": "Rosalind Achebe (Vantage Grid)",
+      "occurred_at": "2026-07-11T09:15:00Z",
+      "context_label": "Escalation — invoicing errors ahead of Monday's board pack",
+      "text": "To the account team: we have found three duplicate line items across our last two invoices, totalling roughly 18,000. Our finance director has to submit the board pack on Monday afternoon and cannot sign off numbers he does not trust. Wes, you are our account manager, so I am asking you directly here: I need either corrected invoices or a written explanation of the discrepancy before Monday midday. If neither arrives I will have to raise this with your VP, which I would prefer not to do."
+    },
+    {
+      "event_id": "ev-amwk1-002",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1783900800.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1783900800.000100",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-07-11T13:40:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Saw the Vantage Grid escalation land in the alias. I can pull the invoice history but I can't authorise a credit note or speak for the account, so this needs Wes on Monday morning. Flagging so it doesn't sit."
+    },
+    {
+      "event_id": "ev-amwk1-003",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1783900800.000100",
+      "artifact_id": "slack:C0ACCOUNTS:1783900800.000200",
+      "actor": "Bo Lindgren",
+      "occurred_at": "2026-07-11T15:10:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Update from the invoice history: two of the three duplicates are real, both from the May usage import. The third is not a duplicate, it's a genuine second environment they added in June. So the number is closer to 11,000 than 18,000."
+    },
+    {
+      "event_id": "ev-amwk1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-amwk1-b",
+      "artifact_id": "gmail:gm-thread-amwk1-b:msg-1",
+      "actor": "Billing Operations",
+      "occurred_at": "2026-07-12T10:00:00Z",
+      "context_label": "Credit note requests — Monday turnaround",
+      "text": "Weekend note for account managers: credit notes requested before 10:00 Monday are issued the same day. After that it's 48 hours. The requester must be the named account manager; we cannot accept these from colleagues."
+    },
+    {
+      "event_id": "ev-amwk1-005",
+      "source": "slack",
+      "thread_key": "C0ACCOUNTS:1783900800.000500",
+      "artifact_id": "slack:C0ACCOUNTS:1783900800.000500",
+      "actor": "Jonah Peck",
+      "occurred_at": "2026-07-12T18:30:00Z",
+      "context_label": "#accounts-emea",
+      "text": "Reminder the team lunch is Wednesday not Tuesday. Nobody needs to do anything, just turn up hungry."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Get corrected invoices or a written explanation of the duplicate line items to Rosalind at Vantage Grid before Monday midday, ahead of their board pack — she has said she will otherwise escalate to the VP.",
+        "citation": "gmail:gm-thread-amwk1-a:msg-1"
+      },
+      {
+        "description": "Request the credit note yourself before 10:00 Monday for same-day issue — billing will not accept the request from a colleague, and after 10:00 it takes 48 hours, which misses the customer's Monday-midday deadline.",
+        "citation": "gmail:gm-thread-amwk1-b:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Vantage Grid escalated over the weekend — Rosalind Achebe needs corrected invoices or a written explanation of duplicate line items before Monday midday for their board pack, and says she'll go to your VP otherwise. [artifact:gmail:gm-thread-amwk1-a:msg-1] Two constraints make the timing tight: only you can request the credit note, and requests after 10:00 Monday take 48 hours. [artifact:gmail:gm-thread-amwk1-b:msg-1] Useful groundwork: Bo checked the invoice history — two of the three items are real duplicates from the May usage import, the third is a genuine second environment added in June, so the exposure is about 11,000 rather than 18,000. [artifact:slack:C0ACCOUNTS:1783900800.000200]"
+    ],
+    "supported_claims": [
+      "Vantage Grid reported three duplicate line items totalling roughly 18,000 across two invoices.",
+      "Their finance director submits a board pack on Monday afternoon.",
+      "Rosalind asked for corrected invoices or a written explanation before Monday midday.",
+      "She said she would otherwise raise it with Wes's VP.",
+      "Bo established that two of the three items are genuine duplicates from the May usage import and the third is a real second environment added in June.",
+      "The corrected exposure is closer to 11,000 than 18,000.",
+      "Bo cannot authorise a credit note or speak for the account.",
+      "Credit notes requested before 10:00 Monday are issued the same day; later requests take 48 hours and must come from the named account manager."
+    ],
+    "unsupported_claims": [
+      "Vantage Grid was overcharged by 18,000.",
+      "All three line items are duplicates.",
+      "A credit note has been issued.",
+      "Bo resolved the escalation.",
+      "The escalation has already reached the VP.",
+      "Wes needs to attend the team lunch."
+    ],
+    "notes": "The email is addressed to a shared alias, so any rule of the form 'is the user in the To line' fails, while the body names the user and states the obligation as directly as it is possible to state one. Two pending items rather than one, and the second is only discoverable by joining two artifacts: the customer's midday deadline is unreachable unless the credit note request goes in before 10:00, and only the user can file it. That inference is the real test here — a system that lists the customer email alone leaves the user to discover the 10:00 constraint themselves. Bo's correction is a precision trap in the opposite direction: the customer's 18,000 figure is wrong and repeating it as established fact is a fabricated claim, even though the customer said it, because the fixture contains the refutation. The social post is filler that must not appear as an item."
+  },
+  "failure_mode_tags": ["missed_pending_item", "fabricated_claim"]
+}

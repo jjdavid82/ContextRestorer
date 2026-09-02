@@ -1,0 +1,828 @@
+/*
+ * Global stylesheet for the renderer.
+ *
+ * Exists because the Electron shell's CSP has no `style-src` directive, so it
+ * falls back to `default-src 'self'`, which blocks every inline `style="..."`
+ * attribute (see `apps/desktop/src/security/csp.ts`). A `<link>`/`@import`ed
+ * stylesheet is a normal same-origin resource and is not affected.
+ *
+ * Design tokens live at the top as CSS custom properties (`--cr-*`), redefined
+ * under `prefers-color-scheme: dark` for automatic dark mode — no manual
+ * toggle, no JS. Every rule below should reference a token rather than a
+ * literal color/spacing value where one exists for that value; one-off values
+ * with no reused meaning are left as plain literals rather than forced onto
+ * the scale.
+ */
+
+/* -------------------------------------------------------------------------- */
+/* Design tokens                                                              */
+/* -------------------------------------------------------------------------- */
+
+:root {
+  /* Text / surfaces */
+  --cr-color-text: #1a1a1a;
+  --cr-color-text-muted: #595959;
+  --cr-color-bg: #ffffff;
+  --cr-color-bg-surface: #ffffff;
+  --cr-color-border: #d0d0d0;
+  --cr-color-border-strong: #767676;
+
+  /* Accent (links, focus, chips) */
+  --cr-color-accent: #0b3fbf;
+  --cr-color-focus-ring: #0b5fff;
+  --cr-color-accent-bg: #eef3ff;
+  --cr-color-accent-bg-hover: #dde7ff;
+  --cr-color-accent-bg-subtle: #f7f9ff;
+  --cr-color-accent-border: #c7d7ff;
+
+  /* Semantic status */
+  --cr-color-success: #1a7f37;
+  --cr-color-success-bg: #e8f5ec;
+  --cr-color-warning: #9a6700;
+  --cr-color-warning-strong: #bc4c00;
+  --cr-color-warning-text: #7a3e00;
+  --cr-color-warning-text-strong: #4a2600;
+  --cr-color-warning-bg: #fff4ec;
+  --cr-color-warning-bg-subtle: #fff6e5;
+  --cr-color-warning-border: #d9a066;
+  --cr-color-danger: #a4262c;
+  --cr-color-danger-strong: #cf222e;
+
+  /* Spacing scale */
+  --cr-space-1: 0.25rem;
+  --cr-space-2: 0.5rem;
+  --cr-space-3: 0.75rem;
+  --cr-space-4: 1rem;
+  --cr-space-5: 1.5rem;
+  --cr-space-6: 2rem;
+
+  /* Type */
+  --cr-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  --cr-font-mono: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  --cr-font-size-xs: 0.75rem;
+  --cr-font-size-sm: 0.85rem;
+  --cr-font-size-base: 1rem;
+  --cr-font-size-md: 1.1rem;
+  --cr-font-size-lg: 1.25rem;
+  --cr-font-size-2xl: 1.75rem;
+  --cr-line-height-tight: 1.25;
+  --cr-line-height-normal: 1.45;
+
+  /* Radius / elevation */
+  --cr-radius-sm: 4px;
+  --cr-radius-md: 8px;
+  --cr-radius-pill: 999px;
+  --cr-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Same variable names, dark values — every rule below is dark-mode-aware for
+   free by referencing tokens rather than literals. Accent/status backgrounds
+   are genuine dark tints, not the light-mode hex reused: a light tint like
+   `#eef3ff` is unreadable on a dark surface. Tuned for contrast, not guessed. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cr-color-text: #c9d1d9;
+    --cr-color-text-muted: #8b949e;
+    --cr-color-bg: #0d1117;
+    --cr-color-bg-surface: #161b22;
+    --cr-color-border: #30363d;
+    --cr-color-border-strong: #6e7681;
+
+    --cr-color-accent: #58a6ff;
+    --cr-color-focus-ring: #58a6ff;
+    --cr-color-accent-bg: #132043;
+    --cr-color-accent-bg-hover: #1b2c5c;
+    --cr-color-accent-bg-subtle: #0f1a33;
+    --cr-color-accent-border: #2d4a8a;
+
+    --cr-color-success: #3fb950;
+    --cr-color-success-bg: #123a1d;
+    --cr-color-warning: #d29922;
+    --cr-color-warning-strong: #e3893e;
+    --cr-color-warning-text: #e3b341;
+    --cr-color-warning-text-strong: #f0d58c;
+    --cr-color-warning-bg: #3a2a15;
+    --cr-color-warning-bg-subtle: #2e2410;
+    --cr-color-warning-border: #9e6a03;
+    --cr-color-danger: #f85149;
+    --cr-color-danger-strong: #ff7b72;
+
+    /* A shadow barely reads on a dark background; cards lean on
+       `--cr-color-border` for definition instead (see `.card`, `.cr-briefing`). */
+    --cr-shadow-card: none;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* app/layout.tsx — persistent nav                                           */
+/* -------------------------------------------------------------------------- */
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cr-space-4);
+  padding: var(--cr-space-3) var(--cr-space-4);
+  border-bottom: 1px solid var(--cr-color-border);
+  background: var(--cr-color-bg-surface);
+  font-family: var(--cr-font-sans);
+}
+
+.app-nav__brand {
+  font-weight: 600;
+  color: var(--cr-color-text);
+}
+
+.app-nav__links {
+  display: flex;
+  gap: var(--cr-space-4);
+}
+
+.app-nav__link {
+  color: var(--cr-color-accent);
+  font-size: var(--cr-font-size-sm);
+  text-decoration: none;
+}
+
+.app-nav__link:hover,
+.app-nav__link:focus-visible {
+  text-decoration: underline;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared utilities                                                           */
+/* -------------------------------------------------------------------------- */
+
+.list-reset {
+  list-style: none;
+  padding: 0;
+}
+
+.stack-main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: var(--cr-space-4);
+}
+
+/* Wider successor to `.stack-main` for the card-grid home dashboard. */
+.dashboard-main {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: var(--cr-space-4);
+}
+
+.page-title {
+  font-size: var(--cr-font-size-2xl);
+  margin: 0 0 var(--cr-space-4);
+  color: var(--cr-color-text);
+}
+
+.card {
+  background: var(--cr-color-bg-surface);
+  border: 1px solid var(--cr-color-border);
+  border-radius: var(--cr-radius-md);
+  box-shadow: var(--cr-shadow-card);
+  padding: var(--cr-space-4);
+  margin-bottom: var(--cr-space-4);
+}
+
+.dashboard-primary {
+  margin-bottom: var(--cr-space-5);
+}
+
+/* Demoted status strips (source health, pipeline activity): useful at a
+   glance, but neither is the reason the user opened the app, so they read as
+   quieter than `.dashboard-primary` — no card shadow, tighter padding —
+   rather than competing with the briefing for attention. */
+.dashboard-secondary .card {
+  box-shadow: none;
+  padding: var(--cr-space-3);
+}
+
+.mb-sm {
+  margin-bottom: var(--cr-space-2);
+}
+
+.section-heading {
+  margin: var(--cr-space-4) 0 0.4rem;
+  color: var(--cr-color-text);
+}
+
+/* For a `.section-heading` that is the FIRST thing inside its own `.card`
+   (`SourceHealth.tsx`/`PipelineStatus.tsx`): the card's own padding already
+   provides top breathing room, so the heading's usual top margin on top of
+   that is pure excess — unlike the briefing stream, where sections stack
+   directly against each other with no padding between them and need it. */
+.section-heading--flush {
+  margin-top: 0;
+}
+
+.muted-note {
+  margin: 0;
+  color: var(--cr-color-text-muted);
+}
+
+.bullet-list {
+  list-style: disc;
+  margin: 0;
+  padding: 0 0 0 1.2rem;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared controls — buttons, form fields, chips (onboarding + settings)     */
+/* -------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-block;
+  font: inherit;
+  font-size: var(--cr-font-size-base);
+  border-radius: var(--cr-radius-sm);
+  padding: var(--cr-space-2) var(--cr-space-4);
+  border: 1px solid transparent;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn:focus-visible {
+  outline: 3px solid var(--cr-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.btn--primary {
+  background: var(--cr-color-accent);
+  color: var(--cr-color-bg-surface);
+  border-color: var(--cr-color-accent);
+}
+
+.btn--secondary {
+  background: var(--cr-color-bg-surface);
+  color: var(--cr-color-text);
+  border-color: var(--cr-color-border-strong);
+}
+
+.form-field {
+  margin: var(--cr-space-3) 0;
+}
+
+.form-field__label {
+  display: block;
+  margin-bottom: var(--cr-space-1);
+  font-size: var(--cr-font-size-sm);
+  color: var(--cr-color-text-muted);
+}
+
+/* One checkbox/radio + its label — used by the onboarding candidate list and
+   the settings recurrence/quiet-hours controls. */
+.field-row {
+  padding: var(--cr-space-1) 0;
+}
+
+.status-chip {
+  display: inline-block;
+  font-size: var(--cr-font-size-xs);
+  padding: 0.05rem var(--cr-space-2);
+  border-radius: var(--cr-radius-pill);
+  border: 1px solid var(--cr-color-border);
+}
+
+.status-chip--connected {
+  color: var(--cr-color-success);
+  background: var(--cr-color-success-bg);
+  border-color: var(--cr-color-success);
+}
+
+.status-chip--pending {
+  color: var(--cr-color-text-muted);
+  background: transparent;
+}
+
+.status-chip--on {
+  color: var(--cr-color-success);
+  background: var(--cr-color-success-bg);
+  border-color: var(--cr-color-success);
+}
+
+.status-chip--off {
+  color: var(--cr-color-text-muted);
+  background: transparent;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cr-space-2);
+  margin: var(--cr-space-2) 0;
+}
+
+.chip-list__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cr-space-1);
+  background: var(--cr-color-accent-bg);
+  color: var(--cr-color-accent);
+  border: 1px solid var(--cr-color-accent-border);
+  border-radius: var(--cr-radius-pill);
+  padding: 0.1rem var(--cr-space-2);
+  font-size: var(--cr-font-size-sm);
+}
+
+.chip-list__remove {
+  font: inherit;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.chip-list__remove:focus-visible {
+  outline: 2px solid var(--cr-color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* components/StepIndicator.tsx                                              */
+/* -------------------------------------------------------------------------- */
+
+.step-indicator {
+  display: flex;
+  list-style: none;
+  margin: 0 0 var(--cr-space-4);
+  padding: 0;
+}
+
+.step-indicator__step {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: var(--cr-space-2);
+  color: var(--cr-color-text-muted);
+  font-size: var(--cr-font-size-sm);
+}
+
+.step-indicator__step:not(:last-child)::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  margin: 0 var(--cr-space-2);
+  background: var(--cr-color-border);
+}
+
+.step-indicator__marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid var(--cr-color-border-strong);
+  font-size: var(--cr-font-size-xs);
+}
+
+.step-indicator__step--done .step-indicator__marker {
+  background: var(--cr-color-success);
+  border-color: var(--cr-color-success);
+  color: var(--cr-color-bg-surface);
+}
+
+.step-indicator__step--current .step-indicator__marker {
+  background: var(--cr-color-accent);
+  border-color: var(--cr-color-accent);
+  color: var(--cr-color-bg-surface);
+}
+
+.step-indicator__step--current {
+  color: var(--cr-color-text);
+  font-weight: 600;
+}
+
+.step-indicator__label {
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------------------- */
+/* components/SourceHealth.tsx                                               */
+/* -------------------------------------------------------------------------- */
+
+.source-health__empty {
+  margin: 0;
+  opacity: 0.7;
+}
+
+.source-health__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.source-health__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--cr-space-2);
+  padding: 0.4rem var(--cr-space-2);
+  margin-bottom: var(--cr-space-1);
+  border-radius: var(--cr-radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+/* The throttled (rate-limited) row is the only one that changes its own
+   background: it must be findable at a glance, not read for. */
+.source-health__row--throttled {
+  border-color: var(--cr-color-warning-strong);
+  background: var(--cr-color-warning-bg);
+}
+
+.source-health__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.source-health__dot--ok {
+  background: var(--cr-color-success);
+}
+
+.source-health__dot--degraded {
+  background: var(--cr-color-warning);
+}
+
+.source-health__dot--rate-limited {
+  background: var(--cr-color-warning-strong);
+}
+
+.source-health__dot--disconnected {
+  background: var(--cr-color-danger-strong);
+}
+
+.source-health__source-name {
+  text-transform: capitalize;
+}
+
+.source-health__label--ok {
+  color: var(--cr-color-success);
+  font-weight: 400;
+}
+
+.source-health__label--degraded {
+  color: var(--cr-color-warning);
+  font-weight: 400;
+}
+
+.source-health__label--rate-limited {
+  color: var(--cr-color-warning-strong);
+  font-weight: 700;
+}
+
+.source-health__label--disconnected {
+  color: var(--cr-color-danger-strong);
+  font-weight: 400;
+}
+
+.source-health__lag {
+  opacity: 0.75;
+}
+
+.source-health__meta {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+.source-health__retry {
+  opacity: 0.75;
+  font-size: 0.85em;
+}
+
+/* -------------------------------------------------------------------------- */
+/* app/settings/schedule.tsx                                                  */
+/* -------------------------------------------------------------------------- */
+
+.schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cr-space-2);
+}
+
+.schedule-list__item {
+  display: flex;
+  align-items: center;
+  gap: var(--cr-space-2);
+  padding: var(--cr-space-2) 0;
+  border-bottom: 1px solid var(--cr-color-border);
+}
+
+.schedule-list__item:last-child {
+  border-bottom: none;
+}
+
+/* -------------------------------------------------------------------------- */
+/* app/settings/metrics.tsx                                                   */
+/* -------------------------------------------------------------------------- */
+
+.metrics__line {
+  margin: var(--cr-space-1) 0;
+}
+
+.metrics__list {
+  list-style: none;
+  padding: 0;
+  margin: var(--cr-space-1) 0;
+}
+
+.data-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--cr-space-2) 0 var(--cr-space-4);
+  font-size: var(--cr-font-size-sm);
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--cr-space-1) var(--cr-space-2);
+  border-bottom: 1px solid var(--cr-color-border);
+  /* No `text-align` here: the JSX's `align="left"`/`align="right"` attributes
+     already set per-column alignment (numeric columns are right-aligned) — a
+     stylesheet rule would override that presentational attribute and force
+     every column left, undoing it. */
+}
+
+.data-table th {
+  color: var(--cr-color-text-muted);
+  font-weight: 600;
+}
+
+.data-table tbody tr:nth-child(even) {
+  background: var(--cr-color-accent-bg-subtle);
+}
+
+/* -------------------------------------------------------------------------- */
+/* components/FeedbackControls.tsx                                           */
+/* -------------------------------------------------------------------------- */
+
+.feedback-controls {
+  margin-top: 0.3rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.feedback-button {
+  font: inherit;
+  font-size: 0.8em;
+  color: var(--cr-color-text); /* 16.1:1 on #ffffff. */
+  background: var(--cr-color-bg-surface);
+  border: 1px solid var(--cr-color-border-strong); /* 4.5:1 against white — a visible edge, not a hint. */
+  border-radius: var(--cr-radius-sm);
+  padding: 0.1rem 0.45rem;
+  cursor: pointer;
+}
+
+/* Matches `.caught-up__button` exactly: "I missed something" sits directly
+   beside "I'm caught up" in the footer (`CaughtUpButton` + `FeedbackControls`
+   in `BriefingView.tsx`), so the two must read as one row of equal-weight
+   actions rather than one looking smaller/secondary than the other. */
+.feedback-button--standalone {
+  font-size: 1em;
+  padding: var(--cr-space-1) 0.6rem;
+}
+
+/* The pressed verdict (or "I missed something") reads as ACTIVE rather than
+   as a separate "✓ recorded" note — the button IS the state. Still never
+   disabled: the user can click a different verdict at any time to change
+   their mind, which just submits a new row (`FeedbackControls.tsx`). */
+.feedback-button[aria-pressed='true'] {
+  background: var(--cr-color-accent);
+  color: var(--cr-color-bg-surface); /* 4.5:1+ against the accent fill, same pairing as `.btn--primary`. */
+  border-color: var(--cr-color-accent);
+}
+
+.feedback-controls__error {
+  font-size: 0.8em;
+  color: var(--cr-color-danger); /* 5.6:1 on white */
+}
+
+/* -------------------------------------------------------------------------- */
+/* components/ClaimBullet.tsx                                                */
+/* -------------------------------------------------------------------------- */
+
+.claim-bullet {
+  margin: 0 0 var(--cr-space-3);
+  line-height: var(--cr-line-height-normal);
+}
+
+/* #1a1a1a on #ffffff — 16.1:1, comfortably past the 4.5:1 floor (NFR-9). */
+.claim-bullet__text {
+  color: var(--cr-color-text);
+}
+
+/* Citation chip, deep link and low-confidence flag: always their own row
+   below the claim text (never crammed inline after it, which used to make a
+   short claim look inconsistent with a long one that wrapped naturally). */
+.claim-bullet__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+/* #0b3fbf on #eef3ff — 4.8:1. Chips read as links without being links: they
+   open in-app provenance, they do not navigate. */
+.claim-bullet__chip {
+  font: inherit;
+  font-size: 0.8em;
+  color: var(--cr-color-accent);
+  background: var(--cr-color-accent-bg);
+  border: 1px solid var(--cr-color-accent-border);
+  border-radius: var(--cr-radius-pill);
+  padding: 0.05rem var(--cr-space-2);
+  cursor: pointer;
+}
+
+/* #0b3fbf on #ffffff — 8.3:1. */
+.claim-bullet__link {
+  color: var(--cr-color-accent);
+  font-size: 0.8em;
+}
+
+/* #7a3e00 on #ffffff — 8.4:1, past the 4.5:1 floor. */
+.claim-bullet__low-confidence {
+  font-size: 0.8em;
+  color: var(--cr-color-warning-text);
+  border: 1px solid var(--cr-color-warning-border);
+  border-radius: var(--cr-radius-sm);
+  padding: 0.05rem 0.35rem;
+}
+
+/* -------------------------------------------------------------------------- */
+/* components/BriefingView.tsx                                               */
+/* -------------------------------------------------------------------------- */
+
+/* Card treatment (border/radius/shadow/padding) so the briefing reads as its
+   OWN card, without `BriefingView.tsx` itself knowing about `.card` — the
+   button that requests it (`app/page.tsx`) is deliberately left unboxed, so
+   the result is visually distinct from the control that produced it rather
+   than folded into the same surface. `margin-top` gives that boxed card
+   breathing room above it instead of sitting flush against the button. */
+.cr-briefing {
+  margin-top: var(--cr-space-4);
+  color: var(--cr-color-text);
+  background: var(--cr-color-bg-surface);
+  border: 1px solid var(--cr-color-border);
+  border-radius: var(--cr-radius-md);
+  box-shadow: var(--cr-shadow-card);
+  padding: var(--cr-space-4);
+}
+
+/* Merged in from a scoped `<style>` block that used to live in
+   `BriefingView.tsx` itself, back when there was no real stylesheet to put
+   `:focus-visible`/`:hover` rules in. Keyboard users get a visible ring past
+   the 3:1 non-text-UI contrast floor; mouse users are not sprayed with one. */
+.cr-briefing .cr-interactive:focus-visible {
+  outline: 3px solid var(--cr-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--cr-radius-sm);
+}
+
+.cr-briefing .cr-chip:hover {
+  background: var(--cr-color-accent-bg-hover);
+}
+
+.briefing-view__title {
+  margin: 0 0 var(--cr-space-1);
+}
+
+.briefing-view__subtitle {
+  margin: 0 0 var(--cr-space-2);
+  color: var(--cr-color-text-muted);
+  font-size: var(--cr-font-size-sm);
+}
+
+.briefing-view__error {
+  color: var(--cr-color-danger);
+}
+
+.briefing-view__banner {
+  margin: 0 0 var(--cr-space-3);
+  padding: var(--cr-space-2) 0.6rem;
+  border-left: 4px solid var(--cr-color-warning-text);
+  background: var(--cr-color-warning-bg-subtle);
+  color: var(--cr-color-warning-text-strong);
+}
+
+.briefing-view__waiting-list {
+  list-style: disc;
+  margin: 0.4rem 0 0;
+  padding: 0 0 0 1.2rem;
+}
+
+.briefing-view__footer {
+  margin-top: var(--cr-space-4);
+  border-top: 1px solid var(--cr-color-border);
+  padding-top: var(--cr-space-2);
+}
+
+.briefing-view__processing-note {
+  margin: 0 0 var(--cr-space-2);
+  color: var(--cr-color-warning-text);
+}
+
+/* -------------------------------------------------------------------------- */
+/* components/CaughtUpButton.tsx                                             */
+/* -------------------------------------------------------------------------- */
+
+.caught-up {
+  margin: var(--cr-space-2) 0;
+}
+
+.caught-up__button {
+  font: inherit;
+  color: var(--cr-color-text); /* 16.1:1 on #ffffff / 13.8:1 on the #e8f5ec done state. */
+  background: var(--cr-color-bg-surface);
+  border: 1px solid var(--cr-color-border-strong);
+  border-radius: var(--cr-radius-sm);
+  padding: var(--cr-space-1) 0.6rem;
+  cursor: default;
+}
+
+.caught-up__button--idle {
+  cursor: pointer;
+}
+
+.caught-up__button--done {
+  background: var(--cr-color-success-bg);
+  border-color: var(--cr-color-success);
+}
+
+.caught-up__status {
+  margin-left: var(--cr-space-2);
+  color: var(--cr-color-text);
+  font-size: 0.85em;
+}
+
+.caught-up__error {
+  margin-left: var(--cr-space-2);
+  color: var(--cr-color-danger);
+  font-size: 0.85em;
+}
+
+/* -------------------------------------------------------------------------- */
+/* components/DrillDown.tsx                                                  */
+/* -------------------------------------------------------------------------- */
+
+.drilldown {
+  margin: var(--cr-space-2) 0 var(--cr-space-3);
+  padding: var(--cr-space-2) var(--cr-space-3);
+  border-left: 3px solid var(--cr-color-accent-border);
+  background: var(--cr-color-accent-bg-subtle);
+  color: var(--cr-color-text); /* 15.3:1 on #f7f9ff. */
+}
+
+.drilldown__heading {
+  margin: 0 0 0.4rem;
+  font-size: var(--cr-font-size-sm);
+}
+
+.drilldown__error {
+  margin: 0;
+}
+
+.drilldown__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.drilldown__item {
+  margin-bottom: 0.4rem;
+}
+
+.drilldown__meta {
+  font-size: 0.8em;
+  color: var(--cr-color-text-muted);
+}
+
+.drilldown__author {
+  color: var(--cr-color-text);
+}
+
+.drilldown__link {
+  font-size: 0.8em;
+  color: var(--cr-color-accent);
+}
+
+.drilldown__close {
+  font: inherit;
+  font-size: 0.8em;
+  margin-top: 0.35rem;
+}

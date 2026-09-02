@@ -1,0 +1,85 @@
+{
+  "id": "msg-attach-004",
+  "threadId": "thread-ccc-333",
+  "labelIds": [
+    "INBOX"
+  ],
+  "snippet": "Roadmap deck attached",
+  "historyId": "998031",
+  "internalDate": "1787443200000",
+  "sizeEstimate": 2841203,
+  "payload": {
+    "partId": "",
+    "mimeType": "multipart/mixed",
+    "filename": "",
+    "headers": [
+      {
+        "name": "Delivered-To",
+        "value": "sam.okafor@example.com"
+      },
+      {
+        "name": "From",
+        "value": "Priya Raman <priya.raman@example.com>"
+      },
+      {
+        "name": "To",
+        "value": "Sam Okafor <sam.okafor@example.com>"
+      },
+      {
+        "name": "Subject",
+        "value": "Q3 roadmap deck"
+      },
+      {
+        "name": "Date",
+        "value": "Thu, 27 Aug 2026 00:00:00 +0000"
+      },
+      {
+        "name": "Message-ID",
+        "value": "<CA+15x9@mail.gmail.com>"
+      }
+    ],
+    "body": {
+      "size": 0
+    },
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "text/plain; charset=\"UTF-8\""
+          }
+        ],
+        "body": {
+          "size": 58,
+          "data": "Um9hZG1hcCBkZWNrIGF0dGFjaGVkIOKAlCByZXZpZXcgYmVmb3JlIFRodXJzZGF5Lg0KDQpQcml5YQ0K"
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "application/pdf",
+        "filename": "q3-roadmap.pdf",
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/pdf; name=\"q3-roadmap.pdf\""
+          },
+          {
+            "name": "Content-Disposition",
+            "value": "attachment; filename=\"q3-roadmap.pdf\""
+          },
+          {
+            "name": "Content-Transfer-Encoding",
+            "value": "base64"
+          }
+        ],
+        "body": {
+          "attachmentId": "ANGjdJ_attachment_id_0d1f2a3b4c5d6e7f8091a2b3c4d5e6f70819a2b3c4d5e6f7",
+          "size": 2837191
+        }
+      }
+    ]
+  }
+}

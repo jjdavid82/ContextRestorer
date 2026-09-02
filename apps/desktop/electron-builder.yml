@@ -1,0 +1,51 @@
+# Packaging config for a shareable Windows build (POC — no code signing, no
+# auto-update). Run via the root `npm run package:win` script, which builds
+# every workspace package and the UI static export first.
+#
+# `files` is intentionally left unspecified: electron-builder's default file
+# set already includes `dist/**` and `node_modules/**` with automatic
+# devDependency pruning, and — critically — its workspace-aware dependency
+# resolver is what correctly follows the npm-workspaces symlinks for
+# `@cr/core`/`@cr/store`/etc. (which live in `../../packages/*`, hoisted to the
+# repo-root `node_modules`) rather than requiring them hand-listed here.
+appId: com.contextrestorer.desktop
+productName: Context Restorer
+# electron-builder needs an exact version to download the matching Electron
+# binary; the root package.json pins a semver RANGE ("^43.0.0"), which
+# electron-builder cannot resolve on its own from an installed node_modules
+# in a workspace layout. Kept in sync with the currently installed
+# `electron` package (`node_modules/electron/package.json`) by hand — bump
+# this alongside any Electron upgrade.
+electronVersion: 43.4.1
+# electron-builder's default `npmRebuild: true` tries to recompile native
+# modules from source via node-gyp, which needs a Python/MSVC toolchain this
+# machine does not have (see project_context_restorer_toolchain memory).
+# Unnecessary anyway: better-sqlite3 was deliberately upgraded to v13 (N-API)
+# specifically so its prebuilt binary is ABI-stable across Node AND Electron
+# with no rebuild step, and @lancedb/lancedb ships its own platform prebuild
+# the same way. Both are used as-is.
+npmRebuild: false
+directories:
+  output: ../../release
+  buildResources: build
+# `dist/` (compiled main + preload) AND `ui/` (the copied Next.js static
+# export) both stay inside app.asar via electron-builder's default file set —
+# they need to stay siblings under the SAME root so `main.ts`'s existing
+# `join(import.meta.dirname, '../ui')` resolution keeps working unmodified
+# whether running from source or packaged.
+asarUnpack:
+  # Native addons cannot be `require()`d from inside an asar archive — both
+  # better-sqlite3 (N-API prebuild) and @lancedb/lancedb ship a `.node` file.
+  - "**/*.node"
+extraResources:
+  # A plain, unpacked, user-editable file — NOT inside app.asar — so a
+  # recipient of the shared build can open `resources/config/default.json` and
+  # fill in their own Ollama base URL / OAuth client id without unpacking
+  # anything. See `apps/desktop/src/main.ts`'s `CONFIG_PATH`.
+  - from: ../../config
+    to: config
+win:
+  # Portable = one double-clickable .exe, no installer, no admin rights —
+  # the simplest thing to hand someone else.
+  target: portable
+  artifactName: "${productName}-${version}-${arch}.${ext}"

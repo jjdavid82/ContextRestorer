@@ -1,0 +1,85 @@
+{
+  "id": "pm-wrong-citation-01",
+  "description": "Two near-identical pricing asks land in the same window from two different people in two different threads, and only one is addressed to the user. The correct summary text is easy; attaching it to the right artifact is not. A right-sounding pending item carrying the other thread's artifact id is a wrong citation, not a pass.",
+  "persona": "pm",
+  "window_kind": "week",
+  "volume": "balanced",
+  "window": { "start": "2026-05-11T00:00:00Z", "end": "2026-05-15T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-pmwc1-001",
+      "source": "slack",
+      "thread_key": "C0PRICING:1778457600.000100",
+      "artifact_id": "slack:C0PRICING:1778457600.000100",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-05-11T09:12:00Z",
+      "context_label": "#pricing-enterprise",
+      "text": "Reminder that the enterprise tier pricing sheet needs sign-off before the sales kickoff. Who's the decision maker on the seat-band change?"
+    },
+    {
+      "event_id": "ev-pmwc1-002",
+      "source": "slack",
+      "thread_key": "C0PRICING:1778457600.000100",
+      "artifact_id": "slack:C0PRICING:1778457600.000200",
+      "actor": "Lena Marsh",
+      "occurred_at": "2026-05-11T09:40:00Z",
+      "context_label": "#pricing-enterprise",
+      "text": "That one's mine — I'll approve the seat-band change by Wednesday. No action needed from anyone else."
+    },
+    {
+      "event_id": "ev-pmwc1-003",
+      "source": "slack",
+      "thread_key": "C0SELFSERVE:1778544000.000100",
+      "artifact_id": "slack:C0SELFSERVE:1778544000.000100",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-05-12T11:05:00Z",
+      "context_label": "#pricing-selfserve",
+      "text": "Same question for self-serve: the pricing sheet needs sign-off before the sales kickoff. @dana-reyes this one is yours — I need your approval on the seat-band change for the self-serve tier by Friday or we ship the old bands."
+    },
+    {
+      "event_id": "ev-pmwc1-004",
+      "source": "slack",
+      "thread_key": "C0SELFSERVE:1778544000.000100",
+      "artifact_id": "slack:C0SELFSERVE:1778544000.000200",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-05-13T15:30:00Z",
+      "context_label": "#pricing-selfserve",
+      "text": "Draft numbers are in the sheet now, so it's ready for review whenever Dana gets to it."
+    },
+    {
+      "event_id": "ev-pmwc1-005",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmwc1-a",
+      "artifact_id": "gmail:gm-thread-pmwc1-a:msg-1",
+      "actor": "Omar Feld",
+      "occurred_at": "2026-05-14T08:00:00Z",
+      "context_label": "Sales kickoff prep — pricing status",
+      "text": "Status: enterprise seat bands are approved (Lena, Wednesday). Self-serve seat bands are still outstanding and are the last open item before kickoff."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Approve the self-serve tier seat-band change by Friday, or the old bands ship at sales kickoff.",
+        "citation": "slack:C0SELFSERVE:1778544000.000100"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Omar needs your approval on the self-serve seat-band change by Friday; without it the old bands ship at sales kickoff, and it is the last open pricing item. [artifact:slack:C0SELFSERVE:1778544000.000100] Quietly resolved: the enterprise seat-band change was Lena's call and she approved it on Wednesday. [artifact:slack:C0PRICING:1778457600.000200]"
+    ],
+    "supported_claims": [
+      "The self-serve seat-band change needs Dana's approval by Friday.",
+      "If it is not approved, the old bands ship.",
+      "The enterprise seat-band change was owned and approved by Lena Marsh.",
+      "Self-serve draft numbers are in the sheet and ready for review.",
+      "Self-serve seat bands are the last open item before sales kickoff."
+    ],
+    "unsupported_claims": [
+      "The enterprise seat-band change is waiting on Dana.",
+      "Both pricing sheets are approved.",
+      "The self-serve approval deadline is Wednesday."
+    ],
+    "notes": "The distractor is slack:C0PRICING:1778457600.000100 — same wording ('pricing sheet needs sign-off before the sales kickoff', 'seat-band change'), same author, one day earlier, different thread, and not addressed to the user. A pending item whose description is right but whose citation points at the enterprise thread, the Priya nudge, or the Gmail status roll-up must be scored as both a miss and a citation error (Task 5.1: fuzzy on description, strict on citation). The correct citation is the message that actually contains the ask directed at the user."
+  },
+  "failure_mode_tags": ["wrong_citation"]
+}

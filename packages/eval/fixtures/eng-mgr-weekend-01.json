@@ -1,0 +1,85 @@
+{
+  "id": "eng-mgr-weekend-01",
+  "description": "An engineering manager's weekend where the only activity is a colleague resolving their own problem out loud in a thread. Nothing needs the manager. Tests that a long, technical, dramatic-sounding narrative does not produce an item simply because it was eventful.",
+  "persona": "eng_manager",
+  "window_kind": "weekend",
+  "volume": "low",
+  "window": { "start": "2026-09-19T00:00:00Z", "end": "2026-09-20T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-emwk1-001",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1789084800.000100",
+      "artifact_id": "slack:C0PLATFORM:1789084800.000100",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-09-19T10:05:00Z",
+      "context_label": "#platform-eng",
+      "text": "Weekend rabbit hole, thinking out loud, nobody needs to read this. The billing reconciliation job has been taking 40 minutes instead of 8 since Thursday."
+    },
+    {
+      "event_id": "ev-emwk1-002",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1789084800.000100",
+      "artifact_id": "slack:C0PLATFORM:1789084800.000200",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-09-19T11:20:00Z",
+      "context_label": "#platform-eng",
+      "text": "Not the database — query plans are identical. Not the data volume either, row counts are flat."
+    },
+    {
+      "event_id": "ev-emwk1-003",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1789084800.000100",
+      "artifact_id": "slack:C0PLATFORM:1789084800.000300",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-09-19T14:45:00Z",
+      "context_label": "#platform-eng",
+      "text": "Found it. Thursday's deploy moved the job onto the shared worker pool, where it competes with the export jobs. Moving it back to its own pool. Nothing was ever at risk, the job just took longer."
+    },
+    {
+      "event_id": "ev-emwk1-004",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1789084800.000100",
+      "artifact_id": "slack:C0PLATFORM:1789084800.000400",
+      "actor": "Priya Bhatt",
+      "occurred_at": "2026-09-19T15:30:00Z",
+      "context_label": "#platform-eng",
+      "text": "Back to 8 minutes. I'll add a note to the deploy checklist on Monday so nobody repeats it. Consider this closed, no follow-up needed from anyone."
+    },
+    {
+      "event_id": "ev-emwk1-005",
+      "source": "gmail",
+      "thread_key": "gm-thread-emwk1-a",
+      "artifact_id": "gmail:gm-thread-emwk1-a:msg-1",
+      "actor": "On-call Digest",
+      "occurred_at": "2026-09-20T06:00:00Z",
+      "context_label": "Weekend on-call summary",
+      "text": "0 pages. 0 incidents. 1 self-resolved performance regression, no customer impact. Nothing requiring manager review."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing needs you. Priya spent Saturday tracking down a billing reconciliation job that had slowed from 8 to 40 minutes since Thursday's deploy — it had been moved onto the shared worker pool — and moved it back. No customer impact, and she's adding a deploy-checklist note on Monday. [artifact:slack:C0PLATFORM:1789084800.000400]",
+      "Quiet weekend, nothing waiting on you: no pages, no incidents, and one self-resolved job slowdown. [artifact:gmail:gm-thread-emwk1-a:msg-1]"
+    ],
+    "supported_claims": [
+      "The billing reconciliation job slowed from 8 minutes to 40 minutes starting Thursday.",
+      "The cause was Thursday's deploy moving it onto the shared worker pool, where it competed with export jobs.",
+      "Priya moved it back to a dedicated pool and runtime returned to 8 minutes.",
+      "Database query plans and row counts were ruled out.",
+      "Nothing was at risk and there was no customer impact.",
+      "Priya will add a note to the deploy checklist on Monday.",
+      "There were no pages and no incidents over the weekend."
+    ],
+    "unsupported_claims": [
+      "Morgan needs to review the worker pool change.",
+      "Morgan needs to approve the deploy-checklist update.",
+      "The billing reconciliation job is still slow.",
+      "There was customer impact.",
+      "An incident review is required."
+    ],
+    "notes": "A companion to ic-eng-weekend-01, testing the same silence property against a different pressure: not emptiness, but a narratively satisfying investigation with a symptom, false leads, a root cause and a fix. Everything an interesting summary wants is here, and none of it is an obligation. The four defusing signals are explicit and cumulative — 'nobody needs to read this', 'nothing was ever at risk', 'no follow-up needed from anyone', and an independent digest saying nothing requires manager review. The Monday checklist note is Priya's own commitment, not the manager's, which is the most likely place to generate a false item by mis-assigning an owner. A briefing here should be at most two sentences and must contain no pending items."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

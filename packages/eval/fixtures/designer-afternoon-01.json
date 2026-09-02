@@ -1,0 +1,150 @@
+{
+  "id": "designer-afternoon-01",
+  "description": "One busy afternoon of design crit: eleven messages, most of them opinions about a colour token, plus a single message that quietly makes the user the blocker on a legal-mandated accessibility fix. The loud thread is more interesting to summarize and the quiet one is what matters.",
+  "persona": "designer",
+  "window_kind": "afternoon",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-06-24T12:00:00Z", "end": "2026-06-24T18:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-da1-001",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000100",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-06-24T12:05:00Z",
+      "context_label": "#design-crit",
+      "text": "Opening a crit on the new warning colour. The proposed amber fails contrast on white at small text sizes, and I think it also reads as 'brand orange' which we've spent a year training people to associate with promotions."
+    },
+    {
+      "event_id": "ev-da1-002",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000200",
+      "actor": "Priyanka Sethi",
+      "occurred_at": "2026-06-24T12:18:00Z",
+      "context_label": "#design-crit",
+      "text": "Disagree on the brand-orange point, they're 40 degrees apart in hue. Agree on contrast."
+    },
+    {
+      "event_id": "ev-da1-003",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000300",
+      "actor": "Callum Reyes",
+      "occurred_at": "2026-06-24T12:31:00Z",
+      "context_label": "#design-crit",
+      "text": "Users don't read hue angles. Priyanka's technically right and Yuki's practically right, which is the worst possible outcome for this thread."
+    },
+    {
+      "event_id": "ev-da1-004",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000400",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-06-24T12:49:00Z",
+      "context_label": "#design-crit",
+      "text": "Proposal: darken it two steps and pair it with the warning glyph so colour isn't load-bearing. Thoughts welcome, no decision needed today, I'll take this to the systems review next month."
+    },
+    {
+      "event_id": "ev-da1-005",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000500",
+      "actor": "Priyanka Sethi",
+      "occurred_at": "2026-06-24T13:02:00Z",
+      "context_label": "#design-crit",
+      "text": "Glyph pairing is the right answer regardless of what we do with the colour."
+    },
+    {
+      "event_id": "ev-da1-006",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000600",
+      "actor": "Callum Reyes",
+      "occurred_at": "2026-06-24T13:14:00Z",
+      "context_label": "#design-crit",
+      "text": "Two steps darker is going to look muddy next to the info blue. Three steps or leave it."
+    },
+    {
+      "event_id": "ev-da1-007",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000700",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-06-24T13:40:00Z",
+      "context_label": "#design-crit",
+      "text": "Noted, I'll bring both to the review. Parking the thread here so we stop re-litigating it."
+    },
+    {
+      "event_id": "ev-da1-008",
+      "source": "slack",
+      "thread_key": "C0A11Y:1782259200.000100",
+      "artifact_id": "slack:C0A11Y:1782259200.000100",
+      "actor": "Marta Kowal",
+      "occurred_at": "2026-06-24T14:20:00Z",
+      "context_label": "#accessibility",
+      "text": "@noor-haddad the VPAT remediation list needs the focus-order spec for the checkout flow from you. Legal committed to the customer that the fix ships in the July release, and engineering's cut-off for spec changes is the 30th. You're the only person who's mapped that flow, so I can't reassign it."
+    },
+    {
+      "event_id": "ev-da1-009",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.000900",
+      "actor": "Priyanka Sethi",
+      "occurred_at": "2026-06-24T15:05:00Z",
+      "context_label": "#design-crit",
+      "text": "Sorry, one more on the amber: what do we do about the dark theme? It passes contrast there already."
+    },
+    {
+      "event_id": "ev-da1-010",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1782259200.000100",
+      "artifact_id": "slack:C0DESIGN:1782259200.001000",
+      "actor": "Yuki Almeida",
+      "occurred_at": "2026-06-24T15:22:00Z",
+      "context_label": "#design-crit",
+      "text": "Separate token, separate problem, going in the same review doc. Genuinely parking it now."
+    },
+    {
+      "event_id": "ev-da1-011",
+      "source": "gmail",
+      "thread_key": "gm-thread-da1-a",
+      "artifact_id": "gmail:gm-thread-da1-a:msg-1",
+      "actor": "Design Systems Digest",
+      "occurred_at": "2026-06-24T17:30:00Z",
+      "context_label": "Systems review agenda — next month",
+      "text": "Agenda items so far: warning colour contrast and glyph pairing (Yuki), dark-theme token split (Yuki), spacing scale audit (Priyanka). Nothing on the agenda requires pre-reading."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Deliver the focus-order spec for the checkout flow to Marta for the VPAT remediation list — legal committed the fix to a customer for the July release, engineering's spec cut-off is the 30th, and Noor is the only person who has mapped the flow.",
+        "citation": "slack:C0A11Y:1782259200.000100"
+      }
+    ],
+    "acceptable_briefings": [
+      "Waiting on you: Marta needs the checkout-flow focus-order spec for the VPAT remediation list. Legal committed the fix to a customer for the July release, engineering's spec cut-off is the 30th, and it can't be reassigned because you're the only one who has mapped that flow. [artifact:slack:C0A11Y:1782259200.000100] Worth knowing: a long crit on the warning-amber contrast ended parked, with a darken-plus-glyph proposal going to next month's systems review. No decision needed from you. [artifact:slack:C0DESIGN:1782259200.000700]"
+    ],
+    "supported_claims": [
+      "The proposed amber warning colour fails contrast on white at small text sizes.",
+      "Yuki proposed darkening it and pairing it with a warning glyph, and parked the decision for next month's systems review.",
+      "Callum argued for three steps darker rather than two; the disagreement was not resolved.",
+      "The dark-theme token already passes contrast and was split into a separate agenda item.",
+      "Marta needs the checkout-flow focus-order spec from Noor for the VPAT remediation list.",
+      "Legal committed to a customer that the fix ships in the July release.",
+      "Engineering's cut-off for spec changes is the 30th and the task cannot be reassigned.",
+      "Nothing on the systems review agenda requires pre-reading."
+    ],
+    "unsupported_claims": [
+      "The warning colour was changed.",
+      "The team agreed to darken the amber by three steps.",
+      "Noor needs to weigh in on the warning colour.",
+      "The VPAT focus-order spec was delivered.",
+      "The systems review is this week."
+    ],
+    "notes": "Ten of eleven messages are the colour crit and one is the actual obligation, so any ranking driven by volume, thread length or engagement puts the wrong thing first. The crit is also explicitly parked twice ('no decision needed today', 'genuinely parking it now'), which is the precision test: it is full of open questions but none of them is waiting on the user. The accessibility ask carries all three signals of a real pending item — named addressee, external commitment, and non-reassignable ownership — in a single message in a quieter channel. A briefing that leads with the colour debate, or that buries the VPAT spec below it, fails on ranking even with perfect recall. Reporting the parked crit as a pending item additionally fails on precision."
+  },
+  "failure_mode_tags": ["poor_ranking", "false_pending_item"]
+}

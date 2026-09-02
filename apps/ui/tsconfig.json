@@ -1,0 +1,50 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": ".",
+    // Next.js bundles the renderer, so use bundler resolution (extensionless
+    // relative imports, "exports" map support) instead of the base NodeNext.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    // Next's SWC pipeline compiles JSX itself; tsc only type-checks it.
+    "jsx": "preserve",
+    "allowJs": false,
+    "isolatedModules": true,
+    "types": [
+      "node"
+    ],
+    // `next build` writes suggested options into this file; it only does so for
+    // keys that are absent, so `noEmit` is pinned to false here on purpose.
+    // The root solution build (`tsc -b`) references this project and composite
+    // projects may not disable emit (TS6310) — declarations only keeps it cheap.
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
+  },
+  "include": [
+    "app/**/*",
+    "components/**/*",
+    "lib/**/*",
+    "next-env.d.ts",
+    "types/**/*.ts",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "out",
+    "dist",
+    "dist-test"
+  ]
+}
