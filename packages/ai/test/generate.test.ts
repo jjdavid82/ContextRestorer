@@ -23,7 +23,7 @@
  *   real wall-clock time.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,6 +74,15 @@ class StubOllama implements OllamaClient {
   clock: FakeClock | undefined;
   /** Set by the stub when the generator aborts it — proof the signal was wired. */
   aborted = false;
+  /**
+   * When true, the stream never yields anything on its own — it hangs exactly
+   * as a real `fetch` would while Ollama is still evaluating the prompt, and
+   * only settles (by rejecting, matching a real aborted stream) once the
+   * signal aborts. Simulates the case the real §7.8 timer exists to catch:
+   * nothing has been received yet, so nothing inside the token loop can ever
+   * check the deadline.
+   */
+  hang = false;
 
   generateStream(options: GenerateStreamOptions): AsyncIterable<string> {
     this.calls.push(options);
@@ -83,6 +92,12 @@ class StubOllama implements OllamaClient {
 
     const stub = this;
     async function* iterate(): AsyncGenerator<string, void, undefined> {
+      if (stub.hang) {
+        await new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener('abort', () => reject(new Error('aborted mid-stream')));
+        });
+        return;
+      }
       for (let i = 0; i < stub.tokens.length; i += 1) {
         if (stub.throwAtIndex === i) throw new Error('stream failed mid-generation');
         // Yield to the event loop so the generator is genuinely asynchronous.
@@ -196,6 +211,9 @@ interface GeneratorOverrides {
   msPerToken?: number;
   generationMs?: number;
   throwAtIndex?: number;
+  hang?: boolean;
+  scheduleTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
 }
 
 function makeGenerator(over: GeneratorOverrides = {}): BriefingGenerator {
@@ -205,6 +223,7 @@ function makeGenerator(over: GeneratorOverrides = {}): BriefingGenerator {
   ];
   ollama.msPerToken = over.msPerToken ?? 0;
   ollama.throwAtIndex = over.throwAtIndex;
+  ollama.hang = over.hang ?? false;
 
   return new BriefingGenerator(
     ollama,
@@ -221,8 +240,31 @@ function makeGenerator(over: GeneratorOverrides = {}): BriefingGenerator {
     MODEL,
     PROMPT_VERSION,
     clock,
-    { logsDir: join(tmp, 'logs') },
+    {
+      logsDir: join(tmp, 'logs'),
+      ...(over.scheduleTimer !== undefined ? { scheduleTimer: over.scheduleTimer } : {}),
+      ...(over.clearTimer !== undefined ? { clearTimer: over.clearTimer } : {}),
+    },
   );
+}
+
+/** Captures every `scheduleTimer` call without ever really scheduling one. */
+function makeFakeTimer(): {
+  scheduleTimer: (fn: () => void, ms: number) => unknown;
+  clearTimer: ReturnType<typeof vi.fn>;
+  scheduled: Array<{ fn: () => void; ms: number }>;
+} {
+  const scheduled: Array<{ fn: () => void; ms: number }> = [];
+  let nextHandle = 0;
+  return {
+    scheduled,
+    scheduleTimer: (fn, ms) => {
+      scheduled.push({ fn, ms });
+      nextHandle += 1;
+      return nextHandle;
+    },
+    clearTimer: vi.fn(),
+  };
 }
 
 /** The prompt string the generator actually handed to the model. */
@@ -519,6 +561,95 @@ describe('generation budget (§7.8)', () => {
     expect(result.partial).toBe(true);
     expect(result.claimsAccepted).toBe(1);
     expect(countAiCalls(3)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7b. §7.8 real-timer enforcement — the fix for a slow-to-start model
+//
+// Every test above drives the budget entirely through the fake clock, which
+// only ever advances INSIDE token consumption (`ollama.clock?.advance(...)`
+// in `StubOllama.generateStream`). That proves the per-token check works; it
+// cannot prove the budget fires before any token has arrived, because in
+// these tests something has always already arrived by the time the check
+// runs. These tests use a real (fake-injected) timer instead, and a stream
+// that never yields on its own, to exercise exactly the path production was
+// missing: nothing received yet, and the wait still gets cut off on schedule.
+// ---------------------------------------------------------------------------
+
+describe('§7.8 real-timer enforcement (stuck before the first token)', () => {
+  it('aborts a stream that never yields, once the injected timer fires', async () => {
+    const timer = makeFakeTimer();
+
+    const resultPromise = makeGenerator({
+      hang: true,
+      generationMs: 30_000,
+      scheduleTimer: timer.scheduleTimer,
+      clearTimer: timer.clearTimer,
+    }).generate(WINDOW);
+
+    // Let the generator reach `generateStream` and schedule its timer before
+    // firing it — otherwise there is nothing captured yet to fire.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(timer.scheduled).toHaveLength(1);
+    expect(timer.scheduled[0]?.ms).toBe(30_000);
+
+    // Simulate the real timer elapsing. No token was ever pushed, so the
+    // per-token check in the loop never ran — this is the only thing that
+    // aborts the stream.
+    timer.scheduled[0]?.fn();
+
+    const result = await resultPromise;
+
+    expect(ollama.aborted).toBe(true);
+    expect(result.partial).toBe(true);
+    expect(result.outcome).toBe('budget_exceeded');
+    expect(result.claimsAccepted).toBe(0);
+    expect(timer.clearTimer).toHaveBeenCalledWith(1);
+  });
+
+  it('never schedules a real timer when the budget is disabled (Infinity)', async () => {
+    const timer = makeFakeTimer();
+
+    await makeGenerator({
+      generationMs: Number.POSITIVE_INFINITY,
+      scheduleTimer: timer.scheduleTimer,
+      clearTimer: timer.clearTimer,
+    }).generate(WINDOW);
+
+    expect(timer.scheduled).toHaveLength(0);
+    expect(timer.clearTimer).not.toHaveBeenCalled();
+  });
+
+  it('clears the timer once a normal, well-inside-budget generation finishes', async () => {
+    const timer = makeFakeTimer();
+
+    await makeGenerator({
+      scheduleTimer: timer.scheduleTimer,
+      clearTimer: timer.clearTimer,
+    }).generate(WINDOW);
+
+    expect(timer.scheduled).toHaveLength(1);
+    expect(timer.clearTimer).toHaveBeenCalledWith(1);
+  });
+
+  it('defaults to a real setTimeout/clearTimeout when none is injected', async () => {
+    // No fake timer supplied: this proves the production default (real
+    // `setTimeout`) is wired, not just the injectable seam around it. A huge
+    // budget means it is scheduled but never fires within the test.
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    try {
+      await makeGenerator({ generationMs: 60_000 }).generate(WINDOW);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
   });
 });
 
@@ -837,7 +968,103 @@ describe('citation-gate observability (Task 4.4)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 13. Task 4.4 — trace id threading (NFR-8, requirement 1)
+// 13. Layer 3 never writes pending items (F-5)
+// ---------------------------------------------------------------------------
+
+/**
+ * These tests are the inversion of an earlier block that asserted layer 3 DID
+ * promote "Waiting on you" claims into `pending_items`.
+ *
+ * That promotion asserted `waitingOnSelf: true` from section membership alone,
+ * bypassing `layer2/pending.ts`'s rule 1 — the explicit `waiting_on` check that
+ * exists to keep third-party obligations out of a table whose precision target
+ * is AC-4 (≥ 75%, measured at 48.0%). Layer 2 is now the only writer of that
+ * table, and these tests pin that: a claim in the section, with a resolvable
+ * delta and a valid citation — every condition the old path required — must
+ * still produce no row.
+ */
+describe('layer 3 does not write pending items', () => {
+  it('does not create a pending item even when the claim resolves to a delta', async () => {
+    appendDelta('C1:1', {
+      summary: 'Priya asked for the migration plan to be approved.',
+      kind: 'progress',
+    });
+
+    await makeGenerator({
+      tokens: [
+        '## Waiting on you\n',
+        '- Priya asked you to approve the plan [artifact:slack:thread:C1:1]\n',
+      ],
+    }).generate(WINDOW);
+
+    expect(pending.listOpen()).toHaveLength(0);
+  });
+
+  it('still persists the claim itself, in the right section', async () => {
+    appendDelta('C1:1', {
+      summary: 'Priya asked for the migration plan to be approved.',
+      kind: 'progress',
+    });
+
+    const result = await makeGenerator({
+      tokens: [
+        '## Waiting on you\n',
+        '- Priya asked you to approve the plan [artifact:slack:thread:C1:1]\n',
+      ],
+    }).generate(WINDOW);
+
+    // The claim is not lost — it is rendered and stored as a briefing claim.
+    // Only the durable obligation it used to mint is gone.
+    expect(result.claimsAccepted).toBe(1);
+    const claims = briefings.listClaims(result.briefingId);
+    expect(claims).toHaveLength(1);
+    expect(claims[0]?.section).toBe('Waiting on you');
+    expect(pending.listOpen()).toHaveLength(0);
+  });
+
+  it('does not create a pending item for a claim with no resolvable deltaId', async () => {
+    // Cited only from a retrieval chunk — no delta in this window backs it.
+    await makeGenerator({
+      tokens: [
+        '## Waiting on you\n',
+        '- Someone asked you to approve the plan [artifact:slack:thread:C1:1]\n',
+      ],
+    }).generate(WINDOW);
+
+    expect(pending.listOpen()).toHaveLength(0);
+  });
+
+  it('leaves an existing layer-2 pending item untouched', async () => {
+    const delta = appendDelta('C1:1', {
+      summary: 'Priya asked for the migration plan to be approved.',
+      kind: 'progress',
+    });
+
+    // Layer 2's own derivation — the only legitimate writer.
+    const existing = pending.insert({
+      deltaId: delta.deltaId,
+      description: 'Approve the migration plan',
+      confidence: 0.9,
+      citationArtifactId: A1,
+      createdAt: 1_000,
+    });
+
+    await makeGenerator({
+      tokens: [
+        '## Waiting on you\n',
+        '- Priya asked you to approve the plan [artifact:slack:thread:C1:1]\n',
+      ],
+    }).generate(WINDOW);
+
+    const open = pending.listOpen();
+    expect(open).toHaveLength(1);
+    expect(open[0]?.pendingId).toBe(existing.pendingId);
+    expect(open[0]?.description).toBe('Approve the migration plan');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. Task 4.4 — trace id threading (NFR-8, requirement 1)
 // ---------------------------------------------------------------------------
 
 describe('trace id', () => {

@@ -404,4 +404,40 @@ export class BriefingsRepo {
 
     return row === undefined ? undefined : toBriefing(row);
   }
+
+  /**
+   * `window_end` of the furthest-forward briefing the user actually acknowledged
+   * (FR-11), or `null` when they never have.
+   *
+   * This is "how far have you read?", and it is the start of the next
+   * user-initiated briefing (F-2). Two choices in it are deliberate:
+   *
+   * - **`window_end`, not `caught_up_at`.** The obvious reading of "start where
+   *   I left off" is the moment the user tapped the button, but that moment is
+   *   strictly *after* the window they read. A briefing covering `[T-3d, T)`
+   *   acknowledged at `T+5min` has told the user nothing about `(T, T+5min)`, so
+   *   starting the next window at the tap time silently skips that gap. The
+   *   window they were shown is what they have actually read.
+   * - **Gated on `caught_up_at IS NOT NULL`, unlike {@link getMostRecent}.** The
+   *   scheduler may generate briefings the user never opens; treating those as
+   *   read would drop their contents on the floor. Only an acknowledgement moves
+   *   this watermark. That is the difference between the two methods, and the
+   *   reason both exist.
+   *
+   * Ordered by `window_end` for the same reason `getMostRecent` is: the renderer
+   * may request any window it likes, so the most recently *acknowledged* row is
+   * not necessarily the one covering the furthest ground.
+   */
+  lastAcknowledgedWindowEnd(): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT window_end FROM briefings
+          WHERE caught_up_at IS NOT NULL
+          ORDER BY window_end DESC, caught_up_at DESC, rowid DESC
+          LIMIT 1`,
+      )
+      .get() as { window_end: number } | undefined;
+
+    return row === undefined ? null : row.window_end;
+  }
 }

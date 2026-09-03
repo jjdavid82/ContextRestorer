@@ -36,11 +36,15 @@
 import { ipcMain } from 'electron';
 import { newId, systemClock, type PendingItem } from '@cr/core';
 import type {
+  BriefingChunk,
+  BriefingDone,
   BriefingHandle,
+  BriefingMode,
   BriefingWindow,
   OkResult,
   PendingItem as PendingItemView,
 } from '../preload.cjs';
+import { deepLinkFor, resolveEvents, type ArtifactReader, type ThreadEventReader } from './claim.js';
 
 export type { PendingItemView };
 
@@ -52,6 +56,21 @@ export const REQUEST_CHANNEL = 'briefing:request';
 
 /** Invoke channel for the user manually marking a pending item done. */
 export const RESOLVE_CHANNEL = 'briefing:resolvePending';
+
+/**
+ * Invoke channel that rehydrates an already-requested briefing from what is
+ * actually persisted — see {@link getBriefingSnapshot} for why this exists.
+ */
+export const SNAPSHOT_CHANNEL = 'briefing:snapshot';
+
+/**
+ * Invoke channel serving the "how far have you read?" watermark (F-2).
+ *
+ * See {@link getResumePoint}. Registered unconditionally, and answers
+ * `{ windowStart: null }` when nothing has been acknowledged yet, so the
+ * renderer's first-run path needs no separate capability check.
+ */
+export const RESUME_POINT_CHANNEL = 'briefing:resumePoint';
 
 /**
  * Edge kind joining an artifact to the project whose stakes weight applies.
@@ -87,6 +106,56 @@ export interface StakesReader {
 }
 
 /**
+ * A `briefing_claims` row, narrowed to what {@link getBriefingSnapshot} needs
+ * to rebuild a `ClaimChunk`. `citationArtifactId` stays nullable — a
+ * template-mode connective claim has none, and is skipped on rehydration the
+ * same way it was never streamed live.
+ */
+export interface BriefingSnapshotClaim {
+  section: string;
+  text: string;
+  citationArtifactId: string | null;
+}
+
+/**
+ * The `briefings` row fields {@link getBriefingSnapshot} needs, narrowed from
+ * `Briefing`. `totalMs === null` is the "still generating" signal: that column
+ * is written exactly once, by `BriefingsRepo.recordTimings`, at the very end
+ * of `generate()` — on the LLM path and the template fallback alike — so its
+ * presence means the run actually finished streaming.
+ */
+export interface BriefingSnapshotRow {
+  mode: BriefingMode;
+  threadsStillProcessing: number;
+  firstTokenMs: number | null;
+  totalMs: number | null;
+}
+
+/**
+ * The slice of `BriefingsRepo` behind `briefing:snapshot`.
+ *
+ * A third, separately-narrow-typed view of the same repo `BriefingCompletionStore`
+ * (`ipc/feedback.ts`) and `BriefingStatsReader` (`ipc/metrics.ts`) already
+ * declare — each caller widens only as far as it reads, so a test double for
+ * one never has to grow methods the others need.
+ */
+export interface BriefingSnapshotReader {
+  getById(briefingId: string): BriefingSnapshotRow | undefined;
+  listClaims(briefingId: string): BriefingSnapshotClaim[];
+}
+
+/**
+ * The slice of `BriefingsRepo` behind `briefing:resumePoint`.
+ *
+ * Separate from {@link BriefingSnapshotReader} rather than folded into it: the
+ * resume point must still be servable by a host that wired no snapshot support,
+ * and each caller in this file widens only as far as it reads.
+ */
+export interface ResumePointReader {
+  lastAcknowledgedWindowEnd(): number | null;
+}
+
+/**
  * Everything the first-paint handlers need.
  *
  * Note what is absent: any model client, any retriever, any embedder. That
@@ -107,6 +176,26 @@ export interface BriefingHandlerDeps {
   mintBriefingId?: () => string;
   /** Time source for `resolved_at`. Defaults to `systemClock`; overridable in tests. */
   clock?: { now(): number };
+  /**
+   * Rehydration source for `briefing:snapshot`; `BriefingsRepo` in production.
+   * Optional, and registered only together with {@link artifacts} and
+   * {@link events} below — all three are needed to rebuild a persisted claim's
+   * citation, and a partially-wired host should leave the channel unregistered
+   * rather than serve snapshots with citations silently dropped.
+   */
+  briefings?: BriefingSnapshotReader;
+  /**
+   * Read-only source for `briefing:resumePoint`; `BriefingsRepo` in production.
+   * Optional and independent of {@link briefings} — a host that wires only this
+   * one still serves the resume point, and one that wires neither answers
+   * `{ windowStart: null }`, which is the same thing the renderer does on first
+   * run anyway.
+   */
+  resume?: ResumePointReader;
+  /** Artifact/person source for resolving a claim's citation; `GraphRepo` in production. */
+  artifacts?: ArtifactReader;
+  /** Thread event source for the same resolution; `EventsRepo` in production. */
+  events?: ThreadEventReader;
 }
 
 /**
@@ -256,6 +345,154 @@ export function resolvePendingItem(arg: unknown, deps: BriefingHandlerDeps): OkR
 }
 
 /**
+ * Re-validate the renderer-supplied briefing id for `briefing:snapshot`. Same
+ * trust-boundary reasoning as every other handler in this file.
+ */
+export function parseSnapshotIdArg(arg: unknown): string | null {
+  const briefingId: unknown = (arg as { briefingId?: unknown } | null)?.briefingId;
+  if (typeof briefingId !== 'string' || briefingId === '') return null;
+  return briefingId;
+}
+
+/** `briefing:snapshot` result: what could be rehydrated for one briefing id. */
+export interface BriefingSnapshot {
+  found: boolean;
+  claims: BriefingChunk[];
+  /** `null` while the briefing is still generating — see {@link BriefingSnapshotRow}. */
+  done: BriefingDone | null;
+}
+
+/**
+ * Rebuild the renderer-facing `Citation` for one persisted claim's artifact
+ * id — the same resolution `main.ts`'s live streaming path (`citationFor`)
+ * performs for a freshly accepted claim, duplicated here (rather than shared)
+ * because that function is keyed to the full `GraphRepo`/`EventsRepo` types
+ * and this module only ever needs the narrow `ArtifactReader`/`ThreadEventReader`
+ * slice, same as `claim.ts`'s own drill-down handler.
+ *
+ * `undefined` when the artifact cannot be resolved: better to omit the claim
+ * from the snapshot than to render a citation that leads nowhere.
+ */
+export function citationForArtifact(
+  artifactId: string,
+  artifacts: ArtifactReader,
+  events: ThreadEventReader,
+): BriefingChunk['citation'] | undefined {
+  const artifact = artifacts.getArtifact(artifactId);
+  if (artifact === undefined) return undefined;
+
+  const [latest] = resolveEvents(artifactId, { artifacts, events, maxEvents: 1 });
+  const externalUrl =
+    latest === undefined ? undefined : deepLinkFor(latest.source, latest.sourceEventId);
+
+  return {
+    eventId: latest?.eventId ?? '',
+    artifactId,
+    source: latest?.source ?? artifact.source,
+    // `exactOptionalPropertyTypes`: an absent link is an absent KEY.
+    ...(externalUrl !== undefined ? { externalUrl } : {}),
+  };
+}
+
+/**
+ * The whole of `briefing:snapshot`: rehydrate an already-requested briefing
+ * from what is actually persisted, for a renderer that lost its live stream.
+ *
+ * Exists because `app/page.tsx`'s nav is plain `<a href>` markup, not a client
+ * router (deliberately — see `layout.tsx`): switching to Settings and back is
+ * a real page navigation, which drops every `briefing:chunk`/`briefing:done`
+ * subscription and resets `BriefingView`'s state. Without this, a briefing
+ * that finished generating while the user was on another page would show
+ * nothing but its `pending_items` (which reload independently) until the user
+ * asked for an entirely new one — see `BriefingView.tsx`'s `load()`.
+ *
+ * `found: false` covers an unknown id, a not-yet-created row, and a read
+ * failure alike — the renderer's response is the same in all three cases
+ * (fall back to whatever the live stream sends), so there is nothing for a
+ * finer-grained reason to drive.
+ */
+export function getBriefingSnapshot(arg: unknown, deps: BriefingHandlerDeps): BriefingSnapshot {
+  const empty: BriefingSnapshot = { found: false, claims: [], done: null };
+
+  const briefingId = parseSnapshotIdArg(arg);
+  if (briefingId === null) return empty;
+  if (deps.briefings === undefined || deps.artifacts === undefined || deps.events === undefined) {
+    return empty;
+  }
+
+  try {
+    const row = deps.briefings.getById(briefingId);
+    if (row === undefined) return empty;
+
+    const claims: BriefingChunk[] = [];
+    for (const claim of deps.briefings.listClaims(briefingId)) {
+      if (claim.citationArtifactId === null) continue;
+      const citation = citationForArtifact(claim.citationArtifactId, deps.artifacts, deps.events);
+      if (citation === undefined) continue;
+      claims.push({ briefingId, section: claim.section, claim: claim.text, citation });
+    }
+
+    const done: BriefingDone | null =
+      row.totalMs === null
+        ? null
+        : {
+            briefingId,
+            mode: row.mode,
+            threadsStillProcessing: row.threadsStillProcessing,
+            timings: { firstTokenMs: row.firstTokenMs ?? 0, totalMs: row.totalMs },
+          };
+
+    return { found: true, claims, done };
+  } catch (error) {
+    console.error('[briefing] snapshot read failed', briefingId, error);
+    return empty;
+  }
+}
+
+/** `briefing:resumePoint` result: where the next briefing should start. */
+export interface ResumePoint {
+  /**
+   * `window_end` of the furthest-forward acknowledged briefing, or `null` when
+   * the user has never tapped "I'm caught up".
+   *
+   * `null` is not an error — it is the first-run state, and the renderer answers
+   * it with a default lookback.
+   */
+  windowStart: number | null;
+}
+
+/**
+ * The whole of `briefing:resumePoint` — the F-2 fix.
+ *
+ * "Brief me on what I missed" previously took its start from a
+ * `datetime-local` value the user had to set on the Settings page, defaulting
+ * to 30 days ago and never moving. Pressing the button therefore re-briefed the
+ * same thirty days every time, and "I'm caught up" — despite
+ * `CaughtUpButton`'s own doc comment claiming it "marks the briefing's deltas
+ * as seen so the next briefing starts from here" — only ever stamped
+ * `caught_up_at` for the NFR-10 metric. This channel is what makes that comment
+ * true.
+ *
+ * Never throws: a storage fault degrades to `{ windowStart: null }`, i.e. the
+ * renderer's default lookback, rather than a rejected invoke that would leave
+ * the primary button unusable.
+ */
+export function getResumePoint(deps: BriefingHandlerDeps): ResumePoint {
+  if (deps.resume === undefined) return { windowStart: null };
+
+  try {
+    const windowStart = deps.resume.lastAcknowledgedWindowEnd();
+    // A non-finite stored value would produce an unusable window downstream;
+    // treating it as "never acknowledged" is the safe degradation.
+    if (windowStart === null || !Number.isFinite(windowStart)) return { windowStart: null };
+    return { windowStart };
+  } catch (error) {
+    console.error('[briefing] resume point read failed', error);
+    return { windowStart: null };
+  }
+}
+
+/**
  * Mint a briefing id, return it, and schedule generation — in that order.
  *
  * Returns `{ briefingId: '' }` for an unusable window and starts nothing. An
@@ -331,4 +568,12 @@ export function registerBriefingHandlers(deps: BriefingHandlerDeps): void {
   ipcMain.handle(RESOLVE_CHANNEL, (_event, arg: unknown): OkResult =>
     resolvePendingItem(arg, deps),
   );
+
+  ipcMain.handle(SNAPSHOT_CHANNEL, (_event, arg: unknown): BriefingSnapshot =>
+    getBriefingSnapshot(arg, deps),
+  );
+
+  // Takes no argument: "how far have you read?" is a property of the user's
+  // history, not of any one briefing.
+  ipcMain.handle(RESUME_POINT_CHANNEL, (): ResumePoint => getResumePoint(deps));
 }

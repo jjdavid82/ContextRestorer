@@ -128,6 +128,23 @@ export interface BriefingDone {
   };
 }
 
+/**
+ * `briefing:snapshot` — what could be rehydrated for an already-requested
+ * briefing, from what is actually persisted rather than from a live stream.
+ *
+ * Exists because navigating to Settings and back is a real page load (this
+ * app's nav is plain `<a href>` markup, not a client router), which drops
+ * every `onChunk`/`onDone` subscription and every piece of component state.
+ * `found: false` covers an unknown id, a not-yet-created row, and a read
+ * failure alike — `BriefingView` falls back to the live stream in all three.
+ */
+export interface BriefingSnapshot {
+  found: boolean;
+  claims: ClaimChunk[];
+  /** `null` while the briefing is still generating. */
+  done: BriefingDone | null;
+}
+
 /** One raw source event behind a claim, as returned by `claim:drilldown`. */
 export interface DrilldownEvent {
   eventId: string;
@@ -152,6 +169,17 @@ export interface FeedbackInput {
   claimId?: string;
   verdict: 'relevant' | 'irrelevant' | 'missed' | 'wrong';
   note?: string;
+}
+
+/**
+ * `briefing:resumePoint` result (F-2). Mirrors `ResumePoint` in the preload.
+ *
+ * `windowStart` is the `window_end` of the furthest-forward briefing the user
+ * acknowledged — not the moment they tapped, which is later than the window they
+ * actually read. `null` is the first-run state, answered with a default lookback.
+ */
+export interface ResumePoint {
+  windowStart: number | null;
 }
 
 /**
@@ -356,10 +384,21 @@ export interface ContextRestorerBridge {
     /** Idempotent (FR-11): re-tapping returns the FIRST `caughtUpAt`, not now. */
     caughtUp(id: string): Promise<CaughtUpResult>;
     /**
+     * Where the next briefing should start (F-2): `window_end` of the
+     * furthest-forward acknowledged briefing, or `null` on first run.
+     */
+    resumePoint(): Promise<ResumePoint>;
+    /**
      * NFR-10 time-to-re-entry for the given briefings (FR-11's metrics view).
      * Unknown ids are omitted, so the array may be shorter than the request.
      */
     metrics(briefingIds: string[]): Promise<BriefingMetric[]>;
+    /**
+     * Rehydrate an already-requested briefing from what is persisted, for a
+     * renderer that lost its live stream (e.g. a Settings round-trip). See
+     * {@link BriefingSnapshot}.
+     */
+    snapshot(briefingId: string): Promise<BriefingSnapshot>;
     /** Returns an unsubscribe fn: without it, a React effect re-subscribing on
      * every re-render stacks listeners and replays claims into the DOM twice. */
     onChunk(cb: (c: ClaimChunk) => void): Unsubscribe;

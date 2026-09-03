@@ -829,7 +829,7 @@ export function renderBenchTable(result: BenchResult): string {
       `the vector store, so retrieval can return at most ~${corpus.extractedEvents} chunks ` +
       `against a \`topK\` of ${result.environment.retrievalTopK}. The Layer 3 prompt is ` +
       'therefore SMALLER than a briefing over a fully-extracted 5-day corpus would be, and ' +
-      'prompt evaluation is the dominant term in time-to-first-token on a local 14B model. A ' +
+      'prompt evaluation is the dominant term in time-to-first-token on a local model. A ' +
       'production window with 40 retrieved chunks will be slower than what is measured here — ' +
       'this benchmark is not entitled to claim otherwise.',
   );

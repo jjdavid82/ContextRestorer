@@ -147,6 +147,24 @@ export interface BriefingDone {
   };
 }
 
+/**
+ * `briefing:snapshot` result — what could be rehydrated for an already-
+ * requested briefing, from what is actually persisted rather than from a live
+ * stream.
+ *
+ * Exists because navigating to Settings and back is a real page load (see
+ * `layout.tsx`'s nav), which drops every `briefing:chunk`/`briefing:done`
+ * subscription. `found: false` covers an unknown id, a not-yet-created row,
+ * and a read failure alike; the renderer's response — fall back to the live
+ * stream — is the same in all three.
+ */
+export interface BriefingSnapshot {
+  found: boolean;
+  claims: BriefingChunk[];
+  /** `null` while the briefing is still generating. */
+  done: BriefingDone | null;
+}
+
 export interface DrilldownEvent {
   eventId: string;
   source: Source;
@@ -186,6 +204,19 @@ export interface CaughtUpResult extends OkResult {
   caughtUpAt?: number;
   /** NFR-10: `caughtUpAt - generatedAt`, in milliseconds. */
   timeToReEntryMs?: number;
+}
+
+/**
+ * `briefing:resumePoint` result — where "Brief me on what I missed" starts (F-2).
+ *
+ * `windowStart` is the `window_end` of the furthest-forward briefing the user
+ * acknowledged, NOT the moment they tapped the button: the tap is later than the
+ * window they read, and starting there would silently skip the gap between the
+ * two. `null` means they have never acknowledged one, which is the first-run
+ * state and not an error — the renderer answers it with a default lookback.
+ */
+export interface ResumePoint {
+  windowStart: number | null;
 }
 
 /**
@@ -516,11 +547,22 @@ export interface ContextRestorerBridge {
     resolvePending(pendingId: string): Promise<OkResult>;
     caughtUp(briefingId: string): Promise<CaughtUpResult>;
     /**
+     * Where the next briefing should start: `window_end` of the furthest-forward
+     * briefing the user acknowledged, or `null` if they never have (F-2).
+     */
+    resumePoint(): Promise<ResumePoint>;
+    /**
      * NFR-10 time-to-re-entry for the given briefings (FR-11's metrics view).
      * Unknown ids are omitted from the result, so the array may be shorter than
      * the request.
      */
     metrics(briefingIds: string[]): Promise<BriefingMetric[]>;
+    /**
+     * Rehydrate an already-requested briefing from what is persisted, for a
+     * renderer that lost its live stream (e.g. a Settings round-trip). See
+     * {@link BriefingSnapshot}.
+     */
+    snapshot(briefingId: string): Promise<BriefingSnapshot>;
     onChunk(cb: (chunk: BriefingChunk) => void): Unsubscribe;
     onDone(cb: (done: BriefingDone) => void): Unsubscribe;
   };
@@ -634,6 +676,9 @@ const bridge: ContextRestorerBridge = {
       assertNonEmptyString(briefingId, 'briefingId');
       return ipcRenderer.invoke('briefing:caughtUp', { briefingId }) as Promise<CaughtUpResult>;
     },
+    // No argument to validate: the resume point is a property of the user's
+    // history, not of any one briefing.
+    resumePoint: () => ipcRenderer.invoke('briefing:resumePoint') as Promise<ResumePoint>,
     metrics: (briefingIds) => {
       assertBriefingIds(briefingIds);
       // Rebuilt with `map(String)` rather than forwarded: the renderer's array
@@ -642,6 +687,10 @@ const bridge: ContextRestorerBridge = {
       return ipcRenderer.invoke('briefing:metrics', {
         briefingIds: briefingIds.map(String),
       }) as Promise<BriefingMetric[]>;
+    },
+    snapshot: (briefingId) => {
+      assertNonEmptyString(briefingId, 'briefingId');
+      return ipcRenderer.invoke('briefing:snapshot', { briefingId }) as Promise<BriefingSnapshot>;
     },
     onChunk: (cb) => subscribe<BriefingChunk>('briefing:chunk', cb),
     onDone: (cb) => subscribe<BriefingDone>('briefing:done', cb),

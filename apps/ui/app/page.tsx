@@ -6,10 +6,61 @@ import { BriefingView } from '../components/BriefingView';
 import { PipelineStatusPanel } from '../components/PipelineStatus';
 import { SourceHealthPanel } from '../components/SourceHealth';
 import { getBridge } from '../lib/bridge';
+import {
+  parseWindowStart,
+  readSavedBriefingWindowStart,
+  resolveBriefingWindow,
+} from '../lib/briefingWindow';
 import type { OnboardingStatus } from '../types/bridge';
 
-/** How far back an on-demand briefing looks. */
-const BRIEFING_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * `sessionStorage` key this page remembers its last requested briefing under.
+ *
+ * `layout.tsx`'s nav is plain `<a href>` markup (deliberately, not a client
+ * router), so switching to Settings and back is a real page load: every piece
+ * of this component's React state — including `briefingId` — is destroyed and
+ * rebuilt from scratch. Without this, the briefing on screen would vanish and
+ * the only way back would be re-clicking "Brief me on what I missed", which
+ * mints a brand-new id and reruns the whole Layer 3 pipeline for content that
+ * was already generated a moment ago.
+ *
+ * `sessionStorage` (not `localStorage`) is deliberate: it survives navigation
+ * within the same window session but clears when the app actually restarts,
+ * so a stale briefing id from a previous run is never resurrected.
+ */
+const HOME_SESSION_KEY = 'cr:home-briefing';
+
+interface StoredHomeState {
+  briefingId: string;
+}
+
+/** The last requested briefing's id, or `null` if unset/unusable/unavailable. */
+function readStoredHomeState(): StoredHomeState | null {
+  // Same guard `lib/bridge.ts`'s `hasBridge()` uses: this file is also
+  // prerendered during the static export build, where there is no `window`
+  // (and therefore no `sessionStorage`) at all.
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = sessionStorage.getItem(HOME_SESSION_KEY);
+    if (raw === null) return null;
+
+    const parsed = JSON.parse(raw) as Partial<StoredHomeState> | null;
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      typeof parsed.briefingId !== 'string' ||
+      parsed.briefingId === ''
+    ) {
+      return null;
+    }
+    return { briefingId: parsed.briefingId };
+  } catch {
+    // Storage disabled, or a malformed/foreign value under this key — fall
+    // back to the normal fresh-mount defaults rather than throwing.
+    return null;
+  }
+}
 
 /**
  * Placeholder home page.
@@ -27,7 +78,23 @@ export default function HomePage(): ReactNode {
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [briefingError, setBriefingError] = useState<string | null>(null);
-  const [briefingId, setBriefingId] = useState<string | null>(null);
+  // Restored from a PRIOR mount's `sessionStorage` write when this is a
+  // remount after a Settings round-trip, rather than the app's first paint.
+  const [briefingId, setBriefingId] = useState<string | null>(
+    () => readStoredHomeState()?.briefingId ?? null,
+  );
+
+  // Persists the id above so a Settings round-trip can restore it.
+  useEffect(() => {
+    if (briefingId === null) return;
+    try {
+      sessionStorage.setItem(HOME_SESSION_KEY, JSON.stringify({ briefingId }));
+    } catch {
+      // Best-effort: storage can be disabled or full. Worst case, the next
+      // Settings round-trip regenerates instead of rehydrating — no worse
+      // than before this feature existed.
+    }
+  }, [briefingId]);
 
   useEffect(() => {
     // Guards against setting state after the component unmounts mid-request.
@@ -64,12 +131,49 @@ export default function HomePage(): ReactNode {
   // gate the briefing action on beyond having loaded onboarding status at all.
   const readyForBriefing = status !== null;
 
+  /**
+   * Request a briefing over the window the user actually wants (F-2).
+   *
+   * The window is resolved at click time, from two sources in precedence order:
+   * an explicit Settings override, then `briefing:resumePoint` — the `window_end`
+   * of the last briefing they acknowledged. Neither present means first run, and
+   * `resolveBriefingWindow` falls back to a 24h lookback.
+   *
+   * This is what makes `CaughtUpButton`'s long-standing promise ("the next
+   * briefing starts from here") true. Before it, the start came from a
+   * `datetime-local` value defaulting to 30 days ago that only ever changed when
+   * the user edited it by hand, so the button re-briefed the same month on every
+   * press and "I'm caught up" changed nothing but a metric.
+   */
   const requestBriefing = (): void => {
     setBriefingError(null);
-    const windowEnd = Date.now();
+
+    // Read at click time, not held in state: both inputs can change while this
+    // page is mounted — the override on the Settings page, the resume point via
+    // the "I'm caught up" button in the briefing below.
+    const saved = readSavedBriefingWindowStart();
+    const override = saved === null ? undefined : parseWindowStart(saved);
+    if (override !== undefined && 'error' in override) {
+      setBriefingError(override.error);
+      return;
+    }
+
     try {
-      getBridge()
-        .briefing.request({ windowStart: windowEnd - BRIEFING_WINDOW_MS, windowEnd })
+      const bridge = getBridge();
+      bridge.briefing
+        .resumePoint()
+        // A failed lookup is not a failed briefing: fall through to `null`, which
+        // `resolveBriefingWindow` answers with the first-run lookback. The button
+        // must not become unusable because one read went wrong.
+        .catch(() => ({ windowStart: null }))
+        .then((resume) => {
+          const window = resolveBriefingWindow({
+            now: Date.now(),
+            resumeFrom: resume.windowStart,
+            ...(override === undefined ? {} : { override: override.window.windowStart }),
+          });
+          return bridge.briefing.request(window);
+        })
         .then((handle) => setBriefingId(handle.briefingId))
         .catch((cause: unknown) =>
           setBriefingError(cause instanceof Error ? cause.message : String(cause)),

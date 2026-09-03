@@ -14,7 +14,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from 'better-sqlite3';
-import { migrate, openDb, PendingItemsRepo, GraphRepo } from '@cr/store';
+import { migrate, openDb, PendingItemsRepo, GraphRepo, EventsRepo, BriefingsRepo } from '@cr/store';
+import type { Artifact, Event, SourceId } from '@cr/core';
 
 const handle = vi.fn();
 vi.mock('electron', () => ({ ipcMain: { handle } }));
@@ -24,7 +25,12 @@ const {
   PENDING_CHANNEL,
   REQUEST_CHANNEL,
   RESOLVE_CHANNEL,
+  SNAPSHOT_CHANNEL,
+  RESUME_POINT_CHANNEL,
   beginBriefing,
+  citationForArtifact,
+  getBriefingSnapshot,
+  getResumePoint,
   listPending,
   parseBriefingWindow,
   rankPendingItems,
@@ -42,6 +48,8 @@ type Deps = Parameters<BriefingModule['listPending']>[0];
 let db: Database;
 let pending: PendingItemsRepo;
 let graph: GraphRepo;
+let events: EventsRepo;
+let briefings: BriefingsRepo;
 
 /**
  * A stub with the shape of `@cr/ai`'s Ollama client.
@@ -114,6 +122,70 @@ function seedPending(opts: {
   return artifact;
 }
 
+/**
+ * A thread artifact exactly as `@cr/ingest`'s `artifactFor()` builds one:
+ * `externalRef` IS the thread key — same fixture `ipc.claim.test.ts` uses,
+ * since `citationForArtifact` walks the identical join.
+ */
+function seedThreadArtifact(opts: { artifactId: string; threadKey: string; source?: SourceId }): Artifact {
+  const artifact: Artifact = {
+    artifactId: opts.artifactId,
+    source: opts.source ?? 'slack',
+    kind: 'thread',
+    externalRef: opts.threadKey,
+    title: null,
+    state: null,
+    ownerId: null,
+    firstSeenAt: 1_000,
+    lastSeenAt: 1_000,
+  };
+  graph.upsertArtifact(artifact);
+  return artifact;
+}
+
+/** One already-redacted event on `threadKey`. */
+function seedEvent(opts: {
+  eventId: string;
+  threadKey: string;
+  occurredAt: number;
+  source?: SourceId;
+  sourceEventId?: string;
+}): Event {
+  const event: Event = {
+    eventId: opts.eventId,
+    source: opts.source ?? 'slack',
+    sourceEventId: opts.sourceEventId ?? `C123:${opts.occurredAt / 1000}`,
+    threadKey: opts.threadKey,
+    actorId: 'U-alice',
+    occurredAt: opts.occurredAt,
+    ingestedAt: opts.occurredAt + 10,
+    payload: { text: `body of ${opts.eventId}`, isNoiseCandidate: false },
+    redactionCount: 0,
+  };
+  events.insertIfAbsent(event);
+  return event;
+}
+
+/** A `briefings` row, defaulting to a finished LLM run. */
+function seedBriefing(
+  briefingId: string,
+  over: { mode?: 'llm' | 'template'; totalMs?: number | null; threadsStillProcessing?: number } = {},
+): void {
+  briefings.create({
+    briefingId,
+    windowStart: 1_000,
+    windowEnd: 2_000,
+    generatedAt: 3_000,
+    mode: over.mode ?? 'llm',
+    narrativePath: `briefings/${briefingId}.md`,
+    deltaIds: [],
+    threadsStillProcessing: over.threadsStillProcessing ?? 0,
+  });
+  if (over.totalMs !== null) {
+    briefings.recordTimings(briefingId, 900, over.totalMs ?? 4_200);
+  }
+}
+
 /** Declare a project at `stakesWeight` and attach `artifactIds` to it. */
 function seedProject(name: string, stakesWeight: number, artifactIds: string[]): void {
   const project = graph.declareProject({ name, origin: 'declared', stakesWeight });
@@ -137,6 +209,8 @@ beforeEach(() => {
   migrate(db);
   pending = new PendingItemsRepo(db);
   graph = new GraphRepo(db);
+  events = new EventsRepo(db);
+  briefings = new BriefingsRepo(db);
 });
 
 afterEach(() => {
@@ -551,5 +625,303 @@ describe('briefing:resolvePending', () => {
 
     expect(callback({}, { pendingId: 'p1' })).toEqual({ ok: true });
     expect(pending.getById('p1')?.status).toBe('resolved');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* briefing:snapshot — rehydration after a Settings round-trip                */
+/* -------------------------------------------------------------------------- */
+
+describe('briefing:snapshot', () => {
+  const BRIEFING_ID = 'brief-snap-1';
+
+  it('rebuilds every claim citation and reports done once generation finished', () => {
+    const artifact = seedThreadArtifact({ artifactId: 'art-1', threadKey: 'C1:1' });
+    seedEvent({ eventId: 'evt-1', threadKey: 'C1:1', occurredAt: 1_500 });
+    seedBriefing(BRIEFING_ID);
+    briefings.addClaim({
+      briefingId: BRIEFING_ID,
+      ordinal: 0,
+      section: 'What moved',
+      text: 'Alpha shipped to staging.',
+      citationArtifactId: artifact.artifactId,
+    });
+
+    const snapshot = getBriefingSnapshot(
+      { briefingId: BRIEFING_ID },
+      makeDeps({ briefings, artifacts: graph, events }),
+    );
+
+    expect(snapshot.found).toBe(true);
+    expect(snapshot.claims).toEqual([
+      {
+        briefingId: BRIEFING_ID,
+        section: 'What moved',
+        claim: 'Alpha shipped to staging.',
+        citation: {
+          eventId: 'evt-1',
+          artifactId: 'art-1',
+          source: 'slack',
+          externalUrl: expect.stringContaining('slack.com/app_redirect'),
+        },
+      },
+    ]);
+    expect(snapshot.done).toEqual({
+      briefingId: BRIEFING_ID,
+      mode: 'llm',
+      threadsStillProcessing: 0,
+      timings: { firstTokenMs: 900, totalMs: 4_200 },
+    });
+  });
+
+  it('preserves narrative order (ordinal) across multiple claims', () => {
+    const a = seedThreadArtifact({ artifactId: 'art-a', threadKey: 'C1:1' });
+    const b = seedThreadArtifact({ artifactId: 'art-b', threadKey: 'C2:1' });
+    seedEvent({ eventId: 'evt-a', threadKey: 'C1:1', occurredAt: 1_500 });
+    seedEvent({ eventId: 'evt-b', threadKey: 'C2:1', occurredAt: 1_600 });
+    seedBriefing(BRIEFING_ID);
+    // Written out of narrative order; `listClaims` is what re-imposes it.
+    briefings.addClaim({
+      briefingId: BRIEFING_ID,
+      ordinal: 1,
+      section: 'What moved',
+      text: 'second',
+      citationArtifactId: b.artifactId,
+    });
+    briefings.addClaim({
+      briefingId: BRIEFING_ID,
+      ordinal: 0,
+      section: 'Waiting on you',
+      text: 'first',
+      citationArtifactId: a.artifactId,
+    });
+
+    const snapshot = getBriefingSnapshot(
+      { briefingId: BRIEFING_ID },
+      makeDeps({ briefings, artifacts: graph, events }),
+    );
+
+    expect(snapshot.claims.map((c) => c.claim)).toEqual(['first', 'second']);
+  });
+
+  it('reports done: null while the briefing is still generating', () => {
+    seedBriefing(BRIEFING_ID, { totalMs: null });
+
+    const snapshot = getBriefingSnapshot(
+      { briefingId: BRIEFING_ID },
+      makeDeps({ briefings, artifacts: graph, events }),
+    );
+
+    expect(snapshot.found).toBe(true);
+    expect(snapshot.claims).toEqual([]);
+    expect(snapshot.done).toBeNull();
+  });
+
+  it('returns found: false for an id with no briefings row', () => {
+    expect(
+      getBriefingSnapshot({ briefingId: 'never-existed' }, makeDeps({ briefings, artifacts: graph, events })),
+    ).toEqual({ found: false, claims: [], done: null });
+  });
+
+  it('rejects a missing or empty briefingId without touching the store', () => {
+    const deps = makeDeps({ briefings, artifacts: graph, events });
+    const empty = { found: false, claims: [], done: null };
+
+    expect(getBriefingSnapshot(null, deps)).toEqual(empty);
+    expect(getBriefingSnapshot({}, deps)).toEqual(empty);
+    expect(getBriefingSnapshot({ briefingId: '' }, deps)).toEqual(empty);
+  });
+
+  it('returns found: false unless briefings, artifacts AND events are all wired', () => {
+    seedBriefing(BRIEFING_ID);
+    const empty = { found: false, claims: [], done: null };
+
+    expect(getBriefingSnapshot({ briefingId: BRIEFING_ID }, makeDeps())).toEqual(empty);
+    expect(getBriefingSnapshot({ briefingId: BRIEFING_ID }, makeDeps({ briefings }))).toEqual(empty);
+    expect(
+      getBriefingSnapshot({ briefingId: BRIEFING_ID }, makeDeps({ briefings, artifacts: graph })),
+    ).toEqual(empty);
+  });
+
+  it('skips a claim whose artifact cannot be resolved, and one with no citation at all', () => {
+    // `citation_artifact_id` is NOT NULL in the schema, so a hand-rolled reader
+    // is what exercises the domain type's nullable case (template connective
+    // text) and an artifact retention already purged.
+    const fakeBriefings = {
+      getById: () => ({ mode: 'llm' as const, threadsStillProcessing: 0, firstTokenMs: 900, totalMs: 4_200 }),
+      listClaims: () => [
+        { section: 'What moved', text: 'ghost citation', citationArtifactId: 'art-purged' },
+        { section: 'Quietly resolved', text: 'connective text', citationArtifactId: null },
+      ],
+    };
+
+    const snapshot = getBriefingSnapshot(
+      { briefingId: BRIEFING_ID },
+      makeDeps({ briefings: fakeBriefings, artifacts: graph, events }),
+    );
+
+    expect(snapshot.found).toBe(true);
+    expect(snapshot.claims).toEqual([]);
+  });
+
+  it('degrades a storage fault to found: false rather than a rejected invoke', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const broken = {
+      getById: () => {
+        throw new Error('database is locked');
+      },
+      listClaims: () => [],
+    };
+
+    expect(
+      getBriefingSnapshot({ briefingId: BRIEFING_ID }, makeDeps({ briefings: broken, artifacts: graph, events })),
+    ).toEqual({ found: false, claims: [], done: null });
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('registers the snapshot channel', async () => {
+    const artifact = seedThreadArtifact({ artifactId: 'art-1', threadKey: 'C1:1' });
+    seedEvent({ eventId: 'evt-1', threadKey: 'C1:1', occurredAt: 1_500 });
+    seedBriefing(BRIEFING_ID);
+    briefings.addClaim({
+      briefingId: BRIEFING_ID,
+      ordinal: 0,
+      section: 'What moved',
+      text: 'Alpha shipped.',
+      citationArtifactId: artifact.artifactId,
+    });
+
+    registerBriefingHandlers(makeDeps({ briefings, artifacts: graph, events }));
+
+    const callback = handle.mock.calls.find(([c]) => c === SNAPSHOT_CHANNEL)?.[1] as (
+      e: unknown,
+      arg: unknown,
+    ) => unknown;
+    expect(callback).toBeDefined();
+
+    const result = (await callback({}, { briefingId: BRIEFING_ID })) as { found: boolean };
+    expect(result.found).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* citationForArtifact — shared resolution behind briefing:snapshot           */
+/* -------------------------------------------------------------------------- */
+
+describe('citationForArtifact', () => {
+  it('resolves the most recent event on the artifact\'s thread, with a deep link', () => {
+    seedThreadArtifact({ artifactId: 'art-1', threadKey: 'C1:1' });
+    seedEvent({ eventId: 'evt-old', threadKey: 'C1:1', occurredAt: 1_000 });
+    seedEvent({ eventId: 'evt-new', threadKey: 'C1:1', occurredAt: 2_000 });
+
+    const citation = citationForArtifact('art-1', graph, events);
+
+    expect(citation?.eventId).toBe('evt-new');
+    expect(citation?.artifactId).toBe('art-1');
+    expect(citation?.source).toBe('slack');
+    expect(citation?.externalUrl).toContain('slack.com/app_redirect');
+  });
+
+  it('returns undefined for an artifact that does not exist', () => {
+    expect(citationForArtifact('art-nope', graph, events)).toBeUndefined();
+  });
+
+  it('falls back to the artifact\'s own source with no eventId when the thread has no events', () => {
+    seedThreadArtifact({ artifactId: 'art-empty', threadKey: 'C-empty:1' });
+
+    const citation = citationForArtifact('art-empty', graph, events);
+
+    expect(citation).toEqual({ eventId: '', artifactId: 'art-empty', source: 'slack' });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* F-2 — `briefing:resumePoint`                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The window resolution behind "Brief me on what I missed".
+ *
+ * Run against the REAL `BriefingsRepo`, same as the snapshot block above: the
+ * whole value of this channel is the `caught_up_at IS NOT NULL` gate in the
+ * query, and a stubbed reader would test the handler's plumbing while asserting
+ * nothing about the thing that actually decides the answer.
+ */
+describe('briefing:resumePoint (F-2)', () => {
+  const createBriefing = (windowEnd: number): string => {
+    const created = briefings.create({
+      windowStart: windowEnd - 86_400_000,
+      windowEnd,
+      generatedAt: windowEnd,
+      mode: 'llm',
+      narrativePath: `/briefings/${windowEnd}.md`,
+      deltaIds: [],
+      threadsStillProcessing: 0,
+    });
+    return created.briefingId;
+  };
+
+  it('reports null when nothing has been acknowledged', () => {
+    createBriefing(2_000_000);
+
+    expect(getResumePoint({ pending, briefings, startGeneration: () => {} } as Deps)).toEqual({
+      windowStart: null,
+    });
+  });
+
+  it('reports the acknowledged window end', () => {
+    const id = createBriefing(2_000_000);
+    briefings.markCaughtUp(id, 2_000_500);
+
+    expect(
+      getResumePoint({ pending, resume: briefings, startGeneration: () => {} } as Deps),
+    ).toEqual({ windowStart: 2_000_000 });
+  });
+
+  it('degrades to null when no resume reader is wired', () => {
+    const id = createBriefing(2_000_000);
+    briefings.markCaughtUp(id, 2_000_500);
+
+    // A host that wired the briefing channels but not this dependency: the
+    // channel is still registered and answers the first-run state rather than
+    // rejecting, so the primary button stays usable.
+    expect(getResumePoint({ pending, startGeneration: () => {} } as Deps)).toEqual({
+      windowStart: null,
+    });
+  });
+
+  it('degrades to null when the read throws, instead of rejecting the invoke', () => {
+    const exploding = {
+      lastAcknowledgedWindowEnd: (): number | null => {
+        throw new Error('database is locked');
+      },
+    };
+
+    expect(
+      getResumePoint({ pending, resume: exploding, startGeneration: () => {} } as Deps),
+    ).toEqual({ windowStart: null });
+  });
+
+  it('treats a non-finite stored value as never-acknowledged', () => {
+    const nonsense = { lastAcknowledgedWindowEnd: (): number | null => Number.NaN };
+
+    expect(
+      getResumePoint({ pending, resume: nonsense, startGeneration: () => {} } as Deps),
+    ).toEqual({ windowStart: null });
+  });
+
+  it('registers the channel and takes no argument', () => {
+    registerBriefingHandlers({ pending, resume: briefings, startGeneration: () => {} } as Deps);
+
+    const entry = handle.mock.calls.find(([channel]) => channel === RESUME_POINT_CHANNEL);
+    expect(entry).toBeDefined();
+
+    const id = createBriefing(2_000_000);
+    briefings.markCaughtUp(id, 2_000_500);
+
+    // Invoked the way `ipcMain` will invoke it: an event, and nothing else.
+    const listener = entry?.[1] as (event: unknown) => unknown;
+    expect(listener({})).toEqual({ windowStart: 2_000_000 });
   });
 });

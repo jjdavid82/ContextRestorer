@@ -436,6 +436,21 @@ export interface BriefingGeneratorOptions {
    * `process.cwd()`; tests should pass an absolute temp dir.
    */
   logsDir?: string;
+  /**
+   * §7.8 budget enforcement, independent of the `Clock`. Defaults to
+   * `setTimeout`/`clearTimeout`; tests inject a fake pair so the "abort before
+   * any token arrives" path is exercised without a real wait.
+   *
+   * Deliberately NOT driven by {@link Clock} the way the rest of this class is:
+   * `Clock.now()` only advances when something calls it, and the whole point
+   * of this timer is to fire even while nothing is happening — while the model
+   * is still evaluating the prompt and the stream has yielded nothing at all
+   * for {@link BriefingGenerator.generate} to check a clock against. See the
+   * generation stage's own comment for what this closes.
+   */
+  scheduleTimer?: (fn: () => void, ms: number) => unknown;
+  /** Defaults to `clearTimeout`. Must accept whatever `scheduleTimer` returned. */
+  clearTimer?: (handle: unknown) => void;
 }
 
 /**
@@ -522,6 +537,8 @@ interface GateTally {
 export class BriefingGenerator {
   private readonly clock: Clock;
   private readonly logsDir: string;
+  private readonly scheduleTimer: (fn: () => void, ms: number) => unknown;
+  private readonly clearTimer: (handle: unknown) => void;
 
   /**
    * @param ollama - Local inference client; streamed, not JSON-constrained.
@@ -559,6 +576,8 @@ export class BriefingGenerator {
   ) {
     this.clock = clock;
     this.logsDir = options.logsDir ?? 'logs';
+    this.scheduleTimer = options.scheduleTimer ?? ((fn, ms) => setTimeout(fn, ms));
+    this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as never));
   }
 
   /**
@@ -701,7 +720,34 @@ export class BriefingGenerator {
     const controller = new AbortController();
     let partial = false;
     let sawToken = false;
+    // Set only by the real timer below (or by the per-token check that mirrors
+    // it), never inferred from the abort itself: `controller.abort()` can also
+    // fire for reasons this method did not request, and only THIS flag may
+    // turn into `outcome: 'budget_exceeded'`.
+    let timedOut = false;
     let outcome: BriefingOutcome = 'ok';
+
+    /**
+     * §7.8 enforcement, callable from either the real timer or the per-token
+     * check below — the two are one policy with two triggers, not two
+     * policies, so there is exactly one place that flips these three flags.
+     */
+    const enforceBudget = (): void => {
+      timedOut = true;
+      partial = true;
+      controller.abort();
+    };
+
+    // THE FIX: a real timer, independent of token arrival. Without this, the
+    // per-token check below can only run once a token has actually been
+    // pushed — and while the model is still evaluating the prompt, Ollama's
+    // stream yields NOTHING at all, so `for await` sits inside `reader.read()`
+    // with no token to trigger a check against. A slow-to-start (or stuck)
+    // model previously ran unbounded past `budgets.generationMs` for exactly
+    // that reason: the budget only ever fired AFTER the cost it was meant to
+    // cap had already been paid.
+    const budgetTimer =
+      Number.isFinite(budgetMs) && budgetMs > 0 ? this.scheduleTimer(enforceBudget, budgetMs) : undefined;
 
     try {
       const stream = this.ollama.generateStream({ prompt, system, signal: controller.signal });
@@ -712,12 +758,13 @@ export class BriefingGenerator {
         }
         buffer.push(token);
 
-        // §7.8: checked after each token so a claim that fully arrived before
-        // the deadline is kept, and the one being typed when it passed is not.
+        // Kept alongside the timer above, not replaced by it: this is what
+        // makes a claim that fully arrived before the deadline kept, and the
+        // one being typed when it passed not — a real timer firing between
+        // two `await`s cannot retroactively un-buffer a token already pushed,
+        // so the boundary still has to be checked here, per token.
         if (this.clock.now() >= deadline) {
-          partial = true;
-          outcome = 'budget_exceeded';
-          controller.abort();
+          enforceBudget();
           break;
         }
       }
@@ -730,14 +777,21 @@ export class BriefingGenerator {
       if (!partial) buffer.end();
     } catch {
       partial = true;
-      outcome = sawToken ? 'stream_error' : 'error';
+      outcome = timedOut ? 'budget_exceeded' : sawToken ? 'stream_error' : 'error';
     } finally {
+      if (budgetTimer !== undefined) this.clearTimer(budgetTimer);
       // Idempotent. When no token ever arrived this records how long we waited
       // for one, which is the number an operator diagnosing a dead model wants;
       // leaving it open would report the stage as never having run.
       firstTokenSpan.end();
       generationSpan.end();
     }
+
+    // The in-loop `break` path (deadline hit between two already-received
+    // tokens) never throws, so the `catch` above never runs for it — this is
+    // what promotes THAT path to the same outcome the timer's throw-driven
+    // path resolves to, without duplicating the assignment in two places.
+    if (timedOut && outcome === 'ok') outcome = 'budget_exceeded';
 
     // ---- stage 4: citation --------------------------------------------------
     const citationSpan = trace.span('citation');
@@ -980,6 +1034,27 @@ export class BriefingGenerator {
    * rest remain visible in the rendered markers. A claim is linked back to a
    * delta when one of its citations belongs to a delta in this window, which is
    * what lets the UI answer "which state change did this sentence come from?".
+   *
+   * ### This method does NOT create pending items (F-5, 2026-09-03)
+   *
+   * It used to: a "Waiting on you" claim that resolved to a `deltaId` was
+   * promoted into a real `pending_items` row via `derivePendingItem`, asserting
+   * `waitingOnSelf: true` because layer 3 has no per-claim obligee signal. That
+   * assertion was the problem. `layer2/pending.ts`'s rule 1 exists precisely to
+   * reject obligations owed by a third party — the plan names them as the single
+   * most common false-positive source — and it decides using the model's
+   * explicit `waiting_on` field. Promoting on section membership alone routed
+   * around that rule with strictly weaker evidence: "the SYSTEM_PROMPT told the
+   * model to put the user's own obligations here" is a prompt instruction, not
+   * an observation, and a model that misfiles one claim then mints a durable
+   * to-do the user must dismiss by hand.
+   *
+   * AC-4 (pending-item precision, ≥ 75%) was measured at 48.0% (n=25 items,
+   * 2026-08-28) with this path live. Layer 2 remains the only writer of
+   * `pending_items`, which is what keeps rule 1 the single gate on that table.
+   *
+   * A streamed "Waiting on you" claim still RENDERS — `BriefingView` shows it
+   * beneath the pending list — it just no longer becomes a stored obligation.
    */
   private persist(
     briefingId: string,
@@ -992,7 +1067,6 @@ export class BriefingGenerator {
         if (!deltaByArtifact.has(artifactId)) deltaByArtifact.set(artifactId, delta.deltaId);
       }
     }
-
     accepted.forEach((claim, ordinal) => {
       // Non-null by construction: the gate rejects a claim with no citations.
       const primary = claim.citationArtifactIds[0] as string;

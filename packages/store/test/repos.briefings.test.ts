@@ -320,3 +320,51 @@ describe('BriefingsRepo aggregates', () => {
     expect(briefings.timeToReEntryMs(b.briefingId)).toBe(20_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F-2 — the resume watermark behind `briefing:resumePoint`
+// ---------------------------------------------------------------------------
+
+describe('BriefingsRepo.lastAcknowledgedWindowEnd', () => {
+  it('returns null when no briefing has ever been acknowledged', () => {
+    createBriefing();
+    createBriefing(GENERATED_AT + 1000);
+
+    expect(briefings.lastAcknowledgedWindowEnd()).toBeNull();
+  });
+
+  it('returns the acknowledged briefing window_end, not the tap time', () => {
+    const briefing = createBriefing();
+    // The user reads the briefing and taps five minutes after its window closed.
+    briefings.markCaughtUp(briefing.briefingId, GENERATED_AT + 300_000);
+
+    // `window_end` (= GENERATED_AT), NOT `caught_up_at`. Starting the next
+    // window at the tap time would silently skip the five minutes of activity
+    // between the end of what they read and the moment they acknowledged it.
+    expect(briefings.lastAcknowledgedWindowEnd()).toBe(GENERATED_AT);
+  });
+
+  it('ignores briefings the user never acknowledged', () => {
+    const read = createBriefing();
+    briefings.markCaughtUp(read.briefingId, GENERATED_AT + 1000);
+
+    // A later briefing — e.g. one the FR-3 scheduler generated overnight — that
+    // the user never opened. Treating it as read would drop its contents.
+    createBriefing(GENERATED_AT + 86_400_000);
+
+    expect(briefings.lastAcknowledgedWindowEnd()).toBe(GENERATED_AT);
+  });
+
+  it('reports the furthest-forward window, not the most recently acknowledged', () => {
+    const far = createBriefing(GENERATED_AT + 86_400_000);
+    const near = createBriefing(GENERATED_AT);
+
+    // Acknowledged out of order: the wide window first, a back-fill second. The
+    // renderer may request any window it likes, so "how far have you read?" is a
+    // question about windows, not about tap order.
+    briefings.markCaughtUp(far.briefingId, GENERATED_AT + 86_400_000 + 1000);
+    briefings.markCaughtUp(near.briefingId, GENERATED_AT + 86_400_000 + 2000);
+
+    expect(briefings.lastAcknowledgedWindowEnd()).toBe(GENERATED_AT + 86_400_000);
+  });
+});

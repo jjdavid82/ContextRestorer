@@ -1029,6 +1029,44 @@ async function runPreflightGate(): Promise<boolean> {
   return failStartup(message);
 }
 
+/**
+ * Wires `electron-reload` in unpackaged (dev) runs only: watching the app
+ * directory (compiled `dist/` and the built `ui/` static export, both under
+ * `app.getAppPath()`) means `npm run build:desktop` / `npm run build:ui` now
+ * relaunches the app instead of requiring a manual close-and-reopen.
+ *
+ * Dynamically imported, not a static top-level import: `electron-reload` is a
+ * devDependency that `electron-builder`'s default file set prunes from a
+ * packaged build's `node_modules`, and a static import is resolved
+ * unconditionally at module load — it would crash every packaged launch
+ * regardless of the `isPackaged` check below. A dynamic import only runs
+ * inside that check, so a packaged build never attempts to load it.
+ *
+ * `forceHardReset` because a soft `webContents.reload()` cannot pick up a
+ * changed main-process file anyway; using one reset path for both kinds of
+ * change keeps this predictable — anything a build script produces relaunches
+ * the whole app, not just the window.
+ */
+async function enableDevReload(): Promise<void> {
+  try {
+    // Cast rather than relying on the package's own `.d.ts`: it declares an
+    // ESM `export default` on what is actually a plain CommonJS
+    // `module.exports = function ...`, which `moduleResolution: nodenext`
+    // resolves to the whole module namespace instead of the function itself.
+    const mod: unknown = await import('electron-reload');
+    const electronReload = (
+      mod as { default: (glob: string, options: Record<string, unknown>) => void }
+    ).default;
+    electronReload(app.getAppPath(), {
+      electron: process.execPath,
+      forceHardReset: true,
+      hardResetMethod: 'exit',
+    });
+  } catch (error) {
+    console.warn('[dev] electron-reload not active:', error);
+  }
+}
+
 /** Set once the user has genuinely asked to quit, so `close` stops being intercepted. */
 let isQuitting = false;
 
@@ -1046,6 +1084,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(
     async () => {
+      if (!app.isPackaged) await enableDevReload();
+
       // Gates: all three must block before any window exists. The database gate
       // now runs FIRST: the preflight gate reads a persisted `model:setChat`
       // override out of it before probing Ollama (see `runPreflightGate`'s own
@@ -1199,6 +1239,15 @@ if (!app.requestSingleInstanceLock()) {
         // for two views of "the briefings table" to disagree.
         feedback: new FeedbackRepo(db!),
         briefings,
+        // `briefing:snapshot` rehydration (same `BriefingsRepo` instance as
+        // `briefings` above, narrowed differently — see the field's own doc
+        // comment).
+        briefingSnapshots: briefings,
+        // `briefing:resumePoint` (F-2) — the same instance a third time,
+        // narrowed to `lastAcknowledgedWindowEnd()`. This is what makes "Brief
+        // me on what I missed" start where the user last acknowledged instead
+        // of at a date they had to set by hand in Settings.
+        briefingResume: briefings,
         clock: systemClock,
         // Slack channel selector settings surface (closes Task 1.7's gap). Same
         // instance the poller reads every cycle — see the comment above.

@@ -338,11 +338,15 @@ export default function OnboardingPage(): ReactNode {
               ? status.projectsDeclared.join(', ')
               : 'none yet'}
           </p>
-          {/* R-6: the first briefing is the worst briefing. Say so up front. */}
+          {/* R-6: the first briefing is the worst briefing. Say so up front —
+              but without promising a learning loop X-2 excludes. See the matching
+              comment in `components/BriefingView.tsx`; both copies claimed
+              feedback "sharpens" the ranking, and neither does. */}
           <p>
             <small>
-              Still learning your preferences — the first few briefings will be rough, and your
-              feedback on each one sharpens them.
+              The first few briefings will be rough. Ranking uses the projects you declare
+              here — nothing is learned from what you click, so declaring the right projects
+              is what improves them.
             </small>
           </p>
           {/* Root-relative, not `next/link`: the bundle is served over the custom

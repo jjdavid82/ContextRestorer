@@ -12,6 +12,7 @@ import {
 import { LOW_CONFIDENCE_FLAG_THRESHOLD } from '../components/ClaimBullet';
 import type {
   BriefingDone,
+  BriefingSnapshot,
   Citation,
   ClaimChunk,
   ContextRestorerBridge,
@@ -45,6 +46,7 @@ interface MockBridge {
   unsubscribeDone: ReturnType<typeof vi.fn>;
   request: ReturnType<typeof vi.fn>;
   pending: ReturnType<typeof vi.fn>;
+  snapshot: ReturnType<typeof vi.fn>;
   resolvePending: ReturnType<typeof vi.fn>;
   caughtUp: ReturnType<typeof vi.fn>;
   drilldown: ReturnType<typeof vi.fn>;
@@ -89,6 +91,8 @@ function installBridge(
     drilldown?: DrillDown;
     resolvePendingResult?: { ok: boolean; reason?: string };
     claimVerdicts?: Record<string, FeedbackInput['verdict']>;
+    /** Defaults to "nothing to rehydrate" — the live-stream path these tests exercise. */
+    snapshot?: BriefingSnapshot;
   } = {},
 ): MockBridge {
   const chunkListeners: Array<(c: ClaimChunk) => void> = [];
@@ -101,6 +105,9 @@ function installBridge(
 
   const request = vi.fn(async () => ({ briefingId: BRIEFING_ID }));
   const pending = vi.fn(async () => options.pending ?? []);
+  const snapshot = vi.fn(
+    async (): Promise<BriefingSnapshot> => options.snapshot ?? { found: false, claims: [], done: null },
+  );
   const resolvePending = vi.fn(async () => options.resolvePendingResult ?? { ok: true });
   const caughtUp = vi.fn(async () => ({ ok: true }));
   const drilldown = vi.fn(
@@ -126,8 +133,14 @@ function installBridge(
     briefing: {
       request,
       pending,
+      snapshot,
       resolvePending,
       caughtUp,
+      // F-2 window resolution. Present only to satisfy the bridge contract:
+      // `BriefingView` is handed a `briefingId` (or an explicit window) by its
+      // parent, so the resume point is `app/page.tsx`'s concern, not this
+      // component's. `null` is the first-run answer.
+      resumePoint: vi.fn(async () => ({ windowStart: null })),
       // NFR-10 time-to-re-entry view (Task 3.7). Present only to satisfy the
       // bridge contract: nothing in the briefing view reads it today.
       metrics: vi.fn(async () => []),
@@ -211,6 +224,7 @@ function installBridge(
     unsubscribeDone,
     request,
     pending,
+    snapshot,
     resolvePending,
     caughtUp,
     drilldown,
@@ -371,6 +385,39 @@ describe('BriefingView — pending then stream', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* 1b. Rehydration from `briefing:snapshot` — surviving a Settings round-trip */
+/* -------------------------------------------------------------------------- */
+
+describe('BriefingView — rehydration from briefing:snapshot', () => {
+  it('paints claims and the done state from the snapshot, with no chunks ever streamed', async () => {
+    const mock = installBridge({
+      snapshot: {
+        found: true,
+        claims: [chunk({ claim: 'Alpha shipped while you were away.' })],
+        done: doneEvent(),
+      },
+    });
+
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+
+    expect(await screen.findByText('Alpha shipped while you were away.')).toBeTruthy();
+    expect(mock.snapshot).toHaveBeenCalledWith(BRIEFING_ID);
+  });
+
+  it('is a no-op for a freshly requested id that has nothing to rehydrate yet', async () => {
+    const mock = installBridge();
+    await renderBriefing(mock);
+
+    await waitFor(() => expect(mock.snapshot).toHaveBeenCalledWith(BRIEFING_ID));
+    // No claim rendered until a live chunk arrives — the snapshot found nothing.
+    expect(screen.queryByText('Auth refactor shipped to staging.')).toBeNull();
+
+    mock.emitChunk(chunk());
+    expect(await screen.findByText('Auth refactor shipped to staging.')).toBeTruthy();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* 2. Fixed section order                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -387,9 +434,11 @@ describe('BriefingView — section order', () => {
 
     await screen.findByText('Review PR #2847.');
 
+    // Trailing `?` is the `SectionInfoIcon` tooltip badge, not part of the
+    // section name.
     const headings = screen
       .getAllByRole('heading', { level: 3 })
-      .map((h) => h.textContent);
+      .map((h) => h.textContent?.replace(/\?$/, ''));
     expect(headings).toEqual([
       'Waiting on you',
       'What moved',

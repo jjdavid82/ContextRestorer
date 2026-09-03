@@ -16,6 +16,7 @@ import { CITATION_CHIP_LABEL, ClaimBullet } from './ClaimBullet';
 import { DrillDownPanel } from './DrillDown';
 import { FeedbackControls } from './FeedbackControls';
 import { PendingSection } from './PendingSection';
+import { SectionInfoIcon } from './SectionInfoIcon';
 
 /**
  * The briefing surface (Task 3.6).
@@ -53,6 +54,14 @@ export const BRIEFING_SECTIONS = [
 ] as const;
 
 export type BriefingSection = (typeof BRIEFING_SECTIONS)[number];
+
+/** `section name → meaning`, shown as a tooltip on each section heading. */
+const SECTION_MEANING: Record<BriefingSection, string> = {
+  'Waiting on you': 'Outstanding obligations that are on this person right now',
+  'What moved': 'Decisions made and work that visibly advanced',
+  'Quietly resolved': "Questions/blockers/obligations that closed without the user's input",
+  'Worth knowing': "Context they'd want but that requires nothing from them",
+};
 
 /**
  * Bucket for a claim whose `section` is not one of the four.
@@ -152,6 +161,23 @@ export function BriefingView({
     let unsubscribeChunk: Unsubscribe | undefined;
     let unsubscribeDone: Unsubscribe | undefined;
 
+    // `briefing:chunk`/`briefing:done` are a single main-process broadcast, not
+    // scoped per-listener: a PREVIOUS request's generation can still be
+    // in-flight (fire-and-forget, never cancelled — see `beginBriefing`) and
+    // deliver its chunks after this effect has already resubscribed for a NEW
+    // briefingId. Left unfiltered, the two streams interleave into the same
+    // `claims` array and every claim from the stale run reappears as a
+    // duplicate of (or alongside) the current one.
+    //
+    // `null` means "not yet known" (the self-initiated branch below is still
+    // awaiting its own `briefing:request`) rather than "reject everything": a
+    // chunk for THIS request can legitimately arrive before that promise
+    // resolves, since the id it carries was minted and returned to us before
+    // the id round-trips back through `await`. Once `load` learns the id, it
+    // is set below and every subsequent chunk is checked against it —
+    // including late ones from whatever request this replaced.
+    let expectedBriefingId: string | null = externalBriefingId ?? null;
+
     try {
       const bridge = getBridge();
 
@@ -160,10 +186,14 @@ export function BriefingView({
       // leaves the previous listener attached and every chunk is rendered twice
       // (bridge.d.ts spells this contract out).
       unsubscribeChunk = bridge.briefing.onChunk((chunk) => {
-        if (active) setClaims((current) => [...current, chunk]);
+        if (active && (expectedBriefingId === null || chunk.briefingId === expectedBriefingId)) {
+          setClaims((current) => [...current, chunk]);
+        }
       });
       unsubscribeDone = bridge.briefing.onDone((event) => {
-        if (active) setDone(event);
+        if (active && (expectedBriefingId === null || event.briefingId === expectedBriefingId)) {
+          setDone(event);
+        }
       });
 
       const load = async (): Promise<void> => {
@@ -171,12 +201,29 @@ export function BriefingView({
           externalBriefingId ??
           (await bridge.briefing.request({ windowStart, windowEnd })).briefingId;
         if (!active) return;
+        expectedBriefingId = id;
         setBriefingId(id);
 
-        const items = await bridge.briefing.pending(id);
+        const [items, snapshot] = await Promise.all([
+          bridge.briefing.pending(id),
+          bridge.briefing.snapshot(id),
+        ]);
         if (!active) return;
         setPending(items);
         setPendingLoading(false);
+
+        // Rehydration: a briefing that already finished generating in a PRIOR
+        // mount of this component (e.g. the user navigated to Settings and
+        // back — a real page load, which dropped the `onChunk`/`onDone`
+        // subscriptions above along with every piece of state) has nothing
+        // left to stream. Repaint what `briefing:snapshot` found already
+        // persisted instead of sitting on "Still writing…" forever. A freshly
+        // requested id has no row yet, so `snapshot.found` is false and this
+        // is a no-op — the live listeners above are what paint it.
+        if (snapshot.found) {
+          setClaims(snapshot.claims);
+          if (snapshot.done !== null) setDone(snapshot.done);
+        }
       };
 
       load().catch((cause: unknown) => {
@@ -233,6 +280,35 @@ export function BriefingView({
       for (const id of newIds) requestedVerdictIds.current.delete(id);
     }
   }, [pending, claims]);
+
+  // A streamed "Waiting on you" claim only becomes a real, resolvable
+  // `pending_items` row once `persist()` runs at the end of `generate()` — see
+  // `generate.ts`'s `persist()`. Re-fetching here, once the stream ends, is what
+  // lets those claims pick up a `pendingId` and the "Mark resolved" control
+  // without the user having to reload the page.
+  useEffect(() => {
+    if (done === null || briefingId === null) return;
+    let active = true;
+
+    try {
+      getBridge()
+        .briefing.pending(briefingId)
+        .then((items) => {
+          if (active) setPending(items);
+        })
+        .catch(() => {
+          // Best-effort: the live-streamed bullets still render without the
+          // control, same as before this refresh existed.
+        });
+    } catch {
+      // `getBridge()` throwing here is unreachable in practice (the effect
+      // above already proved the bridge exists), but this must not crash render.
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [done, briefingId]);
 
   /**
    * The user manually declaring a "Waiting on you" item dealt with — the only
@@ -304,37 +380,60 @@ export function BriefingView({
     [briefingId, openClaimId, claimVerdicts],
   );
 
-  const bulletsFor = (section: BriefingSection): ReactNode[] =>
-    claims
-      .filter((chunk) => sectionOf(chunk) === section)
-      .map((chunk, index) => {
-        const claimId = claimIdOf(chunk);
-        return (
-          <ClaimBullet
-            // Artifact ids repeat across claims (one thread can back several),
-            // so the index keeps sibling keys unique. Claims are append-only and
-            // never reordered, so index-as-key is stable here.
-            key={`${claimId}:${index}`}
-            text={chunk.claim}
-            claimId={claimId}
-            citationLabel={CITATION_CHIP_LABEL} // standardized across every claim, see ClaimBullet.tsx
-            externalUrl={chunk.citation.externalUrl ?? null}
-            onCitationClick={toggleDrilldown}
-          >
-            {renderDetail(claimId)}
-          </ClaimBullet>
-        );
-      });
+  const bulletsForChunks = (chunks: readonly ClaimChunk[]): ReactNode[] =>
+    chunks.map((chunk, index) => {
+      const claimId = claimIdOf(chunk);
+      return (
+        <ClaimBullet
+          // Artifact ids repeat across claims (one thread can back several),
+          // so the index keeps sibling keys unique. Claims are append-only and
+          // never reordered, so index-as-key is stable here.
+          key={`${claimId}:${index}`}
+          text={chunk.claim}
+          claimId={claimId}
+          citationLabel={CITATION_CHIP_LABEL} // standardized across every claim, see ClaimBullet.tsx
+          onCitationClick={toggleDrilldown}
+        >
+          {renderDetail(claimId)}
+        </ClaimBullet>
+      );
+    });
 
-  const waitingOnYouClaims = claims.filter((chunk) => sectionOf(chunk) === 'Waiting on you');
+  const bulletsFor = (section: BriefingSection): ReactNode[] =>
+    bulletsForChunks(claims.filter((chunk) => sectionOf(chunk) === section));
+
+  // Artifact ids already backed by a real `pending_items` row (painted by
+  // `PendingSection` itself, with the "Mark resolved" control). Excluded here so
+  // a claim that just got promoted via the refetch above does not also render as
+  // a plain, button-less bullet.
+  const pendingArtifactIds = new Set(
+    pending.flatMap((item) => (item.citationArtifactId !== null ? [item.citationArtifactId] : [])),
+  );
+  const waitingOnYouClaims = claims.filter(
+    (chunk) => sectionOf(chunk) === 'Waiting on you' && !pendingArtifactIds.has(claimIdOf(chunk)),
+  );
 
   return (
     <section className="cr-briefing" aria-label="Briefing">
       <h2 className="briefing-view__title">What you missed</h2>
-      {/* R-6: set the expectation before the output disappoints. */}
+      {/*
+        R-6: set the expectation before the output disappoints — but truthfully.
+
+        This used to read "Still learning your preferences — early briefings will
+        be rough, and the feedback buttons sharpen them." Nothing learns. X-2
+        excludes learned ranking from the POC outright, `ranker.ts` carries a
+        guardrail forbidding any feedback-derived value from entering the scoring
+        input, and FR-7 states feedback feeds the offline eval only. The sentence
+        promised a loop the design deliberately does not have, on the one screen
+        whose whole character is disclosure (partial-generation notices,
+        threads-still-processing counts, the simplified-briefing banner).
+
+        The replacement keeps R-6's job — say the output will be imperfect before
+        the user discovers it — while describing what the ranker actually uses.
+      */}
       <p className="briefing-view__subtitle">
-        Still learning your preferences — early briefings will be rough, and the feedback
-        buttons sharpen them.
+        Ranked by the projects you declared — nothing is learned from what you click. Early
+        briefings will be rough; flagging a wrong item helps us fix the model offline.
       </p>
 
       {error !== null ? (
@@ -386,7 +485,7 @@ export function BriefingView({
         >
           {waitingOnYouClaims.length > 0 ? (
             <ul className="briefing-view__waiting-list">
-              {bulletsFor('Waiting on you')}
+              {bulletsForChunks(waitingOnYouClaims)}
             </ul>
           ) : null}
         </PendingSection>
@@ -395,7 +494,10 @@ export function BriefingView({
           const bullets = bulletsFor(section);
           return (
             <section key={section} aria-label={section}>
-              <h3 className="section-heading">{section}</h3>
+              <h3 className="section-heading">
+                {section}
+                <SectionInfoIcon meaning={SECTION_MEANING[section]} />
+              </h3>
               {bullets.length > 0 ? (
                 <ul className="bullet-list">{bullets}</ul>
               ) : (

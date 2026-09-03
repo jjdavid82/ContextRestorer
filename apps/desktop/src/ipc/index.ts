@@ -37,6 +37,8 @@ import { registerProjectsHandlers } from './projects.js';
 import { registerHealthHandlers, type HealthPushOptions } from './health.js';
 import {
   registerBriefingHandlers,
+  type BriefingSnapshotReader,
+  type ResumePointReader,
   type PendingReader,
   type StakesReader,
 } from './briefing.js';
@@ -75,15 +77,27 @@ export {
   listPending,
   beginBriefing,
   resolvePendingItem,
+  getBriefingSnapshot,
+  getResumePoint,
+  citationForArtifact,
   parseBriefingWindow,
   parsePendingIdArg,
+  parseSnapshotIdArg,
   PENDING_CHANNEL,
   REQUEST_CHANNEL,
   RESOLVE_CHANNEL,
+  SNAPSHOT_CHANNEL,
+  RESUME_POINT_CHANNEL,
   type BriefingHandlerDeps,
   type PendingReader,
   type StakesReader,
   type PendingItemView,
+  type BriefingSnapshot,
+  type BriefingSnapshotReader,
+  type BriefingSnapshotRow,
+  type BriefingSnapshotClaim,
+  type ResumePoint,
+  type ResumePointReader,
 } from './briefing.js';
 export {
   registerClaimHandlers,
@@ -273,6 +287,30 @@ export interface IpcDeps {
    */
   briefings?: BriefingCompletionStore;
   /**
+   * Rehydration source behind `briefing:snapshot` (`BriefingsRepo` in
+   * production — the SAME instance as {@link IpcDeps.briefings}, narrowed
+   * differently, for the reason given on `BriefingSnapshotReader` itself).
+   *
+   * Registered only when this, {@link IpcDeps.projectStore} and
+   * {@link IpcDeps.events} are ALL present: rebuilding a persisted claim's
+   * citation needs the artifact/event lookups those two already back
+   * `claim:drilldown` with, and a snapshot that silently dropped every claim
+   * for want of one would be worse than an unregistered channel.
+   */
+  briefingSnapshots?: BriefingSnapshotReader;
+  /**
+   * Source behind `briefing:resumePoint` (`BriefingsRepo` in production — the
+   * same instance again, narrowed to one method).
+   *
+   * Deliberately its own field rather than a widening of
+   * {@link IpcDeps.briefingSnapshots}: that type is satisfied by hand-built test
+   * doubles, and adding a method to it would force every one of them to grow a
+   * `lastAcknowledgedWindowEnd` they have no use for. Absent, the channel is
+   * still registered and answers `{ windowStart: null }` — the same first-run
+   * state the renderer already handles.
+   */
+  briefingResume?: ResumePointReader;
+  /**
    * Read-only aggregate readers behind `debug:metrics` (Task 4.4, step 4):
    * `AiCallsRepo`, `BriefingsRepo`, and the `<userData>/logs` directory the
    * trace JSONL is written to.
@@ -341,6 +379,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       // Spread rather than assigned: under `exactOptionalPropertyTypes` an
       // explicit `graph: undefined` is not the same as an absent `graph`.
       ...(deps.graph !== undefined ? { graph: deps.graph } : {}),
+      // `briefing:snapshot` (rehydration after a Settings round-trip) needs
+      // all three together — see `IpcDeps.briefingSnapshots`.
+      ...(deps.briefingSnapshots !== undefined ? { briefings: deps.briefingSnapshots } : {}),
+      ...(deps.projectStore !== undefined ? { artifacts: deps.projectStore } : {}),
+      ...(deps.events !== undefined ? { events: deps.events } : {}),
+      // `briefing:resumePoint` (F-2). Absent, the channel is still registered
+      // and answers `{ windowStart: null }`.
+      ...(deps.briefingResume !== undefined ? { resume: deps.briefingResume } : {}),
       clock: deps.clock ?? systemClock,
       startGeneration:
         deps.startGeneration ??
