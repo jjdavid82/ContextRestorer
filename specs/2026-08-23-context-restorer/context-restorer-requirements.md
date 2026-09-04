@@ -8,7 +8,11 @@
 > This document is a POC-scoped restatement of an already-approved design. It does not
 > introduce requirements the source documents do not contain. Where the source is silent,
 > that is called out explicitly under **Open Items** rather than filled with a guess.
-> If anything here conflicts with the design doc, **the design doc wins**.
+> If anything here conflicts with the design doc, **the design doc wins** — *except* where
+> this document records a dated, signed-off **amendment** under §8, which supersedes the
+> source for that requirement and states what changed and why. There is one such amendment
+> today: **OI-6** (FR-2 presentation). An amendment is the only sanctioned way to depart from
+> the source; an undocumented divergence is still a defect in this document.
 
 ---
 
@@ -68,7 +72,7 @@ Scoped to the POC. IDs preserved from §2.2 so they remain traceable to the sour
 | ID | Requirement | POC scope note |
 |---|---|---|
 | **FR-1** | User connects a data source via OAuth with least-privilege scopes. | Slack + Gmail only. Scopes per §5.1: Slack `channels:history`, `channels:read`, `im:history`, `users:read`; Gmail `mail.readonly`. `channels:read` added 2026-08-28 (user decision) specifically to enable channel discovery for the channel-selector feature — `conversations.list` is not authorized by `channels:history` alone. |
-| **FR-2** | User requests a briefing for a time window; system returns a narrative summary, streamed. | P95 < 60s, first token < 5s, for a 5-day window across 2 sources. Every factual claim cited. |
+| **FR-2** | User requests a briefing for a time window; system returns a **synthesized, cited summary, streamed**. | P95 < 60s, first token < 5s, for a 5-day window across 2 sources. Every factual claim cited. Presentation is a ranked list of short sentences, not prose — **amended 2026-09-03, see OI-6**. |
 | **FR-3** | User configures recurring briefings. | **Partial** — time-based recurrence only (e.g. Monday 8am, weekday daily). Post-vacation auto-trigger on calendar return is deferred with the Calendar source (X-1). See OI-4. |
 | **FR-4** | Briefing explicitly flags items waiting on the user, with linked source artifacts. | Recall ≥ 90%, precision ≥ 75%. Leads the briefing — not a chronological log. |
 | **FR-5** | Items ordered by relevance to the user's interests, not recency. | **Stated declarations only.** No learned signals (X-2). |
@@ -194,10 +198,16 @@ Nothing counts as complete until it has been **measured**, not just implemented.
 
 ---
 
-## 8. Resolved Open Items
+## 8. Resolved Open Items and Amendments
 
 The implementation prompt §6 flagged three items the design doc leaves genuinely open.
-All three were resolved with the design owner on 2026-08-23 rather than guessed.
+All three were resolved with the design owner on 2026-08-23 rather than guessed; OI-4 and
+OI-5 follow from the same session.
+
+**OI-1…OI-5 resolve silences in the source. OI-6 does not — it amends a requirement the
+source states.** That distinction matters when reading this section: everything before OI-6
+is this document filling a gap the design left; OI-6 is this document departing from the
+design on evidence gathered after it was written, and is labelled as such.
 
 ### OI-1 — Latency budget split: **thin synchronous path, 45s cap**
 
@@ -269,6 +279,47 @@ At 30 examples a measured 2.0% hallucination rate carries a 0.6–3.4% interval 
 "< 2%" release gate could be estimated but not demonstrated. ~70 halves that interval at
 roughly double the labeling cost, which §7.5 names as the known bottleneck. The eval-set
 size must still be reported alongside every metric (see RO-2 note below).
+
+---
+
+### OI-6 — FR-2 presentation: **ranked list of short sentences, not prose** (amended 2026-09-03)
+
+The only item in this document that **departs from** the source design rather than resolving a
+silence in it. Recorded here rather than edited in quietly, because §1's preamble commits this
+doc to introducing nothing the source does not contain.
+
+**What changed.** FR-2 read "returns a narrative summary, streamed" (source §2.2). It now reads
+"returns a synthesized, cited summary, streamed," and the presentation is a ranked list of short
+sentences.
+
+**Why.** Narrative was never measured. Every acceptance criterion covers latency (AC-1),
+grounding (AC-2, AC-5, AC-6), obligation detection (AC-3, AC-4) or ordering (AC-7), and the
+outcome metric is time-to-re-entry (NFR-10). Prose was the delivery vehicle chosen for those,
+not the goal — and it proved to be the most expensive and least verifiable part of the system:
+
+- **AC-5 measured 23.6%** against a < 2% release gate (n=35 claims-weighted, `qwen2.5:14b`,
+  2026-08-28). Fabrication concentrates in the connective text a model must invent to join two
+  facts into one sentence; a list has no such text.
+- **AC-1 measured P95 360,920 ms** end to end and 97,925 ms to first token, against 60,000 ms
+  and 5,000 ms (n=20, `qwen2.5:7b`, 2026-09-03). Generation is ~99.9% of a run.
+- Per-sentence prose is what makes per-sentence citation necessary, and with it the
+  heading/marker parsing machinery in `layer3/generate.ts`.
+
+**What is preserved, and is not optional:**
+
+- **Streaming.** FR-2's "streamed" is about perceived latency, not prose. Items stream.
+- **Every claim cited** (AC-2, §2.5). Unchanged — the citation gate still governs.
+- **Cross-item linkage.** A reversal must still read as "X, then Y" (the D-6 `supersedes`
+  chain), rendered as an annotation on the superseding item. This is the one thing prose did
+  that a list cannot, and dropping it would remove the entire justification for retaining
+  superseded history.
+
+**What is knowingly given up.** No sentence ties several threads into one story — a reader
+assembles that themselves. This was weighed and accepted as the cost of the change.
+
+**Traceability.** Decision Q-1 in `specs/2026-09-03-briefing-experience/briefing-experience-proposal.md`
+(§7, A-1); the layout it mandates is P4 in the same document. AC-1…AC-11 are unaffected: no
+acceptance criterion measured narrative form, which is the observation the decision rests on.
 
 ---
 

@@ -390,23 +390,29 @@ Not proposed for reversal: X-2 (no learned ranking), X-3 (local-only), or any SE
 
 ## 7. Open questions for the design owner
 
-| ID | Question | Recommendation |
+| ID | Question | Status |
 |---|---|---|
-| Q-1 | Is "narrative briefing" a product requirement or a presentation choice? P4 depends on the answer. | Presentation choice — see §8 |
-| Q-2 | Is the `belongs_to` edge (and with it FR-5) in scope now, or is stated-stakes ranking deferred? Today `wStakes` is dead config. | In scope, and cheap — see §8 |
-| Q-3 | Does "Still learning your preferences" stay, given X-2? If nothing learns, the sentence should go. | Remove — see §8 |
-| Q-4 | Is a ~7-item cap acceptable, or is completeness over the window a requirement? | Per-section: cap one, not the other — see §8 |
+| Q-1 | Is "narrative briefing" a product requirement or a presentation choice? P4 depends on the answer. | **DECIDED 2026-09-03** — presentation choice; ship a ranked list of short sentences. See A-1. |
+| Q-2 | Is the `belongs_to` edge (and with it FR-5) in scope now, or is stated-stakes ranking deferred? Today `wStakes` is dead config. | **Open** — needs sign-off. Recommendation in A-2. |
+| Q-3 | Does "Still learning your preferences" stay, given X-2? If nothing learns, the sentence should go. | **DONE 2026-09-03** — removed from `BriefingView.tsx` and `onboarding/page.tsx`. See A-3. |
+| Q-4 | Is a ~7-item cap acceptable, or is completeness over the window a requirement? | **Open**, and blocked on Q-2 — see A-4. |
 
 ---
 
 ## 8. Recommended answers
 
-**These are the author's recommendations, not owner decisions.** Q-1 and Q-2 change how a
-ported requirement (FR-2, FR-5) reads, so they need sign-off before implementation — the same
-bar `specs/2026-08-23-context-restorer/context-restorer-requirements.md` §8 applied to OI-1…OI-5.
-Q-3 and Q-4 sit inside existing decisions and can be taken by the build.
+Q-1 and Q-2 change how a ported requirement (FR-2, FR-5) reads, so they needed sign-off before
+implementation — the same bar `specs/2026-08-23-context-restorer/context-restorer-requirements.md`
+§8 applied to OI-1…OI-5. **Q-1 was signed off on 2026-09-03** and is recorded as a decision
+below. **Q-2 remains an open recommendation.** Q-3 and Q-4 sit inside existing decisions and
+can be taken by the build; Q-3 is already done.
 
-### A-1 — Narrative is a presentation choice, with one load-bearing exception
+### A-1 — DECIDED: narrative is a presentation choice
+
+**Decision (2026-09-03):** the briefing ships as a **ranked list of short sentences**, per the
+layout in P4. Not flowing paragraphs, and not the card grid the first draft proposed.
+
+The rationale that supported it is preserved below.
 
 The source calls for a "narrative summary" (§1, FR-2), so it is stated as a requirement — but
 **nothing measures it**. Every acceptance criterion is about latency (AC-1), grounding
@@ -415,9 +421,7 @@ metric is time-to-re-entry (NFR-10). Prose is the delivery vehicle the design ha
 pick for those; it is not itself the goal, and it is currently the most expensive and least
 verifiable part of the system.
 
-**Recommendation:** a ranked list of short sentences as the default (P4 — not a card grid;
-see the note there on why the first draft's cards were rejected), with two constraints
-carried over so nothing real is lost:
+**What the decision carries with it** — two constraints, so nothing real is lost:
 
 - **Keep streaming.** FR-2's "streamed" is about perceived latency, not prose; cards stream
   as well as sentences do.
@@ -426,9 +430,14 @@ carried over so nothing real is lost:
   list cannot, and it is the entire justification for D-6 keeping history. Preserve it as a
   card-level annotation on the superseding card — not as free prose over the whole window.
 
-**Requirement change this implies:** FR-2 should be reworded from "narrative summary" to
-"synthesized, cited summary, streamed." That is a real deviation from the ported doc and is
-the single largest thing in this proposal worth arguing about.
+**Requirement change this authorises, and which is NOT yet applied:** FR-2 in
+`specs/2026-08-23-context-restorer/context-restorer-requirements.md` still reads "returns a
+narrative summary, streamed." The decision above supersedes that wording — it should become
+"returns a synthesized, cited summary, streamed" — but the requirements doc is a port of an
+approved design and has not been amended here. Until it is, the two documents disagree, and
+the requirements doc's own preamble says the design doc wins. **Amending FR-2 is the open
+follow-up on this decision**, and it is a deliberate deviation to be recorded as such rather
+than edited in silently.
 
 ### A-2 — Wire `belongs_to`; it is a write path, not a feature
 
