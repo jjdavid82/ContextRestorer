@@ -99,7 +99,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { newId, type AppConfig, type Clock, type PendingItem, type Person } from '@cr/core';
+import {
+  artifactId,
+  newId,
+  type AppConfig,
+  type Clock,
+  type PendingItem,
+  type Person,
+} from '@cr/core';
 import { IngestionPipeline, type RawSourceEvent } from '@cr/ingest';
 import {
   AiCallsRepo,
@@ -121,6 +128,7 @@ import {
   Layer1Extractor,
   Layer2Synthesizer,
   RetrievalService,
+  TemplateBriefingRenderer,
   createOllamaClient,
   type OllamaClient,
 } from '@cr/ai';
@@ -151,6 +159,7 @@ export const AC1_FIRST_TOKEN_P95_MS = 5_000;
  */
 export const BENCH_METRICS = [
   'firstPaintMs',
+  'deterministicMs',
   'firstTokenMs',
   'totalMs',
   'retrievalMs',
@@ -181,6 +190,8 @@ export type AttributableStage = (typeof ATTRIBUTABLE_STAGES)[number];
 /** Human-readable label per metric, used by {@link renderBenchTable}. */
 const METRIC_LABELS: Record<BenchMetric, string> = {
   firstPaintMs: 'First paint — pending items, NO model call',
+  deterministicMs:
+    'Deterministic briefing — the P0 request path, NO model call',
   firstTokenMs: 'First token — LLM stream (runs that produced one)',
   totalMs: 'Total — `generate()` end to end',
   retrievalMs: '↳ stage: retrieval',
@@ -311,6 +322,18 @@ export interface BenchRunOptions {
   /** Briefing window width. Default {@link DEFAULT_WINDOW_WIDTH_MS}. */
   windowWidthMs?: number;
   /**
+   * Also exercise the BACKGROUND generation path. Default `false`.
+   *
+   * Since P0 the model is not on the request path, so the LLM run measures the
+   * pre-computer — useful, but hours long and not what AC-1 asks about. Off by
+   * default so the AC-1 number is cheap enough to check on every change, which
+   * is the difference between a measured claim and an asserted one.
+   *
+   * With it off, Layer 1 and Layer 2 seeding are skipped too: the deltas the
+   * deterministic path reads are written directly, so a run takes seconds.
+   */
+  measureLlm?: boolean;
+  /**
    * Operator notes about the conditions this run was measured under, rendered
    * with the numbers.
    *
@@ -353,6 +376,21 @@ export interface BenchSample {
    * stakes-weighted sort, the Task 3.5 path. NO model call is involved.
    */
   firstPaintMs: number;
+  /**
+   * P0: `TemplateBriefingRenderer.renderTemplate()` end to end — what
+   * `briefing:request` actually does, and therefore what AC-1 now measures.
+   */
+  deterministicMs: number;
+  /** Claims the deterministic render produced. */
+  deterministicClaims: number;
+  /**
+   * True when this sample also exercised the background generation path.
+   *
+   * Every LLM metric and every LLM sentence in the report is gated on this. A
+   * run that never asked for a token must not be reported as one that failed to
+   * produce one — that reads as a broken model rather than a skipped path.
+   */
+  ranLlm: boolean;
   /** Open obligations the first-paint read returned. */
   firstPaintItems: number;
   /**
@@ -445,7 +483,16 @@ export interface Ac1Check {
    * observations has not been shown to fail — it has not been measured, and
    * reporting either PASS or FAIL for it would be a claim the run cannot support.
    */
-  status: 'PASS' | 'FAIL' | 'NO DATA';
+  status: 'PASS' | 'FAIL' | 'NO DATA' | 'REPORTED';
+  /**
+   * True when this row is informational only (P0).
+   *
+   * The background pre-computation timings are worth printing but are NOT a
+   * user wait, so they are never graded. They render as `'REPORTED'` rather
+   * than `'PASS'`, because a PASS beside a five-minute number reads as a
+   * verdict that the five minutes were fine.
+   */
+  informational?: true;
 }
 
 /** What was actually seeded, so `eventCount` cannot be read as `extractionCount`. */
@@ -543,12 +590,21 @@ export interface BenchResult {
  */
 export function evaluateAc1(result: BenchResult): Ac1Check[] {
   const check = (
-    metric: 'totalMs' | 'firstTokenMs',
+    metric: 'totalMs' | 'firstTokenMs' | 'deterministicMs',
     label: string,
     thresholdMs: number,
+    informational = false,
   ): Ac1Check => {
     const stats = result.perStagePercentiles[metric];
     const measuredP95 = stats.p95;
+    const status: Ac1Check['status'] =
+      measuredP95 === null
+        ? 'NO DATA'
+        : informational
+          ? 'REPORTED'
+          : measuredP95 < thresholdMs
+            ? 'PASS'
+            : 'FAIL';
     return {
       criterion: 'AC-1',
       label,
@@ -556,15 +612,43 @@ export function evaluateAc1(result: BenchResult): Ac1Check[] {
       thresholdMs,
       measuredP95,
       count: stats.count,
-      status:
-        measuredP95 === null ? 'NO DATA' : measuredP95 < thresholdMs ? 'PASS' : 'FAIL',
+      status,
+      ...(informational ? { informational: true as const } : {}),
     };
   };
 
-  return [
-    check('totalMs', 'Briefing generation, end to end (P95)', AC1_TOTAL_P95_MS),
-    check('firstTokenMs', 'Time to first LLM token (P95)', AC1_FIRST_TOKEN_P95_MS),
+  const checks: Ac1Check[] = [
+    // P0: this is the request path. `briefing:request` renders from SQLite and
+    // never calls a model, so THIS is the number AC-1 is a claim about.
+    check(
+      'deterministicMs',
+      'Briefing delivered to the user, end to end (P95) — deterministic path',
+      AC1_TOTAL_P95_MS,
+    ),
   ];
+
+  // The LLM rows describe the BACKGROUND pre-computer, which nobody waits on.
+  // Reported when it ran, and never as an AC-1 pass/fail — a four-minute
+  // background pass is not a four-minute wait, and grading it against a
+  // user-latency bar would be measuring the wrong thing in both directions.
+  if (result.perStagePercentiles.totalMs.count > 0) {
+    checks.push(
+      check(
+        'totalMs',
+        'Background pre-computation, end to end (P95) — NOT a user wait',
+        Number.POSITIVE_INFINITY,
+        true,
+      ),
+      check(
+        'firstTokenMs',
+        'Background first token (P95) — NOT a user wait',
+        Number.POSITIVE_INFINITY,
+        true,
+      ),
+    );
+  }
+
+  return checks;
 }
 
 /**
@@ -613,6 +697,13 @@ export function attributeSlowestRun(samples: readonly BenchSample[]): StageAttri
 function samplesFor(samples: readonly BenchSample[], metric: BenchMetric): number[] {
   const values: number[] = [];
   for (const sample of samples) {
+    if (metric === 'deterministicMs') {
+      values.push(sample.deterministicMs);
+      continue;
+    }
+    // Every metric below describes the model path; a sample that never ran it
+    // has nothing to contribute and must not be counted as a zero or a failure.
+    if (!sample.ranLlm) continue;
     if (metric === 'firstPaintMs') {
       // The first-paint path has nothing to do with the model, so it is measured
       // (and reported) even for a window the model never ran on.
@@ -742,8 +833,13 @@ export function renderBenchTable(result: BenchResult): string {
   lines.push('');
 
   // ---- attribution --------------------------------------------------------
+  const ranAnyLlm = result.perStagePercentiles.totalMs.count > 0;
+
   const slowest = result.slowest;
-  if (slowest !== null) {
+  // Attribution describes stage spans inside `generate()`; with no LLM run
+  // there are none, and printing "took NaN ms, none reported" would look like a
+  // broken measurement rather than a path that was deliberately not exercised.
+  if (slowest !== null && ranAnyLlm) {
     lines.push('### Slowest run — where the time went');
     lines.push('');
     lines.push(
@@ -753,6 +849,17 @@ export function renderBenchTable(result: BenchResult): string {
           : `**${slowest.stage}** at ${ms(slowest.stageMs)} ms.`) +
         ` Unattributed (claim persistence, narrative write, \`ai_calls\` row, trace flush): ` +
         `${ms(slowest.unattributedMs)} ms.`,
+    );
+    lines.push('');
+  }
+
+  if (!ranAnyLlm) {
+    lines.push(
+      '_The background generation path was **not exercised** in this run. Since P0 the ' +
+        'model is not on the request path, so AC-1 is measured against the deterministic ' +
+        'render alone and the LLM rows above are absent rather than zero. Set ' +
+        '`CR_BENCH_LLM=1` to time the pre-computer as well — it takes hours and grades ' +
+        'nothing._',
     );
     lines.push('');
   }
@@ -824,7 +931,7 @@ export function renderBenchTable(result: BenchResult): string {
       'deltas to retrieve and rank._',
   );
   lines.push('');
-  lines.push(
+  if (ranAnyLlm) lines.push(
     '**Read the generation numbers as a LOWER BOUND.** Only extracted events have chunks in ' +
       `the vector store, so retrieval can return at most ~${corpus.extractedEvents} chunks ` +
       `against a \`topK\` of ${result.environment.retrievalTopK}. The Layer 3 prompt is ` +
@@ -1274,6 +1381,7 @@ async function withOneRetry<T>(label: string, attempt: () => Promise<T>): Promis
 export async function runBench(options: BenchRunOptions): Promise<BenchResult> {
   const eventCount = options.eventCount ?? DEFAULT_EVENT_COUNT;
   const briefingCount = options.briefingCount ?? DEFAULT_BRIEFING_COUNT;
+  const measureLlm = options.measureLlm ?? false;
   const signalThreadCount = options.signalThreadCount ?? DEFAULT_SIGNAL_THREAD_COUNT;
   const eventsPerSignalThread = options.eventsPerSignalThread ?? DEFAULT_EVENTS_PER_SIGNAL_THREAD;
   const windowWidthMs = options.windowWidthMs ?? DEFAULT_WINDOW_WIDTH_MS;
@@ -1355,88 +1463,123 @@ export async function runBench(options: BenchRunOptions): Promise<BenchResult> {
     );
     await pipeline.ingestBatch([...corpus.bulk, ...corpus.signal]);
 
-    // ---- seed: Layer 1 over the signal tier only -------------------------
-    // Driven from an explicit thread list rather than `listUnextracted()` — see
-    // the module comment. `listUnextracted()` would return the whole bulk tier,
-    // i.e. thousands of chat calls.
+    // ---- seed: state deltas -----------------------------------------------
+    //
+    // Two routes, and the choice is what makes an AC-1 check cheap.
+    //
+    // With `measureLlm` OFF (the default) the deltas are written DIRECTLY.
+    // The deterministic path reads `state_deltas` and `pending_items`; it does
+    // not care which layer produced them, so driving 24 Layer 1 calls and 8
+    // Layer 2 calls at ~85s each — over an hour on 14b — to produce rows this
+    // measurement never inspects would be paying for realism the number cannot
+    // use. Layer 1/2 latency is F-1's problem and is measured where it belongs.
+    //
+    // With it ON, the real extractors run, exactly as before.
     let extractedEvents = 0;
     let extractionFailures = 0;
-    const extractor = new Layer1Extractor(
-      ollama,
-      extractions,
-      vectors,
-      aiCalls,
-      embed,
-      options.config.model.chat,
-      options.config.promptVersions.layer1,
-      clock,
-    );
-    const signalEventTotal = corpus.signalThreadKeys.length * eventsPerSignalThread;
-    for (const threadKey of corpus.signalThreadKeys) {
-      for (const event of events.listByThread(threadKey)) {
-        // Pinned to the event's own time: `extractions.created_at` and the
-        // artifact's `last_seen_at` then describe when the thing happened.
-        clock.pin(event.occurredAt + 1);
-        report({
-          phase: 'seed:layer1',
-          index: extractedEvents + extractionFailures + 1,
-          total: signalEventTotal,
-          message: `${threadKey} ${event.eventId.slice(0, 8)}`,
-        });
-        try {
-          await withOneRetry(`layer 1 on ${event.eventId}`, () =>
-            extractor.extractEvent(event, traceId),
-          );
-          extractedEvents += 1;
-        } catch (error) {
-          // Skipped, counted and reported. One lost extraction costs this thread
-          // one chunk; losing the whole run to a queued model costs the number.
-          extractionFailures += 1;
-          console.warn(`[bench] SKIPPED layer 1 on ${event.eventId}: ${describe(error)}`);
-        }
-      }
-    }
-
-    // ---- seed: Layer 2 per signal thread ---------------------------------
-    const synthesizer = new Layer2Synthesizer(
-      ollama,
-      retrieval,
-      deltas,
-      pending,
-      watermarks,
-      aiCalls,
-      options.config.model.chat,
-      options.config.promptVersions.layer2,
-      clock,
-    );
     let synthesizedThreads = 0;
     let synthesisFailures = 0;
-    for (const [index, threadKey] of corpus.signalThreadKeys.entries()) {
-      const threadEvents = events.listByThread(threadKey);
-      const last = threadEvents[threadEvents.length - 1];
-      // One minute after the thread's last message: the delta's `created_at`
-      // then falls inside the seeded period, close to the conversation it
-      // describes, which is what makes `currentForWindow` return it for the
-      // windows a user would actually ask about.
-      clock.pin(Math.min(periodEnd - 1, (last?.occurredAt ?? periodEnd - 1) + 60_000));
-      report({
-        phase: 'seed:layer2',
-        index: index + 1,
-        total: corpus.signalThreadKeys.length,
-        message: threadKey,
-      });
-      try {
-        await withOneRetry(`layer 2 on ${threadKey}`, () =>
-          synthesizer.synthesize(threadKey, traceId),
-        );
-        // The scheduler closes the cycle in production; doing it here keeps the
-        // OI-1 "still processing" disclosure honest for the threads we drained.
-        watermarks.markSynthesized(threadKey, clock.now(), null);
-        synthesizedThreads += 1;
-      } catch (error) {
-        synthesisFailures += 1;
-        console.warn(`[bench] SKIPPED layer 2 on ${threadKey}: ${describe(error)}`);
+
+    if (!measureLlm) {
+      for (const [i, threadKey] of corpus.signalThreadKeys.entries()) {
+        const threadEvents = events.listByThread(threadKey);
+        const first = threadEvents[0];
+        if (first === undefined) continue;
+
+        deltas.append({
+          threadKey,
+          summary: `Thread ${i + 1} reached a decision and the work moved forward.`,
+          kind: i % 2 === 0 ? 'decision' : 'progress',
+          confidence: 0.9,
+          sourceEventIds: threadEvents.map((event) => event.eventId),
+          citationArtifactIds: [artifactId(first.source, 'thread', threadKey)],
+          artifactId: artifactId(first.source, 'thread', threadKey),
+          model: 'synthetic:bench',
+          promptVersion: options.config.promptVersions.layer2,
+          createdAt: first.occurredAt + 1,
+        });
       }
+    } else {
+      // ---- seed: Layer 1 over the signal tier only -------------------------
+      // Driven from an explicit thread list rather than `listUnextracted()` — see
+      // the module comment. `listUnextracted()` would return the whole bulk tier,
+      // i.e. thousands of chat calls.
+      const extractor = new Layer1Extractor(
+        ollama,
+        extractions,
+        vectors,
+        aiCalls,
+        embed,
+        options.config.model.chat,
+        options.config.promptVersions.layer1,
+        clock,
+      );
+      const signalEventTotal = corpus.signalThreadKeys.length * eventsPerSignalThread;
+      for (const threadKey of corpus.signalThreadKeys) {
+        for (const event of events.listByThread(threadKey)) {
+          // Pinned to the event's own time: `extractions.created_at` and the
+          // artifact's `last_seen_at` then describe when the thing happened.
+          clock.pin(event.occurredAt + 1);
+          report({
+            phase: 'seed:layer1',
+            index: extractedEvents + extractionFailures + 1,
+            total: signalEventTotal,
+            message: `${threadKey} ${event.eventId.slice(0, 8)}`,
+          });
+          try {
+            await withOneRetry(`layer 1 on ${event.eventId}`, () =>
+              extractor.extractEvent(event, traceId),
+            );
+            extractedEvents += 1;
+          } catch (error) {
+            // Skipped, counted and reported. One lost extraction costs this thread
+            // one chunk; losing the whole run to a queued model costs the number.
+            extractionFailures += 1;
+            console.warn(`[bench] SKIPPED layer 1 on ${event.eventId}: ${describe(error)}`);
+          }
+        }
+      }
+
+      // ---- seed: Layer 2 per signal thread ---------------------------------
+      const synthesizer = new Layer2Synthesizer(
+        ollama,
+        retrieval,
+        deltas,
+        pending,
+        watermarks,
+        aiCalls,
+        options.config.model.chat,
+        options.config.promptVersions.layer2,
+        clock,
+      );
+      for (const [index, threadKey] of corpus.signalThreadKeys.entries()) {
+        const threadEvents = events.listByThread(threadKey);
+        const last = threadEvents[threadEvents.length - 1];
+        // One minute after the thread's last message: the delta's `created_at`
+        // then falls inside the seeded period, close to the conversation it
+        // describes, which is what makes `currentForWindow` return it for the
+        // windows a user would actually ask about.
+        clock.pin(Math.min(periodEnd - 1, (last?.occurredAt ?? periodEnd - 1) + 60_000));
+        report({
+          phase: 'seed:layer2',
+          index: index + 1,
+          total: corpus.signalThreadKeys.length,
+          message: threadKey,
+        });
+        try {
+          await withOneRetry(`layer 2 on ${threadKey}`, () =>
+            synthesizer.synthesize(threadKey, traceId),
+          );
+          // The scheduler closes the cycle in production; doing it here keeps the
+          // OI-1 "still processing" disclosure honest for the threads we drained.
+          watermarks.markSynthesized(threadKey, clock.now(), null);
+          synthesizedThreads += 1;
+        } catch (error) {
+          synthesisFailures += 1;
+          console.warn(`[bench] SKIPPED layer 2 on ${threadKey}: ${describe(error)}`);
+        }
+      }
+
     }
 
     const seededDeltas = deltas.currentForWindow(periodStart, periodEnd).length;
@@ -1478,6 +1621,23 @@ export async function runBench(options: BenchRunOptions): Promise<BenchResult> {
       { logsDir: join(tmp, 'logs') },
     );
 
+    // P0: the request path. No model client is reachable from this object —
+    // that is `TemplateBriefingRenderer`'s own structural guarantee — which is
+    // what makes the number below a measurement of the design rather than of
+    // the machine's current mood.
+    const templateRenderer = new TemplateBriefingRenderer(
+      deltas,
+      pending,
+      briefings,
+      graph,
+      watermarks,
+      aiCalls,
+      options.config,
+      tmp,
+      clock,
+      { logsDir: join(tmp, 'logs') },
+    );
+
     const windows = rollingWindows(periodStart, periodEnd, windowWidthMs, briefingCount);
     const samples: BenchSample[] = [];
     const failureMessages: string[] = [];
@@ -1495,7 +1655,43 @@ export async function runBench(options: BenchRunOptions): Promise<BenchResult> {
       const painted = firstPaintPendingItems(pending, graph);
       const firstPaintMs = performance.now() - paintStart;
 
-      // ---- the LLM path -------------------------------------------------
+      // ---- the DETERMINISTIC path: what `briefing:request` actually does --
+      //
+      // P0 moved the model off the request path, so this is the only timing on
+      // this loop that describes a wait a user experiences. It is measured
+      // unconditionally, including on runs that also exercise the background
+      // generator, because the two answer different questions.
+      const deterministicStart = performance.now();
+      const rendered = await templateRenderer.renderTemplate(window, {
+        briefingId: `bench-det-${index + 1}-${newId().slice(0, 6)}`,
+        reason: 'requested',
+      });
+      const deterministicMs = performance.now() - deterministicStart;
+
+      if (!measureLlm) {
+        samples.push({
+          index: index + 1,
+          windowStart: window.windowStart,
+          windowEnd: window.windowEnd,
+          firstPaintMs,
+          firstPaintItems: painted.length,
+          deterministicMs,
+          deterministicClaims: rendered.claimsAccepted,
+          ranLlm: false,
+          totalMs: Number.NaN,
+          timings: {},
+          outcome: 'template',
+          claimsAccepted: rendered.claimsAccepted,
+          claimsDropped: 0,
+          partial: false,
+          threadsStillProcessing: rendered.threadsStillProcessing,
+          sawFirstToken: false,
+          noContext: false,
+        });
+        continue;
+      }
+
+      // ---- the BACKGROUND path (opt-in) ---------------------------------
       // `generate` directly, NOT `generateWithFallback`: see the module comment.
       const generateStart = performance.now();
       try {
@@ -1510,6 +1706,9 @@ export async function runBench(options: BenchRunOptions): Promise<BenchResult> {
           windowEnd: window.windowEnd,
           firstPaintMs,
           firstPaintItems: painted.length,
+          deterministicMs,
+          deterministicClaims: rendered.claimsAccepted,
+          ranLlm: true,
           totalMs,
           timings: result.timings,
           outcome: result.outcome,
@@ -1553,7 +1752,7 @@ export async function runBench(options: BenchRunOptions): Promise<BenchResult> {
       samples,
       slowest: attributeSlowestRun(samples),
       partialRuns: measured.filter((sample) => sample.partial).length,
-      noTokenRuns: measured.filter((sample) => !sample.sawFirstToken).length,
+      noTokenRuns: measured.filter((sample) => sample.ranLlm && !sample.sawFirstToken).length,
       corpus: {
         ingestedEvents: corpus.bulk.length + corpus.signal.length,
         threads: corpus.threadCount,

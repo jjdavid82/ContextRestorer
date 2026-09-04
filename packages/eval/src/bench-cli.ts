@@ -29,6 +29,10 @@
  *   - `CR_BENCH_THREADS`    — threads given real Layer 1 + Layer 2 (default 8)
  *   - `CR_BENCH_THREAD_EVENTS` — events per signal thread (default 3)
  *   - `CR_BENCH_WINDOW_HOURS`  — briefing window width (default 48)
+ *   - `CR_BENCH_LLM=1`         — ALSO time the background generation path.
+ *                             Off by default since P0: the request path no
+ *                             longer calls a model, so the LLM run measures
+ *                             the pre-computer and takes hours.
  *   - `CR_BENCH_NOTE`          — a caveat about the machine's condition, rendered
  *                                above the table (e.g. "another eval job was
  *                                streaming on the same Ollama instance")
@@ -197,6 +201,9 @@ async function main(): Promise<void> {
   );
   const windowHours = intFromEnv('CR_BENCH_WINDOW_HOURS', 48);
   const note = (process.env['CR_BENCH_NOTE'] ?? '').trim();
+  // P0: the model is no longer on the request path, so the LLM run measures the
+  // background pre-computer — hours long, and not what AC-1 asks about.
+  const measureLlm = (process.env['CR_BENCH_LLM'] ?? '').trim() === '1';
 
   process.stdout.write('Context Restorer — latency benchmark (Task 5.3, AC-1)\n');
   process.stdout.write(`  model     : ${config.model.chat} @ ${config.model.ollamaBaseUrl}\n`);
@@ -222,6 +229,7 @@ async function main(): Promise<void> {
     signalThreadCount,
     eventsPerSignalThread,
     windowWidthMs: windowHours * 60 * 60 * 1000,
+    measureLlm,
     ...(note === '' ? {} : { notes: [note] }),
     onProgress: (progress) => {
       const position =

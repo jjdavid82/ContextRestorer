@@ -51,6 +51,8 @@ import {
 // ---------------------------------------------------------------------------
 
 interface SampleOverrides {
+  deterministicMs?: number;
+  ranLlm?: boolean;
   index?: number;
   firstPaintMs?: number;
   totalMs?: number;
@@ -69,6 +71,14 @@ function sample(overrides: SampleOverrides = {}): BenchSample {
     windowEnd: 2_000,
     firstPaintMs: overrides.firstPaintMs ?? 1,
     firstPaintItems: 3,
+    // P0: the request path's own latency. Defaults small because that is what
+    // a SELECT costs — a fixture defaulting to seconds would quietly make the
+    // AC-1 assertions pass for the wrong reason.
+    deterministicMs: overrides.deterministicMs ?? 3,
+    deterministicClaims: 4,
+    // Defaults true so the pre-P0 LLM-metric tests below keep describing runs
+    // that actually exercised the model.
+    ranLlm: overrides.ranLlm ?? true,
     totalMs: overrides.totalMs ?? 1_000,
     timings: overrides.timings ?? {},
     outcome: overrides.outcome ?? (overrides.noContext === true ? 'no_context' : 'ok'),
@@ -292,36 +302,53 @@ describe('summarize', () => {
 // ---------------------------------------------------------------------------
 
 describe('evaluateAc1', () => {
-  it('passes both thresholds when both P95s are inside them', () => {
+  it('judges AC-1 on the DETERMINISTIC path, which is what the user waits on', () => {
     const checks = evaluateAc1(
       resultOf([
-        sample({ totalMs: 30_000, timings: { firstTokenMs: 2_000 } }),
-        sample({ index: 2, totalMs: 45_000, timings: { firstTokenMs: 4_500 } }),
+        sample({ deterministicMs: 4, totalMs: 300_000, timings: { firstTokenMs: 90_000 } }),
+        sample({ index: 2, deterministicMs: 6, totalMs: 310_000, timings: { firstTokenMs: 95_000 } }),
       ]),
     );
-    expect(checks.map((check) => check.status)).toEqual(['PASS', 'PASS']);
-    expect(checks[0]?.measuredP95).toBe(45_000);
-    expect(checks[0]?.count).toBe(2);
-    expect(checks[1]?.measuredP95).toBe(4_500);
+
+    // P0 moved the model off the request path. The background pre-computer can
+    // take five minutes and it is still a PASS, because nobody waits on it —
+    // grading it against a user-latency bar would measure the wrong thing.
+    expect(checks[0]?.metric).toBe('deterministicMs');
+    expect(checks[0]?.status).toBe('PASS');
+    expect(checks[0]?.measuredP95).toBe(6);
   });
 
-  it('fails the total threshold on the P95, not on the median', () => {
-    // Nineteen fast runs and one slow one: nearest-rank P95 over n=20 is the
-    // 19th value, so a single 61s outlier does NOT fail it, but two do.
+  it('reports the background path without ever failing AC-1 on it', () => {
+    const checks = evaluateAc1(
+      resultOf([sample({ deterministicMs: 5, totalMs: 400_000, timings: { firstTokenMs: 99_000 } })]),
+    );
+
+    const background = checks.filter((check) => check.metric !== 'deterministicMs');
+    expect(background.length).toBeGreaterThan(0);
+    // Reported for visibility, never as a verdict: a PASS beside a 400-second
+    // number would read as 'the 400 seconds were fine'.
+    expect(background.every((check) => check.status === 'REPORTED')).toBe(true);
+    expect(background.every((check) => check.informational === true)).toBe(true);
+  });
+
+  it('fails on the P95, not on the median', () => {
     const fast = Array.from({ length: 19 }, (_unused, i) =>
-      sample({ index: i + 1, totalMs: 10_000, timings: { firstTokenMs: 1_000 } }),
+      sample({ index: i + 1, deterministicMs: 10 }),
     );
+
+    // Nearest-rank P95 over n=20 is the 19th value, so one outlier does not
+    // fail it and two do.
     const oneSlow = evaluateAc1(
-      resultOf([...fast, sample({ index: 20, totalMs: 61_000, timings: { firstTokenMs: 1_000 } })]),
+      resultOf([...fast, sample({ index: 20, deterministicMs: 61_000 })]),
     );
-    expect(oneSlow[0]?.measuredP95).toBe(10_000);
+    expect(oneSlow[0]?.measuredP95).toBe(10);
     expect(oneSlow[0]?.status).toBe('PASS');
 
     const twoSlow = evaluateAc1(
       resultOf([
         ...fast.slice(0, 18),
-        sample({ index: 19, totalMs: 61_000, timings: { firstTokenMs: 1_000 } }),
-        sample({ index: 20, totalMs: 62_000, timings: { firstTokenMs: 1_000 } }),
+        sample({ index: 19, deterministicMs: 61_000 }),
+        sample({ index: 20, deterministicMs: 62_000 }),
       ]),
     );
     expect(twoSlow[0]?.measuredP95).toBe(61_000);
@@ -329,29 +356,19 @@ describe('evaluateAc1', () => {
   });
 
   it('treats the threshold as strict: exactly 60000 ms is a FAIL', () => {
-    const checks = evaluateAc1(
-      resultOf([
-        sample({ totalMs: AC1_TOTAL_P95_MS, timings: { firstTokenMs: AC1_FIRST_TOKEN_P95_MS } }),
-      ]),
-    );
-    expect(checks.map((check) => check.status)).toEqual(['FAIL', 'FAIL']);
+    const checks = evaluateAc1(resultOf([sample({ deterministicMs: AC1_TOTAL_P95_MS })]));
+    expect(checks[0]?.status).toBe('FAIL');
   });
 
   it('reports an unmeasured metric as NO DATA — neither PASS nor FAIL', () => {
-    // The model never produced a token, so there is no first-token latency. A
-    // PASS here would be a claim the run cannot support; a FAIL would accuse it
-    // of something that was not measured.
-    const checks = evaluateAc1(resultOf([sample({ totalMs: 20_000, timings: {} })]));
-    expect(checks[0]?.status).toBe('PASS');
-    expect(checks[1]?.status).toBe('NO DATA');
-    expect(checks[1]?.measuredP95).toBeNull();
-    expect(checks[1]?.count).toBe(0);
+    // A PASS here would be a claim the run cannot support; a FAIL would accuse
+    // it of something that was never measured.
+    const checks = evaluateAc1(resultOf([], ['run #1: connect ECONNREFUSED']));
+    expect(checks[0]?.status).toBe('NO DATA');
+    expect(checks[0]?.measuredP95).toBeNull();
+    expect(checks[0]?.count).toBe(0);
   });
 
-  it('reports NO DATA for both metrics when nothing was measured at all', () => {
-    const checks = evaluateAc1(resultOf([], ['run #1: connect ECONNREFUSED']));
-    expect(checks.map((check) => check.status)).toEqual(['NO DATA', 'NO DATA']);
-  });
 
   it('states the AC-1 thresholds the plan specifies', () => {
     expect(AC1_TOTAL_P95_MS).toBe(60_000);
@@ -463,8 +480,15 @@ describe('renderBenchTable', () => {
   });
 
   it('renders a FAIL when the measured P95 misses the threshold', () => {
+    // A slow BACKGROUND run is no longer an AC-1 failure (P0) — the request
+    // path is what AC-1 grades, so the slow number has to be there.
     const slow = twenty.map((entry) =>
-      sample({ index: entry.index, totalMs: 90_000, timings: { firstTokenMs: 25_000 } }),
+      sample({
+        index: entry.index,
+        deterministicMs: 90_000,
+        totalMs: 90_000,
+        timings: { firstTokenMs: 25_000 },
+      }),
     );
     const table = renderBenchTable(resultOf(slow));
     expect(table).toContain('FAIL');
