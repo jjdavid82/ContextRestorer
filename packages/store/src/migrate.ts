@@ -20,11 +20,22 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
  * the packaged desktop app, each with a different cwd.
  *
  * Two candidates are probed so the same code works whether we are running from
- * `src/` (vitest, ts execution) or from a compiled `dist/` (tsc emits .js but
- * does not copy .sql assets, so `dist/migrate.js` falls back to `../src`).
+ * `src/` (vitest, ts execution) or from a compiled `dist/` (packaged app).
+ *
+ * **`src/migrations` is probed FIRST, and that order is load-bearing.** `tsc`
+ * does not copy `.sql` assets — only `npm run build -w packages/store` does,
+ * via an explicit `cpSync` — so `dist/migrations` is a SNAPSHOT that goes stale
+ * the moment a migration is added without a rebuild. Probing it first meant a
+ * stale snapshot silently shadowed every newer migration: the schema simply
+ * lacked the new columns, and the failure surfaced far away as
+ * `no such column`. Migrations 006 and 007 were both invisible this way.
+ *
+ * In a packaged app `src/` is not shipped, so the second candidate is the only
+ * one that resolves and the behaviour is unchanged. In development the source
+ * of truth wins, which is what it should always have been.
  */
 function defaultMigrationsDir(): string {
-  const candidates = [join(moduleDir, 'migrations'), resolve(moduleDir, '..', 'src', 'migrations')];
+  const candidates = [resolve(moduleDir, '..', 'src', 'migrations'), join(moduleDir, 'migrations')];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }

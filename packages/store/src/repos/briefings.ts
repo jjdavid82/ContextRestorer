@@ -1,5 +1,11 @@
 import type { Database } from 'better-sqlite3';
-import { newId, type Briefing, type BriefingClaim, type BriefingMode } from '@cr/core';
+import {
+  newId,
+  type Briefing,
+  type BriefingClaim,
+  type BriefingMode,
+  type ClaimProvenance,
+} from '@cr/core';
 
 /** Raw `briefings` row shape as returned by better-sqlite3. */
 interface BriefingRow {
@@ -27,6 +33,8 @@ interface ClaimRow {
   text: string;
   citation_artifact_id: string | null;
   delta_id: string | null;
+  /** Migration 007. Defaults to 'template' for rows written before it. */
+  produced_by: string;
 }
 
 export interface CreateBriefingInput {
@@ -76,6 +84,11 @@ export interface AddClaimInput {
    */
   citationArtifactId: string;
   deltaId?: string | null;
+  /**
+   * Who wrote this claim (P0). Defaults to `'template'` — under
+   * deterministic-first that is the normal case, and prose is the addition.
+   */
+  producedBy?: ClaimProvenance;
 }
 
 /** Parse `delta_ids_json`, tolerating (but not inventing) malformed payloads. */
@@ -113,6 +126,7 @@ function toClaim(row: ClaimRow): BriefingClaim {
     text: row.text,
     citationArtifactId: row.citation_artifact_id,
     deltaId: row.delta_id,
+    producedBy: row.produced_by as ClaimProvenance,
   };
 }
 
@@ -231,12 +245,14 @@ export class BriefingsRepo {
   addClaim(input: AddClaimInput): BriefingClaim {
     const claimId = newId();
     const deltaId = input.deltaId ?? null;
+    const producedBy: ClaimProvenance = input.producedBy ?? 'template';
 
     this.db
       .prepare(
         `INSERT INTO briefing_claims
-           (claim_id, briefing_id, ordinal, section, text, citation_artifact_id, delta_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (claim_id, briefing_id, ordinal, section, text, citation_artifact_id, delta_id,
+            produced_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         claimId,
@@ -246,6 +262,7 @@ export class BriefingsRepo {
         input.text,
         input.citationArtifactId,
         deltaId,
+        producedBy,
       );
 
     return {
@@ -256,14 +273,37 @@ export class BriefingsRepo {
       text: input.text,
       citationArtifactId: input.citationArtifactId,
       deltaId,
+      producedBy,
     };
+  }
+
+  /**
+   * Delta ids on this window that ALREADY have model-written prose (P0).
+   *
+   * The synchronous path calls this once per request to decide, per delta,
+   * whether to reuse a background-written claim or render the deterministic one.
+   * Indexed by `(delta_id, produced_by)` because it is on the hot path.
+   */
+  deltasWithProse(deltaIds: readonly string[]): Set<string> {
+    if (deltaIds.length === 0) return new Set();
+
+    const placeholders = deltaIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT delta_id FROM briefing_claims
+          WHERE produced_by = 'llm' AND delta_id IN (${placeholders})`,
+      )
+      .all(...deltaIds) as Array<{ delta_id: string }>;
+
+    return new Set(rows.map((row) => row.delta_id));
   }
 
   /** All claims for a briefing, in narrative order (`ordinal` ascending). */
   listClaims(briefingId: string): BriefingClaim[] {
     const rows = this.db
       .prepare(
-        `SELECT claim_id, briefing_id, ordinal, section, text, citation_artifact_id, delta_id
+        `SELECT claim_id, briefing_id, ordinal, section, text, citation_artifact_id, delta_id,
+                produced_by
            FROM briefing_claims
           WHERE briefing_id = ?
           ORDER BY ordinal ASC`,

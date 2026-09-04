@@ -153,6 +153,18 @@ export interface Briefing {
 }
 
 /** One atomic, individually citable sentence of a briefing narrative. */
+/**
+ * Who wrote a claim (P0, deterministic-first).
+ *
+ * `'template'` — rendered from a stored `StateDelta` with no inference. Under
+ * deterministic-first this is the NORMAL case, not a degraded one.
+ * `'llm'` — written by the background pre-computer through Layer 3.
+ *
+ * Per CLAIM rather than per briefing because a briefing is legitimately mixed:
+ * the pre-computer may have covered some deltas in a window and not others.
+ */
+export type ClaimProvenance = 'template' | 'llm';
+
 export interface BriefingClaim {
   claimId: string;
   briefingId: string;
@@ -163,6 +175,8 @@ export interface BriefingClaim {
   /** Every claim must cite an artifact; null only for template-mode connective text. */
   citationArtifactId: string | null;
   deltaId: string | null;
+  /** Who wrote it. See {@link ClaimProvenance}. */
+  producedBy: ClaimProvenance;
 }
 
 export interface Feedback {

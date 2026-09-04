@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
@@ -136,6 +136,35 @@ describe('openDb — pragmas', () => {
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The stale-dist trap (found while adding migration 007)
+// ---------------------------------------------------------------------------
+
+describe('migrations directory resolution', () => {
+  it('applies EVERY migration file on disk, not a stale subset', () => {
+    // `dist/migrations` is a snapshot written by an explicit `cpSync` in the
+    // store's build script; `tsc` does not copy .sql. When `dist/` was probed
+    // first, a snapshot taken before migrations 006 and 007 existed shadowed
+    // them completely — the schema silently lacked the new columns and the
+    // failure surfaced far away as `no such column: produced_by`.
+    //
+    // This pins the property that broke: the number of applied migrations
+    // equals the number of files in the SOURCE directory.
+    const dir = new URL('../src/migrations/', import.meta.url);
+    const onDisk = readdirSync(dir).filter((f) => f.endsWith('.sql'));
+
+    const db = openDb(':memory:');
+    try {
+      migrate(db);
+      // The highest applied version equals the highest file number, so a
+      // shadowed migration shows up as a version behind the source tree.
+      expect(currentSchemaVersion(db)).toBe(onDisk.length);
+    } finally {
+      db.close();
     }
   });
 });
