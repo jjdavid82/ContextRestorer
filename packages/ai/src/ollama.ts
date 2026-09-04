@@ -103,6 +103,42 @@ function resolveRedirect(from: string, location: string): string {
 }
 
 /**
+ * Render a `fetch` rejection as something an operator can act on.
+ *
+ * Node's `fetch` reports every transport failure as the same
+ * `TypeError: fetch failed` and puts the actual reason one level down, on
+ * `cause` — an undici error carrying a `code` such as `UND_ERR_HEADERS_TIMEOUT`
+ * or `ECONNREFUSED`. This unwraps that chain and reports the elapsed time
+ * alongside it, because "failed after 300.4s" and "failed after 0.01s" are
+ * completely different faults wearing the same message.
+ *
+ * That opacity was not academic. Two eval runs lost half their fixtures to
+ * bare `fetch failed` lines, and `MAX_BATCH_EVENTS` was then lowered from 8 to
+ * 4 on a *hypothesis* about which limit had been hit — because nothing in the
+ * logs said. This is what turns that guess into a fact.
+ *
+ * Exported for testing: the shape of this string is the whole point of it.
+ */
+export function describeFetchFailure(error: unknown, label: string, elapsedMs: number): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+
+  // Bounded: a malformed or self-referential cause chain must not spin here.
+  for (let depth = 0; current !== undefined && current !== null && depth < 5; depth += 1) {
+    if (!(current instanceof Error)) {
+      parts.push(String(current));
+      break;
+    }
+    const code = (current as { code?: unknown }).code;
+    parts.push(typeof code === 'string' ? `${current.message} (${code})` : current.message);
+    current = current.cause;
+  }
+
+  const seconds = (elapsedMs / 1000).toFixed(1);
+  return `ollama: ${label} failed after ${seconds}s — ${parts.join(' <- ')}`;
+}
+
+/**
  * Fetches `url` with the same redirect-validation guard {@link createOllamaClient}
  * uses internally: `redirect: 'manual'`, with every hop re-validated against
  * {@link assertLocal} before it is followed. Exported so other local-only
@@ -111,11 +147,30 @@ function resolveRedirect(from: string, location: string): string {
  *
  * @throws Error tagged `SEC-6` if `url`, or any redirect target, is not loopback.
  */
-export async function guardedFetchUrl(url: string, init?: RequestInit): Promise<Response> {
+export async function guardedFetchUrl(
+  url: string,
+  init?: RequestInit,
+  /** What the caller was doing, for the error message. E.g. `generateJson layer1_extraction`. */
+  label = 'request',
+): Promise<Response> {
   let current = url;
   for (let hop = 0; ; hop += 1) {
     assertLocal(current);
-    const res = await fetch(current, { ...init, redirect: 'manual' });
+    const startedAt = performance.now();
+    let res: Response;
+    try {
+      res = await fetch(current, { ...init, redirect: 'manual' });
+    } catch (error) {
+      // `fetch` rejects with a bare `TypeError: fetch failed` and hides the real
+      // reason on `.cause` — an undici error carrying a `code` such as
+      // `UND_ERR_HEADERS_TIMEOUT` or `ECONNREFUSED`. That opacity is not
+      // academic: it cost two eval runs half their fixtures, reported only as
+      // "fetch failed", and left a batch-size change tuned by guesswork because
+      // nothing said WHICH limit had been hit or after how long.
+      throw new Error(describeFetchFailure(error, label, performance.now() - startedAt), {
+        cause: error,
+      });
+    }
     if (!REDIRECT_STATUSES.has(res.status)) return res;
 
     const location = readLocation(res);
@@ -213,8 +268,8 @@ export function createOllamaClient(
    * would each need to remember the guard, and the one that forgot would be an
    * egress hole that no test of the other two could detect.
    */
-  const guardedFetch = (path: string, init: RequestInit): Promise<Response> =>
-    guardedFetchUrl(`${root}${path}`, init);
+  const guardedFetch = (path: string, init: RequestInit, label: string): Promise<Response> =>
+    guardedFetchUrl(`${root}${path}`, init, label);
 
   return {
     async generateJson<T>(o: GenerateJsonOptions): Promise<GenerateJsonResult<T>> {
@@ -233,7 +288,7 @@ export function createOllamaClient(
           // temperature 0 is Ollama's documented way to get that.
           options: { temperature: 0, seed: MODEL_SEED },
         }),
-      });
+      }, `generateJson '${o.schemaName}' (${chatModel}, non-streaming)`);
       const text = await res.text();
       const latencyMs = Math.round(performance.now() - started);
 
@@ -285,7 +340,7 @@ export function createOllamaClient(
             options: { temperature: 0, seed: MODEL_SEED },
           }),
           ...(o.signal ? { signal: o.signal } : {}),
-        });
+        }, `generateStream (${chatModel})`);
 
         if (!res.ok) {
           throw new Error(`ollama: /api/generate returned ${res.status}`);
@@ -335,7 +390,7 @@ export function createOllamaClient(
           method: 'POST',
           headers: JSON_HEADERS,
           body: JSON.stringify({ model: embedModel, prompt: text }),
-        });
+        }, `embed (${embedModel})`);
         if (!res.ok) {
           throw new Error(`ollama: /api/embeddings returned ${res.status}`);
         }
