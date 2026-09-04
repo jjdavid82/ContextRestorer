@@ -105,6 +105,42 @@ export const LAYER1_INSTRUCTIONS = [
 /** Schema label used for error attribution in the Ollama client. */
 export const LAYER1_SCHEMA_NAME = 'layer1_extraction';
 
+/**
+ * Instructions for the BATCHED form (P3 part 2).
+ *
+ * Same four fields per event, wrapped in an array keyed by `index` so a
+ * response can be mapped back onto the events that produced it. `index` is
+ * required rather than positional: a model that drops or reorders an entry then
+ * costs those events an extraction instead of silently mis-attributing every
+ * classification after the gap, which is the failure that would be hardest to
+ * notice and most damaging.
+ */
+export const LAYER1_BATCH_INSTRUCTIONS = [
+  'Return one JSON object with exactly one key:',
+  '  "extractions": an array with ONE entry per numbered event above.',
+  'Each entry has exactly these keys:',
+  '  "index": the event number it describes',
+  '  "class": one of "decision" | "question" | "status_update" | "noise"',
+  '  "confidence": number between 0.0 and 1.0',
+  '  "participants": array of strings (may be empty)',
+  '  "artifacts": array of strings (include the artifact id for that event)',
+  'Classify every event. JSON only.',
+].join('\n');
+
+/** Schema label for the batched call. */
+export const LAYER1_BATCH_SCHEMA_NAME = 'layer1_extraction_batch';
+
+/**
+ * Most events sent in one batched Layer 1 call (P3 part 2).
+ *
+ * A cap, not a target. The whole point of batching is to stop paying one
+ * ~29-85s model call per event, but prompt evaluation is the dominant term in
+ * that latency, so an unbounded batch would trade N calls for one call that is
+ * nearly as slow — and would make a single malformed response cost the whole
+ * thread rather than one burst of it.
+ */
+export const MAX_BATCH_EVENTS = 8;
+
 /** `ai_calls.layer` value for extraction. */
 const LAYER = 1;
 
@@ -141,6 +177,21 @@ export interface Layer1Response {
 }
 
 /** Outcome of one {@link Layer1Extractor.extractEvent} call. */
+/** What one {@link Layer1Extractor.extractThread} pass did (P3 part 2). */
+export interface ThreadExtractResult {
+  /** Events the model classified and that now have an `extractions` row. */
+  extracted: number;
+  /** Events the deterministic pre-filter handled without a model call (P3 part 1). */
+  prefiltered: number;
+  /**
+   * Events the model did not classify. They stay unextracted, so
+   * `listUnextracted()` re-queues them for the next sweep.
+   */
+  unclassified: number;
+  /** Model calls made. The number this whole change exists to reduce. */
+  modelCalls: number;
+}
+
 export interface ExtractResult {
   /**
    * `'extracted'` — an `Extraction` was persisted (including for `noise`).
@@ -210,6 +261,41 @@ function asStringArray(value: unknown): string[] | null {
  * Exported so the eval harness can score raw model responses with exactly the
  * validation the pipeline applies.
  */
+/**
+ * Map a batched response onto the events that produced it (P3 part 2).
+ *
+ * Returns an array of `count` slots, each holding a validated response or
+ * `null`. A `null` slot means that event was not classified — it stays
+ * unextracted and `listUnextracted()` re-queues it — which is the same
+ * behaviour a single-event schema failure has always had.
+ *
+ * Entries with an out-of-range, duplicated or non-integer `index` are DISCARDED
+ * rather than positioned by arrival order. Guessing at a mis-indexed entry would
+ * attach one event's classification to another's row, and a wrong extraction is
+ * worse than a missing one: the missing one gets retried, the wrong one becomes
+ * a fact the rest of the pipeline trusts.
+ */
+export function parseLayer1Batch(value: unknown, count: number): Array<Layer1Response | null> {
+  const slots: Array<Layer1Response | null> = new Array<Layer1Response | null>(count).fill(null);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return slots;
+
+  const list = (value as Record<string, unknown>)['extractions'];
+  if (!Array.isArray(list)) return slots;
+
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    const index = (entry as Record<string, unknown>)['index'];
+    if (typeof index !== 'number' || !Number.isInteger(index)) continue;
+    if (index < 0 || index >= count) continue;
+    if (slots[index] !== null) continue; // duplicate: keep the first, discard the rest
+
+    const parsed = parseLayer1Response(entry);
+    if (parsed !== null) slots[index] = parsed;
+  }
+
+  return slots;
+}
+
 export function parseLayer1Response(value: unknown): Layer1Response | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
@@ -377,6 +463,154 @@ export class Layer1Extractor {
 
     this.logCall(traceId, tally, 'ok');
 
+    const extraction = await this.persistExtraction(event, parsed);
+    return { status: 'extracted', extraction };
+  }
+
+  /**
+   * Extract a whole thread's worth of events in ONE model call (P3 part 2).
+   *
+   * ### Why this exists
+   *
+   * `extractEvent` is one call per event, measured at ~29s on `qwen2.5:7b` and
+   * **~85s on `qwen2.5:14b`** (bench seeding, 2026-09-03/04). At 85s the
+   * benchmark's own 3,000-event corpus is ~70 hours of local inference — which
+   * is why every quality number this project has reported was measured against
+   * a pipeline whose first stage was mostly skipped (F-1). Layer 2 already
+   * works per thread; Layer 1 was the odd one out.
+   *
+   * ### What it does NOT change
+   *
+   * The row and chunk contract is identical: one `extractions` row and one
+   * chunk per event. This is a batching change, not a schema change, so
+   * retrieval, citations, the eval's per-event counting and
+   * `listUnextracted()`'s recovery sweep all behave exactly as before. The only
+   * thing that changes is how many times the model is asked.
+   *
+   * ### Failure is per event, not per batch
+   *
+   * A response that classifies six of eight events writes six rows; the other
+   * two stay unextracted and the next sweep re-queues them — the same
+   * behaviour a single-event schema failure has always had.
+   *
+   * Exactly ONE `ai_calls` row per batched call. That row now represents N
+   * events, which is the honest accounting: it was one call.
+   */
+  async extractThread(events: readonly Event[], traceId: string): Promise<ThreadExtractResult> {
+    const result: ThreadExtractResult = {
+      extracted: 0,
+      prefiltered: 0,
+      unclassified: 0,
+      modelCalls: 0,
+    };
+    if (events.length === 0) return result;
+
+    // The pre-filter runs FIRST and per event, so structural noise never enters
+    // a prompt at all — batching must not smuggle back the cost P3 part 1
+    // removed.
+    const candidates: Event[] = [];
+    for (const event of events) {
+      const skip = this.skipNoise ? prefilterReason(event) : undefined;
+      if (skip !== undefined) {
+        this.persistNoise(event);
+        result.prefiltered += 1;
+        continue;
+      }
+      candidates.push(event);
+    }
+
+    for (let from = 0; from < candidates.length; from += MAX_BATCH_EVENTS) {
+      const batch = candidates.slice(from, from + MAX_BATCH_EVENTS);
+      const outcome = await this.extractBatch(batch, traceId);
+      result.extracted += outcome.extracted;
+      result.unclassified += outcome.unclassified;
+      result.modelCalls += 1;
+    }
+
+    return result;
+  }
+
+  /** One batched model call over at most {@link MAX_BATCH_EVENTS} events. */
+  private async extractBatch(
+    batch: readonly Event[],
+    traceId: string,
+  ): Promise<{ extracted: number; unclassified: number }> {
+    // T-1: every event body reaches the model through ONE wrapped block. The
+    // per-event numbering sits INSIDE the fence with the content, so a body that
+    // imitates a numbering line cannot escape into the trusted half.
+    const rendered = batch
+      .map(
+        (event, index) =>
+          `[event ${index}] [artifact:${eventArtifactId(event)}]\n${eventText(event)}`,
+      )
+      .join('\n\n');
+
+    const { system, prompt } = assemblePrompt({
+      system: LAYER1_SYSTEM_PROMPT,
+      wrappedContent: wrapUntrusted(rendered, `layer1-batch:${batch.length}`),
+      instructions: LAYER1_BATCH_INSTRUCTIONS,
+    });
+
+    const tally: CallTally = { latencyMs: 0 };
+    let slots: Array<Layer1Response | null>;
+    try {
+      const response = await this.ollama.generateJson<unknown>({
+        prompt,
+        system,
+        schemaName: LAYER1_BATCH_SCHEMA_NAME,
+      });
+      tally.latencyMs += response.latencyMs;
+      if (typeof response.tokensIn === 'number') tally.tokensIn = response.tokensIn;
+      if (typeof response.tokensOut === 'number') tally.tokensOut = response.tokensOut;
+      slots = parseLayer1Batch(response.value, batch.length);
+    } catch (err) {
+      // NFR-8: a failure that produced no response is still a model call.
+      this.logCall(traceId, tally, 'error');
+      throw err;
+    }
+
+    let extracted = 0;
+    for (const [index, parsed] of slots.entries()) {
+      const event = batch[index];
+      if (event === undefined || parsed === null) continue;
+      await this.persistExtraction(event, parsed);
+      extracted += 1;
+    }
+
+    const unclassified = batch.length - extracted;
+    this.logCall(traceId, tally, unclassified === batch.length ? 'schema_fail' : 'ok');
+    return { extracted, unclassified };
+  }
+
+  /**
+   * Write the `noise` extraction row for a pre-filtered event (P3).
+   *
+   * Deliberately still WRITES a row rather than leaving the event unextracted:
+   * `listUnextracted()` is the recovery sweep's queue, so an event with no row
+   * would be re-examined on every sweep forever. It also keeps the eval
+   * harness's negatives intact — a filtered event is still a labelled `noise`
+   * observation, which is exactly what it would have been had the model run.
+   *
+   * `model` records the filter rather than the chat model, so the audit trail
+   * never claims a model produced a classification it never saw. No chunk is
+   * embedded, matching what `extractEvent` does for a model-classified `noise`.
+   */
+  /**
+   * Embed the chunk, then write the `extractions` row — in that order.
+   *
+   * The extraction row is the "this event is done" marker the recovery sweep
+   * reads, so writing it LAST means a crash (or an embedding failure) between
+   * the two steps leaves the event unextracted and therefore retried. The chunk
+   * id is deterministic, so the retry overwrites rather than duplicates.
+   *
+   * Shared by the single-event and batched paths so the two cannot drift: a
+   * batched extraction must produce a byte-identical row to the one
+   * `extractEvent` would have written.
+   */
+  private async persistExtraction(event: Event, parsed: Layer1Response): Promise<Extraction> {
+    const text = eventText(event);
+    const artifactId = eventArtifactId(event);
+
     // Noise is persisted (the eval harness needs negatives) but never embedded:
     // retrieval must not spend its top-K budget on chatter, and an un-citable
     // acknowledgement has no business in the citation allowlist.
@@ -405,23 +639,9 @@ export class Layer1Extractor {
       createdAt: this.clock.now(),
     };
     this.extractions.insert(extraction);
-
-    return { status: 'extracted', extraction };
+    return extraction;
   }
 
-  /**
-   * Write the `noise` extraction row for a pre-filtered event (P3).
-   *
-   * Deliberately still WRITES a row rather than leaving the event unextracted:
-   * `listUnextracted()` is the recovery sweep's queue, so an event with no row
-   * would be re-examined on every sweep forever. It also keeps the eval
-   * harness's negatives intact — a filtered event is still a labelled `noise`
-   * observation, which is exactly what it would have been had the model run.
-   *
-   * `model` records the filter rather than the chat model, so the audit trail
-   * never claims a model produced a classification it never saw. No chunk is
-   * embedded, matching what `extractEvent` does for a model-classified `noise`.
-   */
   private persistNoise(event: Event): Extraction {
     const extraction: Extraction = {
       extractionId: newId(),

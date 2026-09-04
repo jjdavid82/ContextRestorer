@@ -7,7 +7,7 @@
 import { app, BrowserWindow, dialog, powerMonitor, safeStorage } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig, newId, systemClock, type AppConfig } from '@cr/core';
+import { loadConfig, newId, systemClock, type AppConfig, type Event } from '@cr/core';
 import {
   BriefingGenerator,
   BriefingPrecomputer,
@@ -781,14 +781,32 @@ function createLayer12(
   );
 
   const runExtractionSweep = async (): Promise<void> => {
+    // P3 part 2: grouped by thread, one model call per group rather than one
+    // per event. Layer 1 was measured at ~29s per call on 7b and ~85s on 14b,
+    // which is why every quality number this project has reported was measured
+    // against a pipeline whose first stage was mostly skipped (F-1). Layer 2
+    // has always worked per thread; this makes Layer 1 match.
+    //
+    // Grouping is done here rather than in the extractor because `listUnextracted()`
+    // returns a flat, time-ordered queue and only the caller knows it is safe to
+    // reorder: the extractor's contract is still one row and one chunk per event,
+    // in any order.
+    const byThread = new Map<string, Event[]>();
     for (const event of events.listUnextracted()) {
+      const bucket = byThread.get(event.threadKey);
+      if (bucket === undefined) byThread.set(event.threadKey, [event]);
+      else bucket.push(event);
+    }
+
+    for (const [threadKey, batch] of byThread) {
       try {
-        await extractor.extractEvent(event, newId());
+        await extractor.extractThread(batch, newId());
       } catch (error) {
-        // Never let one bad event stop the sweep: `listUnextracted()` will
-        // offer this same event again on the next sweep, which is the
-        // self-healing property the whole design relies on.
-        console.error('[layer1] extraction failed', event.eventId, error);
+        // Never let one bad thread stop the sweep: every event in it stays
+        // unextracted, so `listUnextracted()` offers them again next time.
+        // That is the same self-healing property the per-event loop had, at
+        // thread granularity.
+        console.error('[layer1] thread extraction failed', threadKey, error);
       }
     }
   };

@@ -258,12 +258,18 @@ you" / "Changed while you were out" remain the internal names for the two groups
   event since the connectors were built and was **never read by anything**. At ~29s per Layer 1
   call this is the cheapest available reduction, and it invents no new judgement — Layer 1's
   own prompt already offers `noise` for exactly this set.
-- **STILL OUTSTANDING: LLM only on candidate *threads*.** This is the larger half and the one
-  that actually moves the order of magnitude — 3,000 events across 174 threads is 174 calls
-  instead of 3,000. It changes Layer 1's contract (one `extractions` row and one chunk per
-  event), so it touches the store, the eval harness's per-event assumptions, and the D-7
-  debounce's relationship to extraction. It needs its own design pass rather than an
-  incremental edit.
+- ~~LLM only on candidate *threads*~~ — **DONE 2026-09-04**. `extractThread` sends a thread's
+  events in one call, capped at 8 per batch; the sweep groups `listUnextracted()` by thread.
+  Measured motivation: ~29s per call on 7b, **~85s on 14b**, which puts the bench's own
+  3,000-event corpus at ~70 hours.
+
+  The contract change I expected did not materialise. Batching turned out to be orthogonal to
+  the row shape: one `extractions` row and one chunk per event still, so retrieval, citations,
+  the eval's per-event counting and `listUnextracted()`'s recovery sweep all behave exactly as
+  before. Failure stays per event — a response that classifies six of eight writes six rows and
+  leaves two queued — and an entry with an out-of-range or duplicated `index` is discarded
+  rather than positioned by arrival order, because a wrong extraction is worse than a missing
+  one: the missing one is retried, the wrong one becomes a fact the pipeline trusts.
 - One question per candidate thread: *is something owed by this person here, and which
   message proves it?* — with a required artifact id in the answer.
 - Layer 3's job shrinks to ordering and compressing already-grounded facts.
@@ -415,7 +421,7 @@ out of agreement as work landed; it is now the single record of what is done._
 | # | Item | Why it has not landed |
 |---|---|---|
 | ~~1~~ | ~~**P0 — deterministic-first**~~ — **DONE 2026-09-04** | Designed in `p0-deterministic-first-design.md`, signed off on its §9 Q1, and implemented in four slices: per-claim provenance (007), the deterministic request path, `BriefingPrecomputer` on the D-7 tick, and removal of the degradation banner. Amended §7.8 and OI-1 as **OI-7** in the requirements doc. §9 Q3 (prose staleness) and Q4 (battery/metered power) remain open. |
-| 2 | **P3 part 2 — LLM on candidate *threads*** | The half that moves the order of magnitude: 3,000 events across 174 threads is 174 calls, not 3,000. Changes Layer 1's contract (one extraction row and one chunk *per event*), so it touches the store, the eval's per-event assumptions and D-7. |
+| ~~2~~ | ~~**P3 part 2 — LLM on candidate *threads***~~ — **DONE 2026-09-04** | `extractThread` batches a thread's events into one call (cap 8), and the extraction sweep groups by thread. It turned out NOT to change Layer 1's contract: one `extractions` row and one chunk per event still, so retrieval, citations, the eval's per-event counting and `listUnextracted()` are untouched. Only the number of model calls changes. |
 | ~~3~~ | ~~**P4 part 2 — structured output**~~ — **DONE 2026-09-03** | NDJSON, one claim per line. `SectionRouter` and `HEADING_RE` deleted; `prompt_versions.layer3` bumped to v2. The marker regex survives for the deterministic template, which composes its own text and has no model to constrain. |
 | 4 | **0c — label fixtures to n≈70** | Untouched, and it is the binding constraint on any releasable quality claim (OI-5). Human labelling effort; no run advances it. |
 | 5 | **0b — a valid quality baseline** | See below. Currently owed again. |
