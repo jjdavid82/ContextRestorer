@@ -414,7 +414,7 @@ out of agreement as work landed; it is now the single record of what is done._
 
 | # | Item | Why it has not landed |
 |---|---|---|
-| 1 | **P0 — deterministic-first** | The largest item in this document, and untouched. It inverts §7.8's fallback semantics and raises questions this proposal does not answer (when the LLM version swaps in, what happens to persisted claims, what `mode` then means). Needs its own design doc. |
+| 1 | **P0 — deterministic-first** | **Design written 2026-09-03** — `p0-deterministic-first-design.md`. Not implemented, and it needs sign-off first: the design REJECTS this proposal's own hot-swap sketch in favour of background pre-computation, on the grounds that prose arriving 250-360s later arrives after a successful session has already ended (NFR-10 is trying to make the session short). Four open questions in its §9. |
 | 2 | **P3 part 2 — LLM on candidate *threads*** | The half that moves the order of magnitude: 3,000 events across 174 threads is 174 calls, not 3,000. Changes Layer 1's contract (one extraction row and one chunk *per event*), so it touches the store, the eval's per-event assumptions and D-7. |
 | ~~3~~ | ~~**P4 part 2 — structured output**~~ — **DONE 2026-09-03** | NDJSON, one claim per line. `SectionRouter` and `HEADING_RE` deleted; `prompt_versions.layer3` bumped to v2. The marker regex survives for the deterministic template, which composes its own text and has no model to constrain. |
 | 4 | **0c — label fixtures to n≈70** | Untouched, and it is the binding constraint on any releasable quality claim (OI-5). Human labelling effort; no run advances it. |
