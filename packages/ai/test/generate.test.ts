@@ -313,15 +313,35 @@ describe('sections', () => {
     await makeGenerator().generate(WINDOW);
 
     const system = sentSystem();
-    const positions = BRIEFING_SECTIONS.map((section) => system.indexOf(`## ${section}`));
+    // Quoted values of the `section` FIELD since P4 part 2, not `## headings`.
+    // This assertion previously looked for markdown and kept passing after the
+    // parser moved to NDJSON — because the prompt had silently not moved with
+    // it. It is the assertion that should have caught that, so it is now
+    // written against the shape the parser actually expects.
+    const positions = BRIEFING_SECTIONS.map((section) => system.indexOf(`"${section}"`));
 
     expect(positions.every((p) => p >= 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
-    // And the user-prompt instruction names the first section explicitly.
     // P4 part 2: the contract is one JSON object per line, so the instruction
     // names the format rather than a leading markdown heading. The SECTION
     // NAMES are still pinned below — they remain the vocabulary.
     expect(sentPrompt()).toContain('one JSON object per line');
+
+    // The SYSTEM prompt must agree with the parser. This assertion exists
+    // because it did not: the P4-part-2 edit that swapped the parser to NDJSON
+    // silently failed to replace the prompt, so the model was still being told
+    // to emit markdown headings and bullets while `ClaimLineBuffer` discarded
+    // every line as malformed. Every test passed, because they feed scripted
+    // NDJSON tokens straight into the buffer and never exercise the prompt.
+    // Only a real-model run produced the symptom: zero claims.
+    const systemPrompt = sentSystem();
+    expect(systemPrompt).toContain('ONE JSON object per line');
+    expect(systemPrompt).not.toContain('markdown headings');
+    expect(systemPrompt).not.toContain('One bullet per claim');
+    // Ids are a FIELD now, and a 14b run proved the model will decompose a
+    // bracketed `[artifact:x:y:z]` label into just `z` unless told otherwise —
+    // losing every claim to `not_in_context`.
+    expect(systemPrompt).toContain('COPIED CHARACTER FOR CHARACTER');
   });
 
   it('persists claims in section order even when the model emits sections out of order', async () => {

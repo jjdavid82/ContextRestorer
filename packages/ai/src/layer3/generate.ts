@@ -138,7 +138,7 @@ function canonicalSection(label: string): BriefingSection {
 // ---------------------------------------------------------------------------
 
 /**
- * System prompt for `layer3-brief.v1`.
+ * System prompt for `layer3-brief.v2` — the NDJSON claim contract (P4 part 2).
  *
  * `config/prompts/layer3-brief.v1.md` is the human-readable source of truth and
  * the thing `promptVersion` names; this constant is its executable form. The
@@ -150,26 +150,32 @@ function canonicalSection(label: string): BriefingSection {
 const SYSTEM_PROMPT = [
   'You write a briefing that tells one person what happened while they were away.',
   '',
-  'Emit exactly these four sections, in this order, as level-2 markdown headings:',
+  'Output format: ONE JSON object per line. No array, no wrapper object, no markdown,',
+  'no headings, no bullets, no code fences, no blank lines. Each line is exactly:',
   '',
-  ...BRIEFING_SECTIONS.map((section) => `## ${section}`),
+  '{"section": "<section>", "claim": "<one sentence>", "artifact_ids": ["<id>"]}',
   '',
-  'Section contents:',
+  'The "section" value must be exactly one of:',
+  ...BRIEFING_SECTIONS.map((section) => `  "${section}"`),
+  '',
+  'Section meanings:',
   '- Waiting on you   — outstanding obligations that are on this person right now.',
   '- What moved       — decisions made and work that visibly advanced.',
   '- Quietly resolved — questions, blockers, or obligations that closed without their input.',
   '- Worth knowing    — context they would want but that requires nothing from them.',
   '',
   'Rules:',
-  '- One bullet per claim. One claim per bullet. Never combine two claims into one bullet.',
-  '- Every bullet ends with one or more citation markers of the form [artifact:<id>].',
-  '  The markers are the last thing on the line.',
-  '- Use only artifact ids that appear in the provided content. Do not invent ids.',
-  '- Omit any claim you cannot cite. A missing claim is acceptable; an uncited claim is not.',
+  '- One claim per line. Never combine two claims into one line.',
+  '- Each "artifact_ids" entry must be an id COPIED CHARACTER FOR CHARACTER from an',
+  '  artifact_id line in the content. Copy the WHOLE id, including every colon-separated',
+  '  part. Do not shorten it, do not split it, do not invent one.',
+  '- "artifact_ids" must not be empty. Omit any claim you cannot cite: a missing claim is',
+  '  acceptable, an uncited claim is not.',
+  '- Do not put citation markers inside "claim". The ids belong in "artifact_ids".',
   '- Past tense throughout.',
-  '- No preamble, no introduction, no "here is your briefing", no summary of the summary.',
+  '- No preamble, no introduction, no summary of the summary.',
   '- No sign-off, no closing line, no follow-up questions, no offers to help.',
-  '- Emit every heading even when its section has no bullets; leave such a section empty.',
+  '- A section with nothing to report simply has no lines. Do not emit empty placeholders.',
   '- Plain factual sentences. No adjectives of importance, no urgency language you were not',
   '  given, no speculation about what the person should do.',
 ].join('\n');
@@ -230,7 +236,7 @@ function renderContext(
 
   for (const chunk of chunks) {
     parts.push(
-      `[artifact:${chunk.artifactId}] [thread: ${chunk.threadKey}] ` +
+      `artifact_id: ${chunk.artifactId}\n[thread: ${chunk.threadKey}] ` +
         `[at: ${isoOrUnknown(chunk.occurredAt)}]\n${chunk.text}`,
     );
   }
@@ -239,7 +245,7 @@ function renderContext(
     const lines = [
       `[state_change] [thread: ${delta.threadKey}] [kind: ${delta.kind}] ` +
         `[at: ${isoOrUnknown(delta.createdAt)}] ` +
-        delta.citationArtifactIds.map((id) => `[artifact:${id}]`).join(' '),
+        delta.citationArtifactIds.map((id) => `artifact_id: ${id}`).join('\n'),
       delta.summary,
     ];
     // D-6: the ONLY superseded content that is allowed into a prompt, and only
