@@ -324,7 +324,7 @@ describe('fallback chain — Ollama unreachable', () => {
     seedThreeDeltas();
 
     const result = await generateWithFallback(
-      makeGenerator(['## What moved\n', '- unused [artifact:slack:thread:C1:1]\n']),
+      makeGenerator([`${JSON.stringify({ section: 'What moved', claim: "unused", artifact_ids: ["slack:thread:C1:1"] })}\n`]),
       makeRenderer(),
       BASE_URL,
       MODEL,
@@ -347,7 +347,7 @@ describe('fallback chain — Ollama unreachable', () => {
     seedThreeDeltas();
 
     await generateWithFallback(
-      makeGenerator(['## What moved\n', '- unused [artifact:slack:thread:C1:1]\n']),
+      makeGenerator([`${JSON.stringify({ section: 'What moved', claim: "unused", artifact_ids: ["slack:thread:C1:1"] })}\n`]),
       makeRenderer(),
       BASE_URL,
       MODEL,
@@ -385,7 +385,7 @@ describe('fallback chain — Ollama unreachable', () => {
     retrieval.error = new Error('vector store is down');
 
     const result = await generateWithFallback(
-      makeGenerator(['## What moved\n']),
+      makeGenerator([]),
       makeRenderer(),
       BASE_URL,
       MODEL,
@@ -683,10 +683,9 @@ describe('mid-stream failure', () => {
    * existing behaviour, unchanged by this task.
    */
   const DYING_TOKENS = [
-    '## What moved\n',
-    `- Alpha was decided [artifact:${A1}]\n`,
-    `- Bravo was decided [artifact:${A2}]\n`,
-    `- Charlie was decided [artifact:${A3}]\n`,
+    `${JSON.stringify({ section: 'What moved', claim: "Alpha was decided", artifact_ids: [A1] })}\n`,
+    `${JSON.stringify({ section: 'What moved', claim: "Bravo was decided", artifact_ids: [A2] })}\n`,
+    `${JSON.stringify({ section: 'What moved', claim: "Charlie was decided", artifact_ids: [A3] })}\n`,
   ];
 
   it('keeps the accepted claims, appends the uncovered deltas from the template, and marks partial', async () => {
@@ -694,7 +693,7 @@ describe('mid-stream failure', () => {
     retrieval.chunks = [];
 
     const result = await generateWithFallback(
-      makeGenerator(DYING_TOKENS, { throwAtIndex: 3 }),
+      makeGenerator(DYING_TOKENS, { throwAtIndex: 1 }),
       makeRenderer(),
       BASE_URL,
       MODEL,
@@ -733,7 +732,7 @@ describe('mid-stream failure', () => {
     retrieval.chunks = [];
 
     await generateWithFallback(
-      makeGenerator(DYING_TOKENS, { throwAtIndex: 3 }),
+      makeGenerator(DYING_TOKENS, { throwAtIndex: 1 }),
       makeRenderer(),
       BASE_URL,
       MODEL,
@@ -756,7 +755,7 @@ describe('mid-stream failure', () => {
     retrieval.chunks = [];
 
     const result = await generateWithFallback(
-      makeGenerator(DYING_TOKENS, { throwAtIndex: 3 }),
+      makeGenerator(DYING_TOKENS, { throwAtIndex: 1 }),
       makeRenderer(),
       BASE_URL,
       MODEL,
@@ -826,9 +825,8 @@ describe('mid-stream failure', () => {
 
     const result = await generateWithFallback(
       makeGenerator([
-        '## What moved\n',
-        `- Alpha was decided [artifact:${A1}]\n`,
-        `- Bravo was decided [artifact:${A2}]\n`,
+        `${JSON.stringify({ section: 'What moved', claim: "Alpha was decided", artifact_ids: [A1] })}\n`,
+        `${JSON.stringify({ section: 'What moved', claim: "Bravo was decided", artifact_ids: [A2] })}\n`,
       ]),
       makeRenderer(),
       BASE_URL,
@@ -895,7 +893,7 @@ describe('X-3 — the fallback chain', () => {
     retrieval.chunks = [];
 
     const healthyRun = await generateWithFallback(
-      makeGenerator(['## What moved\n', `- Alpha was decided [artifact:${A1}]\n`]),
+      makeGenerator([`${JSON.stringify({ section: 'What moved', claim: "Alpha was decided", artifact_ids: [A1] })}\n`]),
       makeRenderer(),
       BASE_URL,
       MODEL,

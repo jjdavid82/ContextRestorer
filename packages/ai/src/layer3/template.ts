@@ -464,6 +464,8 @@ export class TemplateBriefingRenderer {
       // no model, so there is no generated prose for the F-4 grounding check to
       // have an opinion about.
       groundingFailures: 0,
+      // No model ran, so there was no NDJSON stream to malform.
+      malformedLines: 0,
       // No citation GATE ran: the template only renders rows whose citations
       // already resolve in the graph, so its drops have exactly one cause and it
       // is not one of the gate's four reasons. Reporting `{}` rather than

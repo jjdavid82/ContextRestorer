@@ -4,7 +4,7 @@
     "embed": "nomic-embed-text",
     "ollamaBaseUrl": "http://localhost:11434"
   },
-  "promptVersions": { "layer1": "v1", "layer2": "v1", "layer3": "v1" },
+  "promptVersions": { "layer1": "v1", "layer2": "v1", "layer3": "v2" },
   "debounce": {
     "slack": { "quietWindowMs": 300000, "hardCapMs": 1800000 },
     "gmail": { "quietWindowMs": 300000, "hardCapMs": 1800000 }

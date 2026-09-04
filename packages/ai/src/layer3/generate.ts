@@ -76,7 +76,7 @@ import { assemblePrompt } from '../prompt/assemble.js';
 import { wrapUntrusted } from '../prompt/wrap.js';
 import { rankDeltas, toRankableDelta, type RankableDeltaContext } from '../ranker.js';
 import type { CitationGate, DropReason, GroundingOptions } from './citationGate.js';
-import { ClaimBuffer } from './citationGate.js';
+import { ClaimLineBuffer } from './claimLines.js';
 
 // ---------------------------------------------------------------------------
 // Sections
@@ -104,7 +104,7 @@ const SECTION_ORDER = new Map<string, number>(
   BRIEFING_SECTIONS.map((section, index) => [section, index]),
 );
 
-/** Lowercased heading text → canonical section name. */
+/** Lowercased section name → canonical spelling, for the model's own `section` field. */
 const SECTION_BY_LABEL = new Map<string, BriefingSection>(
   BRIEFING_SECTIONS.map((section) => [section.toLowerCase(), section]),
 );
@@ -119,14 +119,19 @@ const SECTION_BY_LABEL = new Map<string, BriefingSection>(
  */
 const DEFAULT_SECTION: BriefingSection = 'Worth knowing';
 
-/** An ATX markdown heading. The space after the hashes is required, so `#tag` is prose. */
-const HEADING_RE = /^\s{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/;
-
-/** Canonical section for a heading's text, or `undefined` when unrecognised. */
-function canonicalSection(label: string): BriefingSection | undefined {
-  return SECTION_BY_LABEL.get(label.trim().replace(/[.:;,\s]+$/, '').toLowerCase());
+/**
+ * Canonical section for the model's `section` FIELD, falling back to
+ * {@link DEFAULT_SECTION}.
+ *
+ * Since P4 part 2 this reads a field rather than parsing a markdown heading,
+ * so there is no heading regex, no trailing-punctuation stripping, and no
+ * "an unrecognised heading leaves the current section unchanged" ambiguity.
+ * An unknown value is filed under the one section that asserts nothing about
+ * urgency, which is the same safe default the old router used.
+ */
+function canonicalSection(label: string): BriefingSection {
+  return SECTION_BY_LABEL.get(label.trim().toLowerCase()) ?? DEFAULT_SECTION;
 }
-
 // ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
@@ -172,7 +177,8 @@ const SYSTEM_PROMPT = [
  * Trusted instructions, placed AFTER the fenced block so the model reads the
  * real task last. Never interpolate artifact text into this string.
  */
-const INSTRUCTIONS = `Write the briefing. Markdown only, starting with "## ${BRIEFING_SECTIONS[0]}".`;
+const INSTRUCTIONS =
+  'Write the briefing as one JSON object per line, nothing else. Start with the first line.';
 
 // ---------------------------------------------------------------------------
 // Rendering the untrusted payload
@@ -250,56 +256,18 @@ function renderContext(
 // Streaming: bullets → sectioned claims
 // ---------------------------------------------------------------------------
 
-/** A whole claim, with the section that was in force when it was emitted. */
+/** A whole claim as the model emitted it, before gating (P4 part 2). */
 interface CollectedClaim {
   section: BriefingSection;
   text: string;
-}
-
-/**
- * Splits {@link ClaimBuffer} output into headings and claim bodies.
- *
- * `ClaimBuffer` knows about bullet boundaries only, so a section heading arrives
- * glued to the tail of the preceding bullet ("…the cert. \n\n## Worth knowing").
- * This router pulls those apart: heading lines switch the current section, and
- * the surrounding prose is emitted as a claim under whichever section was in
- * force *before* the heading it preceded.
- *
- * An unrecognised heading leaves the current section unchanged rather than
- * inventing a fifth section — the prompt forbids extra sections, and a claim
- * under a hallucinated heading is still a claim that must be filed somewhere the
- * reader can trust.
- */
-class SectionRouter {
-  private section: BriefingSection = DEFAULT_SECTION;
-
-  constructor(private readonly onClaim: (claim: CollectedClaim) => void) {}
-
-  /** Route one whole claim as handed over by `ClaimBuffer`. */
-  push(rawClaim: string): void {
-    let pending: string[] = [];
-
-    for (const line of rawClaim.split('\n')) {
-      const heading = HEADING_RE.exec(line);
-      if (heading === null) {
-        pending.push(line);
-        continue;
-      }
-
-      this.flush(pending);
-      pending = [];
-      this.section = canonicalSection(heading[1] ?? '') ?? this.section;
-    }
-
-    this.flush(pending);
-  }
-
-  /** Emit `lines` as one claim, collapsing the wrapping the model chose. */
-  private flush(lines: readonly string[]): void {
-    const text = lines.join(' ').replace(/\s+/g, ' ').trim();
-    if (text === '') return;
-    this.onClaim({ section: this.section, text });
-  }
+  /**
+   * Ids the model cited, from the NDJSON `artifact_ids` field.
+   *
+   * A field rather than markers embedded in `text`: there is no marker shape
+   * for the model to imitate incorrectly, which is the whole point of the
+   * structured contract (F-8).
+   */
+  artifactIds: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +386,15 @@ export interface BriefingGenerationResult {
   groundingFailures: number;
   /** OI-1: threads with unsynthesized work at request time. */
   threadsStillProcessing: number;
+  /**
+   * P4 part 2: streamed lines that were not parseable as a claim.
+   *
+   * Distinct from {@link claimsDropped}, which counts claims the GATE withheld.
+   * A malformed line never became a claim at all, so without this it would
+   * vanish silently — and a rising count is the signal that the model has
+   * stopped honouring the NDJSON contract.
+   */
+  malformedLines: number;
   /** §7.8: generation was cut short. Everything present is still real. */
   partial: boolean;
   /**
@@ -741,14 +718,28 @@ ${chunk.text}`,
     // ---- stage 3: generation ------------------------------------------------
     const collected: CollectedClaim[] = [];
     const notify = options.onClaimAccepted;
-    const router = new SectionRouter((claim) => {
-      collected.push(claim);
-      // Real-time claim-level streaming (§12.2). `ClaimBuffer` has already
-      // proven this claim is WHOLE — nothing partial reaches here — so this is
-      // the earliest instant at which a claim can honestly be shown.
-      if (notify !== undefined) this.announce(notify, claim, allowed, grounding);
-    });
-    const buffer = new ClaimBuffer((claim) => router.push(claim));
+    /** P4 part 2: lines the model emitted that could not be read as a claim. */
+    let malformedLines = 0;
+    const buffer = new ClaimLineBuffer(
+      (line) => {
+        const claim: CollectedClaim = {
+          section: canonicalSection(line.section),
+          text: line.text,
+          artifactIds: line.artifactIds,
+        };
+        collected.push(claim);
+        // Real-time claim-level streaming (§12.2). One NDJSON line is one whole
+        // claim by construction — the boundary IS the newline — so this is the
+        // earliest instant at which a claim can honestly be shown.
+        if (notify !== undefined) this.announce(notify, claim, allowed, grounding);
+      },
+      // A line that will not parse is counted, never guessed at. It is the same
+      // failure class as an uncited claim: the briefing is shorter than it could
+      // have been, which is the only failure this layer accepts.
+      () => {
+        malformedLines += 1;
+      },
+    );
 
     const generationSpan = trace.span('generation');
     const firstTokenSpan = trace.span('firstToken');
@@ -875,6 +866,11 @@ ${chunk.text}`,
     // is what makes it safe to persist next to a claim count.
     trace.annotate({
       claimsCollected: collected.length,
+      // P4 part 2: NDJSON lines the model emitted that could not be read as a
+      // claim. Non-zero means the model is drifting off the output contract —
+      // a different failure from a claim the gate withheld, and one that would
+      // otherwise be invisible because a dropped line never becomes a claim.
+      malformedLines,
       claimsAccepted: accepted.length,
       claimsDropped: tally.dropped,
       gateDrops: tally.dropsByReason,
@@ -903,6 +899,7 @@ ${chunk.text}`,
       redactionCount: tally.redactionCount,
       redactionKinds: tally.redactionKinds,
       groundingFailures: tally.groundingFailures,
+      malformedLines,
       threadsStillProcessing,
       partial,
       outcome,
@@ -994,7 +991,7 @@ ${chunk.text}`,
     grounding: GroundingOptions,
   ): void {
     try {
-      const result = this.citationGate.accept(claim.text, allowed, grounding);
+      const result = this.citationGate.acceptStructured(claim, allowed, grounding);
       if (!result.accepted) return;
       notify({
         section: claim.section,
@@ -1033,7 +1030,7 @@ ${chunk.text}`,
     const redactionKinds = new Set<string>();
 
     collected.forEach((claim, arrival) => {
-      const result = this.citationGate.accept(claim.text, allowed, grounding);
+      const result = this.citationGate.acceptStructured(claim, allowed, grounding);
       if (!result.accepted) {
         dropped += 1;
         // `reason` is documented as always present on a drop; `?? 'no_citation'`
@@ -1249,6 +1246,7 @@ ${chunk.text}`,
       redactionCount: 0,
       redactionKinds: [],
       groundingFailures: 0,
+      malformedLines: 0,
       threadsStillProcessing: input.threadsStillProcessing,
       partial: false,
       outcome: 'no_context',

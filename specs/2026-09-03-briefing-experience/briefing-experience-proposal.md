@@ -416,7 +416,7 @@ out of agreement as work landed; it is now the single record of what is done._
 |---|---|---|
 | 1 | **P0 — deterministic-first** | The largest item in this document, and untouched. It inverts §7.8's fallback semantics and raises questions this proposal does not answer (when the LLM version swaps in, what happens to persisted claims, what `mode` then means). Needs its own design doc. |
 | 2 | **P3 part 2 — LLM on candidate *threads*** | The half that moves the order of magnitude: 3,000 events across 174 threads is 174 calls, not 3,000. Changes Layer 1's contract (one extraction row and one chunk *per event*), so it touches the store, the eval's per-event assumptions and D-7. |
-| 3 | **P4 part 2 — structured output** | Markdown parsing is still how structure is recovered. `SectionRouter`, `HEADING_RE` and the marker regex all still exist; only the *presentation* changed. |
+| ~~3~~ | ~~**P4 part 2 — structured output**~~ — **DONE 2026-09-03** | NDJSON, one claim per line. `SectionRouter` and `HEADING_RE` deleted; `prompt_versions.layer3` bumped to v2. The marker regex survives for the deterministic template, which composes its own text and has no model to constrain. |
 | 4 | **0c — label fixtures to n≈70** | Untouched, and it is the binding constraint on any releasable quality claim (OI-5). Human labelling effort; no run advances it. |
 | 5 | **0b — a valid quality baseline** | See below. Currently owed again. |
 

@@ -479,16 +479,59 @@ export class CitationGate {
   ): GateResult {
     const ids = [...claim.matchAll(MARKER)].map((m) => m[1] as string);
     if (ids.length === 0) return drop(claim, 'no_citation');
+    return this.check(claim, claim.replace(MARKER, '').trim(), ids, allowedArtifactIds, grounding);
+  }
 
-    // EVERY marker must validate. One good citation does not launder the rest:
-    // a claim that fuses a sourced fact with an unsourced one is exactly the
-    // failure this gate exists to prevent.
+  /**
+   * Gate a claim whose citations arrived as a FIELD rather than as markers
+   * embedded in prose (P4 part 2).
+   *
+   * The same five checks in the same order, minus the marker parsing — which is
+   * the entire point: with NDJSON there is no marker shape for the model to
+   * imitate incorrectly, so `no_citation` here means the contract's
+   * `artifact_ids` was empty rather than that a regex failed to match.
+   *
+   * `accept()` is retained for the deterministic template path, which composes
+   * its own marker-bearing text and has no model to constrain.
+   */
+  acceptStructured(
+    claim: { text: string; artifactIds: readonly string[] },
+    allowedArtifactIds: ReadonlySet<string>,
+    grounding?: GroundingOptions,
+  ): GateResult {
+    if (claim.artifactIds.length === 0) return drop(claim.text, 'no_citation');
+    return this.check(
+      claim.text,
+      claim.text.trim(),
+      [...claim.artifactIds],
+      allowedArtifactIds,
+      grounding,
+    );
+  }
+
+  /**
+   * The five checks, shared by both entry points.
+   *
+   * @param original - Text as received, used only for the drop record.
+   * @param bare - Text with any markers stripped; what the user would read.
+   */
+  private check(
+    original: string,
+    bare: string,
+    ids: string[],
+    allowedArtifactIds: ReadonlySet<string>,
+    grounding?: GroundingOptions,
+  ): GateResult {
+    const claim = original;
+
+    // EVERY citation must validate. One good citation does not launder the
+    // rest: a claim that fuses a sourced fact with an unsourced one is exactly
+    // the failure this gate exists to prevent.
     for (const id of ids) {
       if (!allowedArtifactIds.has(id)) return drop(claim, 'not_in_context');
       if (this.graph.getArtifact(id) === undefined) return drop(claim, 'unknown_artifact');
     }
 
-    const bare = claim.replace(MARKER, '').trim();
     if (looksLikeInjectionResponse(bare)) return drop(claim, 'injection_pattern');
 
     // F-4: does any cited artifact's source text actually support this?

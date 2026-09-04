@@ -449,12 +449,16 @@ describe('SEC-5 — end to end through BriefingGenerator', () => {
   const EMAIL = 'sarah.chen@acme.example.com';
   const PHONE = '(555) 123-4567';
 
+  /** One NDJSON claim line, per the P4-part-2 output contract. */
+  const line = (claim: string, ids: string[]): string =>
+    `${JSON.stringify({ section: 'What moved', claim, artifact_ids: ids })}
+`;
+
   const TOKENS = [
-    '## What moved\n',
-    `- Ravi pasted ${SECRET} into the deploy channel [artifact:${A1}]\n`,
-    `- Dr. Sarah Chen asked to be reached at ${EMAIL} [artifact:${A2}]\n`,
-    `- Marcus Webb left the on-call line ${PHONE} in the runbook [artifact:${A1}]\n`,
-    `- Alex Johnson approved the migration plan on Tuesday [artifact:${A2}]\n`,
+    line(`Ravi pasted ${SECRET} into the deploy channel`, [A1]),
+    line(`Dr. Sarah Chen asked to be reached at ${EMAIL}`, [A2]),
+    line(`Marcus Webb left the on-call line ${PHONE} in the runbook`, [A1]),
+    line('Alex Johnson approved the migration plan on Tuesday', [A2]),
   ];
 
   async function run(): Promise<{
