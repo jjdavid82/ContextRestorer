@@ -47,6 +47,7 @@ import {
 } from '@cr/core';
 import type { AiCallsRepo, Chunk, ExtractionsRepo, VectorStore } from '@cr/store';
 import type { OllamaClient } from '../ollama.js';
+import { prefilterReason, type PrefilterReason } from './prefilter.js';
 import { assemblePrompt } from '../prompt/assemble.js';
 import { wrapUntrusted } from '../prompt/wrap.js';
 import type { EmbedFn } from '../retrieval.js';
@@ -146,9 +147,15 @@ export interface ExtractResult {
    * `'schema_fail'` — both attempts produced unusable JSON; NOTHING was written
    * to `extractions`, so the event remains visible to the recovery sweep.
    */
-  status: 'extracted' | 'schema_fail';
-  /** The persisted extraction. Present exactly when `status === 'extracted'`. */
+  status: 'extracted' | 'schema_fail' | 'prefiltered';
+  /**
+   * The persisted extraction. Present when `status` is `'extracted'` OR
+   * `'prefiltered'` — a pre-filtered event still gets a real `noise` row, it
+   * just did not cost a model call to get one.
+   */
   extraction?: Extraction;
+  /** P3: why the model was skipped. Present exactly when `status === 'prefiltered'`. */
+  prefilterReason?: PrefilterReason;
 }
 
 /**
@@ -241,6 +248,16 @@ interface CallTally {
  * (a later task) can decide where the writes land: in production the repos are
  * main-thread-owned, and `embed` is Ollama's embedding endpoint.
  */
+/**
+ * `extractions.model` value for a pre-filtered row (P3).
+ *
+ * Not a chat model name, on purpose: the audit trail must never imply a model
+ * produced a classification it never saw. Greppable, so a query filtering
+ * `model = 'deterministic:prefilter'` counts exactly the events the filter
+ * handled and no others.
+ */
+export const PREFILTER_MODEL = 'deterministic:prefilter';
+
 export class Layer1Extractor {
   private readonly clock: Clock;
 
@@ -265,6 +282,13 @@ export class Layer1Extractor {
     private readonly model: string,
     private readonly promptVersion: string,
     clock?: Clock,
+    /**
+     * P3 pre-filter. Defaults to ON: the cost it avoids is the pipeline's
+     * dominant one, and the events it skips are ones the connector already
+     * classified structurally. Set false to restore per-event model calls for
+     * every event — which is what the eval should compare against.
+     */
+    private readonly skipNoise: boolean = true,
   ) {
     this.clock = clock ?? systemClock;
   }
@@ -287,6 +311,22 @@ export class Layer1Extractor {
   async extractEvent(event: Event, traceId: string): Promise<ExtractResult> {
     const text = eventText(event);
     const artifactId = eventArtifactId(event);
+
+    // P3: skip the model for events the CONNECTOR already classified as
+    // structural noise at ingest. ~29s of local inference per event is the
+    // pipeline's dominant cost (F-1), and asking a 7B model to confirm that a
+    // `channel_join` notice is noise is the least valuable 29 seconds in the
+    // system. See `prefilter.ts` for why this invents no new judgement.
+    //
+    // NO `ai_calls` row is written on this path, deliberately: no model call
+    // happened, and logging a synthetic one would corrupt the per-layer latency
+    // stats that NFR-8 exists to make trustworthy. The count is reported through
+    // `ExtractResult.status` instead, for the sweep to aggregate.
+    const skip = this.skipNoise ? prefilterReason(event) : undefined;
+    if (skip !== undefined) {
+      const extraction = this.persistNoise(event);
+      return { status: 'prefiltered', extraction, prefilterReason: skip };
+    }
 
     // T-1: the ONLY path by which event text reaches the model. The block is
     // assembled once and reused by the retry — the retry is a re-ask of the
@@ -367,6 +407,37 @@ export class Layer1Extractor {
     this.extractions.insert(extraction);
 
     return { status: 'extracted', extraction };
+  }
+
+  /**
+   * Write the `noise` extraction row for a pre-filtered event (P3).
+   *
+   * Deliberately still WRITES a row rather than leaving the event unextracted:
+   * `listUnextracted()` is the recovery sweep's queue, so an event with no row
+   * would be re-examined on every sweep forever. It also keeps the eval
+   * harness's negatives intact — a filtered event is still a labelled `noise`
+   * observation, which is exactly what it would have been had the model run.
+   *
+   * `model` records the filter rather than the chat model, so the audit trail
+   * never claims a model produced a classification it never saw. No chunk is
+   * embedded, matching what `extractEvent` does for a model-classified `noise`.
+   */
+  private persistNoise(event: Event): Extraction {
+    const extraction: Extraction = {
+      extractionId: newId(),
+      eventId: event.eventId,
+      class: 'noise',
+      // 1.0 is honest here in a way it would not be for a model: the connector
+      // read a `bot_id` or a subtype, it did not estimate anything.
+      confidence: 1,
+      participants: [],
+      artifacts: [],
+      model: PREFILTER_MODEL,
+      promptVersion: this.promptVersion,
+      createdAt: this.clock.now(),
+    };
+    this.extractions.insert(extraction);
+    return extraction;
   }
 
   /** Write the one `ai_calls` row for this invocation. */

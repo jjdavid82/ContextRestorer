@@ -5,6 +5,7 @@ export * from './prompt/assemble.js';
 export * from './layer2/scheduler.js';
 export * from './retrieval.js';
 export * from './layer1/extract.js';
+export { prefilterReason, connectorFlaggedNoise, type PrefilterReason } from './layer1/prefilter.js';
 export * from './layer2/synthesize.js';
 export * from './layer2/pending.js';
 export * from './layer3/citationGate.js';

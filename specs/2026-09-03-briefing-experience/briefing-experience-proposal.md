@@ -231,7 +231,21 @@ you" / "Changed while you were out" remain the internal names for the two groups
 
 ### P3 — Spend inference on judgement, not prose
 
-- Cheap deterministic/embedding pre-filter over events; LLM only on candidate **threads**.
+**Status (2026-09-03): the pre-filter half is done; the per-thread half is not.**
+
+- ~~Cheap deterministic pre-filter over events~~ — **DONE**. `layer1/prefilter.ts` skips the
+  model for events the CONNECTOR already flagged as structural noise at ingest (Slack bot
+  messages and join/leave/topic subtypes; Gmail promotional labels, `List-Unsubscribe`, and
+  `no-reply@` senders) and for empty bodies. That flag had been written on every ingested
+  event since the connectors were built and was **never read by anything**. At ~29s per Layer 1
+  call this is the cheapest available reduction, and it invents no new judgement — Layer 1's
+  own prompt already offers `noise` for exactly this set.
+- **STILL OUTSTANDING: LLM only on candidate *threads*.** This is the larger half and the one
+  that actually moves the order of magnitude — 3,000 events across 174 threads is 174 calls
+  instead of 3,000. It changes Layer 1's contract (one `extractions` row and one chunk per
+  event), so it touches the store, the eval harness's per-event assumptions, and the D-7
+  debounce's relationship to extraction. It needs its own design pass rather than an
+  incremental edit.
 - One question per candidate thread: *is something owed by this person here, and which
   message proves it?* — with a required artifact id in the answer.
 - Layer 3's job shrinks to ordering and compressing already-grounded facts.
