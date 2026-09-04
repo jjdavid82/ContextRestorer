@@ -656,8 +656,20 @@ async function scoreFixture(
       config.promptVersions.layer1,
       clock,
     );
+    // P3 part 2: grouped by thread, one model call per group — the same
+    // batching `main.ts`'s extraction sweep performs. The eval must exercise
+    // the pipeline that SHIPS: measuring per-event extraction after the app
+    // stopped doing it would score a system nobody runs.
+    // `Event` alone resolves to the DOM type in this lib target.
+    type CoreEvent = ReturnType<typeof events.listUnextracted>[number];
+    const unextractedByThread = new Map<string, CoreEvent[]>();
     for (const event of events.listUnextracted()) {
-      await extractor.extractEvent(event, traceId);
+      const bucket = unextractedByThread.get(event.threadKey);
+      if (bucket === undefined) unextractedByThread.set(event.threadKey, [event]);
+      else bucket.push(event);
+    }
+    for (const batch of unextractedByThread.values()) {
+      await extractor.extractThread(batch, traceId);
     }
 
     // ---- Layer 2: real synthesis, one model call per thread ---------------
