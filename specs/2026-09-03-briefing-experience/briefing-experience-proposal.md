@@ -388,50 +388,63 @@ These are the most valuable things in the build and none of the above touches th
 
 ---
 
-## 5. Sequencing
+## 5. Status and sequencing
 
-| Step | Work | Unblocks |
+_Last reconciled 2026-09-03. This section replaced three overlapping tables that had drifted
+out of agreement as work landed; it is now the single record of what is done._
+
+### Done
+
+| Item | Landed | Note |
 |---|---|---|
-| 0a | ~~Re-baseline **bench** on the shipped config~~ — **done 2026-09-03**, AC-1 fails both bars (§1) | AC-1 is now measured on what ships |
-| 0b | Re-baseline **eval** on the shipped config — **deliberately deferred 2026-09-03**, see below | The five quality rows in §1, which are still 14b numbers |
-| 0c | Label fixtures up to n≈70 per OI-5 | Any quality claim strong enough to gate a release |
-| 1 | P1 (window from `caught_up_at`) | Fixes F-2; smallest change with a visible user effect |
-| 2 | P0 (deterministic-first) | AC-1; removes the empty-briefing failure |
-| 3 | F-5 fix: stop promoting Layer 3 claims to `pending_items` | AC-4 |
-| 4 | F-4 fix: grounding check in the runtime gate | AC-5, AC-6 |
-| 5 | P3 (thread-level extraction) | AC-3, AC-4, and the F-1 ceiling |
-| 6 | P2 / P4 | Cognitive load, and the F-8 machinery |
+| 0a — bench re-baseline | `69a7eff` | AC-1 measured on what ships. Fails both bars. |
+| F-5 — layer 3 stops writing `pending_items` | `69a7eff` | Layer 2 is the sole writer again |
+| F-2 — window from `caught_up_at` | `69a7eff` | `briefing:resumePoint`; uses the acknowledged `window_end`, not the tap time |
+| A-3 — remove the false "still learning" line | `69a7eff` | Both the briefing and onboarding copies |
+| Q-1 → FR-2 amended | `c1f4dbe` | Recorded as OI-6 in the requirements doc |
+| Q-2, Q-4, P4 evidence trade decided | `cb6561f` | All four questions now settled |
+| A-2 — `belongs_to` write path | `589ca11` | Channel → project tagging; OI-3 gate restored |
+| P2 / P4 — list layout | `7269d04` | **Renderer half only** — see Outstanding |
+| A-4 — configurable item cap | `7269d04` | Changed list capped; obligations never |
+| F-4 — grounding detector | `25c3d26` | **`observe` mode**, and now measured — see below |
+| P3 — deterministic pre-filter | `44eec79` | **Part 1 of 2** — see Outstanding |
+| Model reverted to `qwen2.5:14b` | `2d44d08` | The one measured improvement this session |
 
-**Revised order after the 2026-09-03 sign-offs.** A-2 moves up: it is a self-contained write
-path, it unblocks A-4's cap, and AC-7 cannot move without it. P2/P4 are also unblocked by Q-1
-and need nothing else. So the near-term order is:
+### Outstanding
 
-| # | Work | Depends on |
+| # | Item | Why it has not landed |
 |---|---|---|
-| 1 | ~~A-2 — channel → project tagging, restore the OI-3 onboarding gate~~ — **DONE 2026-09-03** | nothing |
-| 2 | ~~P2 / P4 — list layout, counts as headings, verbatim-on-obligations~~ — **DONE 2026-09-03** (renderer half; structured LLM output still open) | Q-1 (done) |
-| 3 | ~~A-4 — the configurable cap on the changed list~~ — **DONE 2026-09-03** | A-2 |
-| 4 | 0b — eval re-baseline on the shipped config | nothing, but must precede 5 |
-| 5 | F-4 (detector) — **DONE 2026-09-03 in `observe` mode**; enforcing still needs 0b. P3 outstanding | 0b, for a comparable baseline |
-| 6 | P0 — deterministic-first | its own design doc |
+| 1 | **P0 — deterministic-first** | The largest item in this document, and untouched. It inverts §7.8's fallback semantics and raises questions this proposal does not answer (when the LLM version swaps in, what happens to persisted claims, what `mode` then means). Needs its own design doc. |
+| 2 | **P3 part 2 — LLM on candidate *threads*** | The half that moves the order of magnitude: 3,000 events across 174 threads is 174 calls, not 3,000. Changes Layer 1's contract (one extraction row and one chunk *per event*), so it touches the store, the eval's per-event assumptions and D-7. |
+| 3 | **P4 part 2 — structured output** | Markdown parsing is still how structure is recovered. `SectionRouter`, `HEADING_RE` and the marker regex all still exist; only the *presentation* changed. |
+| 4 | **0c — label fixtures to n≈70** | Untouched, and it is the binding constraint on any releasable quality claim (OI-5). Human labelling effort; no run advances it. |
+| 5 | **0b — a valid quality baseline** | See below. Currently owed again. |
 
-**On step 0b.** An earlier draft of this document asserted that the whole of step 0 was "not
-optional." That was too strong for the eval half, and the bench result is what showed it: the
-quality gaps are 12× (hallucination, 23.6% vs a 2% gate) and 2.7× (recall, 33% vs 90%), which
-is far outside the range a 14b → 7b swap plausibly moves. Re-running the existing 35 fixtures
-would refine numbers that fail either way and would reverse no recommendation here, at a cost
-of most of a day of local inference. It was started on 2026-09-03 and stopped after one
-fixture.
+### On 0b, and why it is owed a third time
 
-The bench half *was* load-bearing and was worth the two hours: its archived numbers were
-capped artifacts (20/20 truncated), so the real cost of generation was genuinely unknown
-until it ran.
+The eval has been run twice and there is still no baseline describing what ships:
 
-What remains true: **do not quote a 7b latency row and a 14b quality row as one result set**
-(RO-2). Either re-run the eval before publishing a combined table, or label the provenance in
-place as §1 now does. And note that the binding constraint on quality evidence is 0c, not 0b
-— OI-5 fixed the target at ~70 labeled examples, and re-running the existing 35 does not
-advance that by a single example.
+1. Started on the full 35 fixtures, stopped after one — judged not worth most of a day to
+   refine numbers that fail either way.
+2. Re-run as an 11-fixture subset; 9 completed (2 lost to `fetch failed`). That run is what
+   produced the 7b column in §1 — and what justified reverting the model.
+3. **The revert then invalidated it.** The shipped config is `qwen2.5:14b` again, so the
+   current eval report describes a build that no longer exists. That is precisely the defect
+   §1 opened this document by identifying.
+
+The closest thing to a valid baseline is the archived 2026-08-28 14b run — which predates
+F-5, F-4 and the pre-filter, so it does not describe today's pipeline either.
+
+**Standing rule, unchanged:** do not quote a latency row and a quality row from different
+configurations as one result set (RO-2). §1 labels provenance in place for exactly this reason.
+
+### What none of this has done yet
+
+**No acceptance criterion has moved.** A-2 wired ranking that was inert, F-4 counts without
+enforcing, the pre-filter cuts cost rather than improving output, and P2/P4 changed
+presentation. The only measured improvement is the 14b revert, and that undoes a prior
+regression rather than making progress against the targets. Anyone reading the Done column as
+"the proposal is working" would be reading it wrong.
 
 ---
 
@@ -534,7 +547,7 @@ That is a declaration the user makes, not a cluster the system guesses, so it st
 X-2 and makes OI-3's "mandatory, assisted" declaration meaningful again instead of relaxed to
 optional.
 
-**Sequencing:** earlier than §5 step 5 — AC-7 (73.1%) cannot improve while the largest
+**Sequencing:** done 2026-09-03 (§5). It was moved ahead of the rest because AC-7 could not improve while the largest
 non-obligation ranking term is inert, and Q-4's cap must not ship ahead of it.
 
 *(The alternative, had this been deferred, was to delete `wStakes` from `config/default.json`
