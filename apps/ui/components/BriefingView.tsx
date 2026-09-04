@@ -144,6 +144,33 @@ function claimIdOf(chunk: ClaimChunk): string {
   return chunk.citation.artifactId;
 }
 
+/**
+ * Identity for "is this the same bullet". `citation.artifactId` alone is not
+ * enough — one thread's artifact can legitimately back several distinct
+ * claims (see `bulletsForChunks`'s key comment) — so the claim text is part
+ * of the key too. Guards against the same claim landing in `claims` twice:
+ * a stale-run chunk that slips past the `expectedBriefingId` filter during
+ * the brief window before it is known (see the effect below), or a
+ * `briefing:snapshot` read racing a still-live `onChunk` delivery of
+ * something already persisted.
+ */
+function claimKey(chunk: ClaimChunk): string {
+  return `${chunk.citation.artifactId}::${chunk.claim}`;
+}
+
+/** Drops later chunks whose {@link claimKey} already appeared, keeping arrival order. */
+function dedupeClaims(chunks: readonly ClaimChunk[]): ClaimChunk[] {
+  const seen = new Set<string>();
+  const result: ClaimChunk[] = [];
+  for (const chunk of chunks) {
+    const key = claimKey(chunk);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(chunk);
+  }
+  return result;
+}
+
 export interface BriefingViewProps {
   /**
    * An already-requested briefing. When omitted, this component requests one
@@ -218,7 +245,9 @@ export function BriefingView({
       // (bridge.d.ts spells this contract out).
       unsubscribeChunk = bridge.briefing.onChunk((chunk) => {
         if (active && (expectedBriefingId === null || chunk.briefingId === expectedBriefingId)) {
-          setClaims((current) => [...current, chunk]);
+          setClaims((current) =>
+            current.some((c) => claimKey(c) === claimKey(chunk)) ? current : [...current, chunk],
+          );
         }
       });
       unsubscribeDone = bridge.briefing.onDone((event) => {
@@ -252,7 +281,7 @@ export function BriefingView({
         // requested id has no row yet, so `snapshot.found` is false and this
         // is a no-op — the live listeners above are what paint it.
         if (snapshot.found) {
-          setClaims(snapshot.claims);
+          setClaims(dedupeClaims(snapshot.claims));
           if (snapshot.done !== null) setDone(snapshot.done);
         }
       };
