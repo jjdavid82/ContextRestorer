@@ -1,0 +1,96 @@
+{
+  "id": "designer-fusion-01",
+  "description": "Two separate decisions about the same feature, made by different people for different reasons and pointing in different directions. The style failure is fusion: merging them into one smooth sentence that is individually citable and collectively false.",
+  "persona": "designer",
+  "window_kind": "two_day",
+  "volume": "moderate_slack",
+  "window": { "start": "2026-09-14T00:00:00Z", "end": "2026-09-15T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-dfu1-001",
+      "source": "slack",
+      "thread_key": "C0CHECKOUT:1788800000.000100",
+      "artifact_id": "slack:C0CHECKOUT:1788800000.000100",
+      "actor": "Marisol Vega",
+      "occurred_at": "2026-09-14T10:00:00Z",
+      "context_label": "#checkout-redesign",
+      "text": "Product decision: we're shipping the one-page checkout to 100% of new signups next Monday. Existing customers stay on the two-step flow for now."
+    },
+    {
+      "event_id": "ev-dfu1-002",
+      "source": "slack",
+      "thread_key": "C0CHECKOUT:1788800000.000100",
+      "artifact_id": "slack:C0CHECKOUT:1788800000.000200",
+      "actor": "Devin Cho",
+      "occurred_at": "2026-09-14T11:30:00Z",
+      "context_label": "#checkout-redesign",
+      "text": "Engineering decision, separate from the rollout: we are NOT porting the saved-cards widget to the one-page flow this quarter. New signups won't have saved cards until Q1. That's a capacity call, not a product one."
+    },
+    {
+      "event_id": "ev-dfu1-003",
+      "source": "slack",
+      "thread_key": "C0CHECKOUT:1788800000.000100",
+      "artifact_id": "slack:C0CHECKOUT:1788800000.000300",
+      "actor": "Marisol Vega",
+      "occurred_at": "2026-09-14T11:52:00Z",
+      "context_label": "#checkout-redesign",
+      "text": "To be clear those are two different calls — the rollout is happening Monday regardless, and the saved-cards gap is a known tradeoff we're accepting, not a reason to delay."
+    },
+    {
+      "event_id": "ev-dfu1-004",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1788800000.000400",
+      "artifact_id": "slack:C0RESEARCH:1788800000.000400",
+      "actor": "Dr. Aline Fournier",
+      "occurred_at": "2026-09-15T09:40:00Z",
+      "context_label": "#research",
+      "text": "Usability round on the one-page flow: 7 of 8 completed without help. The one who struggled was looking for saved cards, which matches Devin's tradeoff."
+    },
+    {
+      "event_id": "ev-dfu1-005",
+      "source": "gmail",
+      "thread_key": "gm-thread-dfu1-a",
+      "artifact_id": "gmail:gm-thread-dfu1-a:msg-1",
+      "actor": "Devin Cho",
+      "occurred_at": "2026-09-15T15:00:00Z",
+      "context_label": "Empty-state copy for saved cards — need it before Monday",
+      "text": "Since saved cards won't exist on the one-page flow until Q1, new signups will hit an empty slot there. Can you write the empty-state copy for it before Monday's rollout? It's the last thing blocking the release branch."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Write the empty-state copy for the saved-cards slot on the one-page checkout, before Monday's rollout — it is the last thing blocking the release branch.",
+        "citation": "gmail:gm-thread-dfu1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Needs you: write the empty-state copy for the saved-cards slot before Monday's rollout — it is the last thing blocking the release branch. What moved: the one-page checkout ships to 100% of new signups on Monday, with existing customers staying on the two-step flow. Separately, engineering will not port the saved-cards widget until Q1 — a capacity call, and an accepted tradeoff rather than a reason to delay. Worth knowing: 7 of 8 usability participants completed the one-page flow unaided, and the one who struggled was looking for saved cards.",
+      "Devin needs empty-state copy for the saved-cards slot before Monday. Two separate decisions sit behind that: Marisol is shipping the one-page checkout to new signups on Monday, and Devin has deferred the saved-cards widget to Q1 on capacity grounds. Marisol confirmed the second is not delaying the first."
+    ],
+    "unacceptable_briefings": [
+      "The one-page checkout is shipping Monday to new signups without saved cards, which the team decided to defer to Q1 after usability testing showed users looking for them.",
+      "The team decided to ship the one-page checkout on Monday but hold saved cards until Q1, and usability testing confirmed the tradeoff.",
+      "Checkout: one-page flow ships Monday to new signups, saved cards deferred to Q1, 7 of 8 usability participants succeeded. You need empty-state copy before Monday."
+    ],
+    "supported_claims": [
+      "The one-page checkout ships to 100% of new signups on Monday.",
+      "Existing customers stay on the two-step flow for now.",
+      "Engineering will not port the saved-cards widget to the one-page flow this quarter.",
+      "The saved-cards deferral is a capacity decision, not a product one.",
+      "Marisol stated the rollout is happening regardless of the saved-cards gap.",
+      "7 of 8 usability participants completed the one-page flow without help.",
+      "The one participant who struggled was looking for saved cards.",
+      "The empty-state copy is the last thing blocking the release branch."
+    ],
+    "unsupported_claims": [
+      "Saved cards were deferred because usability testing showed users looking for them.",
+      "The team decided to ship without saved cards as a single combined decision.",
+      "Usability testing confirmed the saved-cards tradeoff was correct.",
+      "The rollout was contingent on the saved-cards decision.",
+      "Marisol decided to defer saved cards to Q1."
+    ],
+    "notes": "FUSION is the failure, and it is the one the prompts guard against with 'one claim per line' / 'never combine two claims'. The two decisions here have different owners (Marisol / Devin), different kinds (product / capacity), and no causal relationship — Marisol says so explicitly in the third message, which exists purely so the ground truth is unambiguous. Every stored anti-pattern is composed of true fragments and asserts a false relationship between them: the first invents causality running backwards in time (the usability round is the DAY AFTER the deferral, so it cannot be its cause); the second attributes both calls to 'the team', erasing that one was a capacity constraint someone owns; the third is the tempting one — a terse, well-cited, correctly-ordered summary that still fuses two decisions into one clause and drops who made which. A correct briefing keeps them as separate statements. Fusion scores perfectly on citation accuracy because each fragment traces to a real artifact, which is exactly why a lexical grounding check (F-4) will not catch it either."
+  },
+  "failure_mode_tags": ["bad_style", "fabricated_claim"]
+}

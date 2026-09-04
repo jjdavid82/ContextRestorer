@@ -1,0 +1,136 @@
+{
+  "id": "eng-mgr-burial-01",
+  "description": "The only thing owed by the user is the OLDEST message in the window, and eight louder, more recent messages follow it. The style failure is chronological order: a briefing that reads like a timeline buries the one actionable line at the bottom.",
+  "persona": "eng_manager",
+  "window_kind": "week",
+  "volume": "heavy_slack",
+  "window": { "start": "2026-09-07T00:00:00Z", "end": "2026-09-11T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-emb1-001",
+      "source": "gmail",
+      "thread_key": "gm-thread-emb1-a",
+      "artifact_id": "gmail:gm-thread-emb1-a:msg-1",
+      "actor": "Ingrid Halvorsen",
+      "occurred_at": "2026-09-07T08:05:00Z",
+      "context_label": "Headcount request — need your approval before the req opens",
+      "text": "The backfill req for Amara's role is sitting in my queue and I can't open it without your approval in Workday. Recruiting has a candidate they want to move on but cannot schedule until the req is live. This has been waiting since last Monday."
+    },
+    {
+      "event_id": "ev-emb1-002",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1788400000.000200",
+      "artifact_id": "slack:C0INCIDENT:1788400000.000200",
+      "actor": "Kofi Mensah",
+      "occurred_at": "2026-09-08T14:30:00Z",
+      "context_label": "#incident-checkout",
+      "text": "Checkout returned 502s for 11 minutes this afternoon. Root cause was a connection pool exhausted by the new fraud-check call. Mitigated by raising the pool size; permanent fix is to make the call async, tracked in CHK-441."
+    },
+    {
+      "event_id": "ev-emb1-003",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1788400000.000200",
+      "artifact_id": "slack:C0INCIDENT:1788400000.000300",
+      "actor": "Beatriz Nunes",
+      "occurred_at": "2026-09-08T15:10:00Z",
+      "context_label": "#incident-checkout",
+      "text": "Revenue impact was about £4,200 in abandoned carts. Finance has the number, no action needed from engineering."
+    },
+    {
+      "event_id": "ev-emb1-004",
+      "source": "slack",
+      "thread_key": "C0HIRING:1788400000.000400",
+      "artifact_id": "slack:C0HIRING:1788400000.000400",
+      "actor": "Recruiting Bot",
+      "occurred_at": "2026-09-09T09:00:00Z",
+      "context_label": "#hiring",
+      "text": "Weekly pipeline: 14 applications, 3 phone screens scheduled, 1 onsite. No reqs opened this week."
+    },
+    {
+      "event_id": "ev-emb1-005",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1788400000.000500",
+      "artifact_id": "slack:C0PLATFORM:1788400000.000500",
+      "actor": "Tomas Lindqvist",
+      "occurred_at": "2026-09-09T16:45:00Z",
+      "context_label": "#platform",
+      "text": "Migration to the new build runners is done. Median CI time went from 11 minutes to 4. Nothing needed from anyone, just closing this out."
+    },
+    {
+      "event_id": "ev-emb1-006",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1788400000.000600",
+      "artifact_id": "slack:C0DESIGN:1788400000.000600",
+      "actor": "Priya Raman",
+      "occurred_at": "2026-09-10T11:20:00Z",
+      "context_label": "#design-eng-sync",
+      "text": "Design and engineering agreed to freeze the component library API for the rest of the quarter. Additive changes only. Both leads signed off."
+    },
+    {
+      "event_id": "ev-emb1-007",
+      "source": "slack",
+      "thread_key": "C0INCIDENT:1788400000.000200",
+      "artifact_id": "slack:C0INCIDENT:1788400000.000700",
+      "actor": "Kofi Mensah",
+      "occurred_at": "2026-09-10T17:00:00Z",
+      "context_label": "#incident-checkout",
+      "text": "Postmortem for the checkout 502s is written up and circulated. Three action items, all owned, all with dates. I'm not asking for review — just logging that it's done."
+    },
+    {
+      "event_id": "ev-emb1-008",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1788400000.000800",
+      "artifact_id": "slack:C0PLATFORM:1788400000.000800",
+      "actor": "Ruth Okonkwo",
+      "occurred_at": "2026-09-11T10:15:00Z",
+      "context_label": "#platform",
+      "text": "Dependency upgrade week is finished — 62 packages bumped, all green, no breaking changes. Closing it out."
+    },
+    {
+      "event_id": "ev-emb1-009",
+      "source": "slack",
+      "thread_key": "C0GENERAL:1788400000.000900",
+      "artifact_id": "slack:C0GENERAL:1788400000.000900",
+      "actor": "Nadia Osei",
+      "occurred_at": "2026-09-11T16:30:00Z",
+      "context_label": "#general",
+      "text": "Reminder that the office is closed Monday for the bank holiday. No on-call changes, the rota already accounts for it."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Approve the backfill req for Amara's role in Workday — Ingrid cannot open it without you, and recruiting has a candidate they cannot schedule until it is live. Waiting since the previous Monday.",
+        "citation": "gmail:gm-thread-emb1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Needs you: approve the backfill req for Amara's role in Workday. Ingrid has been blocked on it since last Monday and recruiting has a candidate they cannot schedule until the req is live. Changed while you were out: checkout returned 502s for 11 minutes from a connection pool exhausted by the new fraud check, mitigated and tracked in CHK-441 with the postmortem already circulated; CI moved to the new build runners and median time fell from 11 minutes to 4; design and engineering froze the component library API for the quarter.",
+      "One thing needs you, and it is the oldest item here: Ingrid cannot open the backfill req for Amara's role without your Workday approval, and a candidate is waiting on it. Everything else closed itself — the checkout incident is mitigated and postmortemed, CI is faster, the component API is frozen, dependency week is done."
+    ],
+    "unacceptable_briefings": [
+      "This week: Ingrid noted the backfill req for Amara's role needs approval. Kofi reported checkout returned 502s for 11 minutes due to connection pool exhaustion from the new fraud-check call, mitigated by raising the pool size with a permanent fix tracked in CHK-441. Beatriz reported revenue impact of about £4,200 in abandoned carts, with Finance holding the number. The recruiting pipeline showed 14 applications, 3 phone screens and 1 onsite. Tomas completed the migration to new build runners, cutting median CI time from 11 minutes to 4. Priya reported design and engineering agreed to freeze the component library API for the quarter. Kofi circulated the checkout postmortem with three owned action items. Ruth finished dependency upgrade week with 62 packages bumped. Nadia reminded everyone the office is closed Monday.",
+      "Worth knowing: checkout had an 11-minute outage costing roughly £4,200 in abandoned carts, CI is now 4 minutes instead of 11, the component library API is frozen for the quarter, dependency week finished with 62 packages bumped, and the office is closed Monday. Waiting on you: the backfill req for Amara's role needs your Workday approval."
+    ],
+    "supported_claims": [
+      "Ingrid cannot open the backfill req for Amara's role without the user's approval in Workday.",
+      "Recruiting has a candidate who cannot be scheduled until the req is live.",
+      "Checkout returned 502s for 11 minutes due to a connection pool exhausted by the new fraud-check call.",
+      "The checkout incident was mitigated by raising the pool size, with a permanent async fix tracked in CHK-441.",
+      "Revenue impact of the checkout incident was about £4,200 in abandoned carts.",
+      "Median CI time fell from 11 minutes to 4 after the build runner migration.",
+      "Design and engineering froze the component library API for the rest of the quarter.",
+      "The checkout postmortem was circulated with three owned action items.",
+      "Dependency upgrade week finished with 62 packages bumped and no breaking changes."
+    ],
+    "unsupported_claims": [
+      "You need to review the checkout postmortem.",
+      "Engineering needs to act on the £4,200 revenue impact.",
+      "You need to approve the component library API freeze.",
+      "The on-call rota needs adjusting for the bank holiday.",
+      "The backfill req was opened this week."
+    ],
+    "notes": "ORDER is the failure mode, not selection. Every claim in both stored anti-patterns is true and citable, so recall, precision, citation accuracy and hallucination rate are all perfect for them — and both are unusable. The first is chronological transcription, which buries the single obligation in position one of nine equally-weighted sentences and lets eight louder items drown it. The second is subtler and more tempting: it leads with the genuinely interesting incident (an outage with a money figure) and puts the obligation last, which is what recency-and-drama ranking produces. The correct briefing leads with the Workday approval because it is the only thing that will not resolve itself, and because it has already been blocked a week. Note that the incident is objectively the more INTERESTING event and still belongs second: interesting is not the same as owed."
+  },
+  "failure_mode_tags": ["bad_style", "poor_ranking"]
+}

@@ -1,0 +1,84 @@
+{
+  "id": "pm-urgency-01",
+  "description": "Calm, well-managed content with one soft request. The style failure is manufactured urgency: adding importance adjectives and deadline pressure the source never contained, which the system prompt forbids and no numeric metric detects.",
+  "persona": "pm",
+  "window_kind": "afternoon",
+  "volume": "moderate_slack",
+  "window": { "start": "2026-09-01T12:00:00Z", "end": "2026-09-01T18:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-pmu1-001",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1787900000.000100",
+      "artifact_id": "slack:C0ROADMAP:1787900000.000100",
+      "actor": "Yusuf Demir",
+      "occurred_at": "2026-09-01T12:15:00Z",
+      "context_label": "#roadmap",
+      "text": "Pushed the reporting revamp from Q4 to Q1. We talked it through with Sales last week and nobody objected — it was the least-requested item on the list."
+    },
+    {
+      "event_id": "ev-pmu1-002",
+      "source": "slack",
+      "thread_key": "C0ROADMAP:1787900000.000100",
+      "artifact_id": "slack:C0ROADMAP:1787900000.000200",
+      "actor": "Lena Fischer",
+      "occurred_at": "2026-09-01T12:40:00Z",
+      "context_label": "#roadmap",
+      "text": "Makes sense. I've updated the public roadmap page to match. No customer commitments were attached to that date so there's nothing to walk back."
+    },
+    {
+      "event_id": "ev-pmu1-003",
+      "source": "slack",
+      "thread_key": "C0SUPPORT:1787900000.000300",
+      "artifact_id": "slack:C0SUPPORT:1787900000.000300",
+      "actor": "Rafael Ortiz",
+      "occurred_at": "2026-09-01T14:05:00Z",
+      "context_label": "#support",
+      "text": "Ticket volume is steady at around 60 a day, same as the last three weeks. Nothing trending, nothing on fire."
+    },
+    {
+      "event_id": "ev-pmu1-004",
+      "source": "gmail",
+      "thread_key": "gm-thread-pmu1-a",
+      "artifact_id": "gmail:gm-thread-pmu1-a:msg-1",
+      "actor": "Yusuf Demir",
+      "occurred_at": "2026-09-01T16:20:00Z",
+      "context_label": "Reporting revamp — one-liner for the changelog whenever you get a chance",
+      "text": "No rush at all on this. Whenever you have a spare moment in the next couple of weeks, could you write the one-line changelog entry for the reporting revamp move? I'd do it myself but you phrase these better. Genuinely not urgent — Q1 is a long way off."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Write the one-line changelog entry for the reporting revamp moving to Q1, for Yusuf, sometime in the next couple of weeks. Explicitly not urgent.",
+        "citation": "gmail:gm-thread-pmu1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Needs you: write the one-line changelog entry for the reporting revamp move, for Yusuf. No deadline — he said in the next couple of weeks, whenever suits. What moved: the reporting revamp slipped from Q4 to Q1 after Sales raised no objection, and Lena updated the public roadmap; no customer commitments were attached. Support volume is steady at ~60 tickets a day.",
+      "One low-priority thing: Yusuf would like a one-line changelog entry for the reporting revamp move, whenever you have a moment in the next fortnight. Otherwise the revamp moved to Q1 with Sales on board and the roadmap page already updated, and support is flat."
+    ],
+    "unacceptable_briefings": [
+      "URGENT — Waiting on you: You must write the changelog entry for the critical reporting revamp delay. The reporting revamp has been pushed out of Q4, a significant slip that affects the public roadmap. Support ticket volume remains a concern at 60 per day. Immediate attention is recommended before this escalates.",
+      "Action required: changelog entry for the reporting revamp (blocking Yusuf). Key risk: the Q4 → Q1 slip may affect customer expectations now that the public roadmap has changed. Recommend confirming with Sales that there is no fallout."
+    ],
+    "supported_claims": [
+      "The reporting revamp moved from Q4 to Q1.",
+      "Sales raised no objection to the move and it was the least-requested item.",
+      "Lena updated the public roadmap page.",
+      "No customer commitments were attached to the Q4 date.",
+      "Support ticket volume is steady at around 60 a day, unchanged for three weeks.",
+      "Yusuf asked for a one-line changelog entry within the next couple of weeks and said it is not urgent."
+    ],
+    "unsupported_claims": [
+      "The changelog entry is urgent.",
+      "The reporting revamp delay is critical.",
+      "Yusuf is blocked on the changelog entry.",
+      "Support ticket volume is a concern.",
+      "Customer expectations may be affected by the roadmap change.",
+      "You should confirm with Sales that there is no fallout."
+    ],
+    "notes": "The bad_style failure here is TONE, not selection. Recall, precision, citation accuracy and hallucination rate can all be perfect while the briefing invents urgency the source deliberately disclaims — Yusuf says 'no rush at all', 'genuinely not urgent', 'Q1 is a long way off', and Rafael says 'nothing on fire'. The system prompt forbids exactly this ('No adjectives of importance, no urgency language you were not given, no speculation about what the person should do'), and nothing in the metric suite tests it. Both stored anti-patterns are individually well-cited: the first escalates a calm request into URGENT and reframes flat support volume as 'a concern'; the second is subtler and more likely — it adds a plausible 'key risk' and a recommended action that nobody asked for. A correct briefing carries the item's low priority through, because a system that marks everything urgent is one the user stops believing."
+  },
+  "failure_mode_tags": ["bad_style", "fabricated_claim"]
+}

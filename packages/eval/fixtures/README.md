@@ -3,7 +3,7 @@
 Labeled examples for the offline eval harness. One JSON file per example, filename stem ==
 the fixture's `id`. Schema and validator: [`../src/types.ts`](../src/types.ts).
 
-**Current size: 40 fixtures.** OI-5's target is ~70. See
+**Current size: 43 fixtures.** OI-5's target is ~70. See
 [Size and confidence](#size-and-confidence) for the honest accounting of what this buys and
 what it does not — labeling throughput is the stated bottleneck (design §7.5), and the count is
 reported rather than papered over.
@@ -222,14 +222,14 @@ below, and eight of the 35 carry the explicit negative label (`expect_no_pending
 ## Size and confidence
 
 The design's offline eval set target is ~200 examples initially (§7.5); the Task 5.2 milestone
-target was ~70. **This set contains 40** (35 through Task 5.2, plus 5 added 2026-09-04 against
+target was ~70. **This set contains 43** (35 through Task 5.2, plus 8 added 2026-09-04 against
 measured coverage gaps). Reporting the number rather than shipping quietly
 under it is the explicit instruction in the plan when labeling throughput binds, and it did:
 each fixture here is a hand-written scenario with narrative events, per-item citations, and a
 `notes` field justifying the label, which is the only way the ground truth stays checkable by
 eye — and it is roughly an hour of work each.
 
-What 40 buys. The arithmetic below is unchanged in kind from the 35-fixture version — five more
+What 43 buys. The arithmetic below is unchanged in kind from the 35-fixture version — five more
 fixtures narrows the intervals slightly and moves nothing across a threshold, which is itself
 the point: the gap to ~70 is not closed by a batch this size.
 
@@ -244,10 +244,21 @@ the point: the gap to ~70 is not closed by a batch this size.
   regression of that size but cannot resolve smaller ones. The negative fixtures went 8 → 10
   deliberately: AC-4's precision denominator was the thinnest number in every run to date
   (25 items at n=35), and precision is measured only where the correct answer is "nothing".
-- **Per-tag statistical power.** `bad_style` still has three fixtures; `refusal` and
-  `prompt_injection_misbehavior` went to four. That is enough to catch a category that is
-  broadly broken, not enough to measure a rate within a category. `bad_style` is the remaining
+- **Per-tag statistical power.** `bad_style` went 3 → 6, `refusal` and
+  `prompt_injection_misbehavior` 3 → 4. That is enough to catch a category that is broadly
+  broken, not enough to measure a rate within a category. `wrong_citation` (5) is now the
   thinnest tag and the obvious target for the next batch.
+
+  `bad_style` was doubled deliberately, because it is the only tag NO numeric metric can
+  detect: a style failure scores perfectly on recall, precision, citation accuracy and
+  hallucination rate while being something no user reads to the end. It is therefore the tag
+  where fixtures are the *only* instrument, and where the `unacceptable_briefings` field —
+  stored anti-patterns for eyeball review — carries the whole signal. The three added on
+  2026-09-04 cover style failures the original three did not: manufactured urgency
+  (`pm-urgency-01`), burial by chronological or drama-first ordering (`eng-mgr-burial-01`),
+  and fusion of unrelated decisions into one smooth clause (`designer-fusion-01`). Two of
+  those are failures the Layer 3 system prompt explicitly forbids and nothing previously
+  tested.
 
 Treat the numbers above as directional and the interval arithmetic as illustrative: it assumes
 one briefing per fixture, independent claims, and that labeled supported claims approximate the
