@@ -550,6 +550,7 @@ async function scoreFixture(
       briefingStep: '—',
       briefingOutcome: 'harness_error',
       claimsDropped: 0,
+      groundingFailures: 0,
       durationMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
     },
@@ -789,6 +790,7 @@ async function scoreFixture(
       briefingStep: briefing.step,
       briefingOutcome: briefing.outcome,
       claimsDropped: briefing.claimsDropped,
+      groundingFailures: briefing.groundingFailures,
       // `{}` renders as absent rather than as an empty string, so the report's
       // by-reason table only appears when there is something in it.
       ...(Object.keys(briefing.claimsDroppedByReason).length === 0

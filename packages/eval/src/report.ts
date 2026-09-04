@@ -91,6 +91,18 @@ export interface PerFixtureResult {
    * returned it; nothing was reading it.
    */
   claimsDroppedByReason?: string;
+  /**
+   * F-4: accepted claims whose cited source text did NOT support them.
+   *
+   * Under `briefing.groundingMode: 'observe'` — the shipped default — these
+   * claims were published anyway, and this is the count of what switching to
+   * `'enforce'` would have withheld. It is the number the enforce/observe
+   * decision rests on, which is why the eval reports it rather than leaving it
+   * in a trace file: enforcing a lexical grounding check without knowing its
+   * false-positive rate would trade a measured hallucination rate for an
+   * unmeasured recall loss.
+   */
+  groundingFailures: number;
   /** Wall-clock ms spent on this fixture, model calls included. */
   durationMs: number;
   /** Present only when the fixture failed to run at all. */
@@ -358,9 +370,9 @@ export function renderMarkdown(report: EvalReport): string {
     lines.push('');
     lines.push(
       '| Fixture | Tags | GT items | Surfaced | Matched | Wrong citation | Claims | ' +
-        'Halluc. | Citations | Cited OK | Top-3 | Step | Outcome | Dropped | ms |',
+        'Halluc. | Citations | Cited OK | Top-3 | Step | Outcome | Dropped | Ungrounded | ms |',
     );
-    lines.push('|---|---|--:|--:|--:|--:|--:|--:|--:|--:|:--:|---|---|--:|--:|');
+    lines.push('|---|---|--:|--:|--:|--:|--:|--:|--:|--:|:--:|---|---|--:|--:|--:|');
     for (const fixture of perFixture) {
       const top3 =
         fixture.top3Relevant === null ? 'n/a' : fixture.top3Relevant ? 'yes' : 'no';
@@ -370,7 +382,34 @@ export function renderMarkdown(report: EvalReport): string {
           `${fixture.wrongCitationItems} | ${fixture.claims} | ${fixture.hallucinatedClaims} | ` +
           `${fixture.citations} | ${fixture.supportedCitations} | ${top3} | ` +
           `${fixture.briefingStep} | ${fixture.briefingOutcome} | ${fixture.claimsDropped} | ` +
-          `${fixture.durationMs} |`,
+          `${fixture.groundingFailures} | ${fixture.durationMs} |`,
+      );
+    }
+    lines.push('');
+
+    // F-4: what enforcing the grounding check would have cost.
+    const ungrounded = perFixture.reduce((sum, f) => sum + f.groundingFailures, 0);
+    const publishedClaims = perFixture.reduce((sum, f) => sum + f.claims, 0);
+    lines.push('### F-4 grounding check (observe mode)');
+    lines.push('');
+    if (publishedClaims === 0) {
+      lines.push('_No claims were published, so the grounding check had nothing to evaluate._');
+    } else {
+      const pct = ((ungrounded / publishedClaims) * 100).toFixed(1);
+      lines.push(
+        `**${ungrounded} of ${publishedClaims} published claim(s) (${pct}%) were NOT supported ` +
+          "by their cited source text**, under the same 0.60 containment rule this harness " +
+          'uses to score AC-5.',
+      );
+      lines.push('');
+      lines.push(
+        'These claims WERE shown to the user: `briefing.groundingMode` ships as ' +
+          "`'observe'`, which counts without withholding. This number is the cost of " +
+          "switching to `'enforce'` — it is how many claims would have been dropped, and it " +
+          'includes both genuine fabrications AND faithful abstractive summaries that share ' +
+          'too few literal tokens with their source. Read it against the hallucination rate ' +
+          'above before flipping the mode: if it materially exceeds the hallucination count, ' +
+          'enforcing would delete more true claims than false ones.',
       );
     }
     lines.push('');
