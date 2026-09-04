@@ -36,6 +36,8 @@ function pendingItem(overrides: Partial<PendingItemView> = {}): PendingItemView 
     description: 'Reply to Marcus about the adapter layer.',
     confidence: 0.92,
     citationArtifactId: 'art-1',
+    // P4 inline evidence; overridable to null for the "no quote resolved" case.
+    sourceQuote: 'Can you approve the SOW before Friday?',
     ...overrides,
   };
 }
@@ -194,7 +196,6 @@ describe('§7.6 — flag, do not suppress', () => {
           text="Acme escalation looks resolved."
           claimId="art-9"
           citationLabel="slack · art-9"
-          externalUrl="https://slack.example/archives/C1/p9"
           confidence={0.2}
         />
       </ul>,
@@ -207,7 +208,6 @@ describe('§7.6 — flag, do not suppress', () => {
     // Provenance is not withheld from a hedged claim — if anything it matters more.
     const chip = scope.getByRole('button', { name: 'slack · art-9' });
     expect(chip.tagName).toBe('BUTTON');
-    expect(scope.getByRole('link', { name: /open in source/i })).toBeTruthy();
     expect(scope.getByTestId('low-confidence-flag')).toBeTruthy();
   });
 

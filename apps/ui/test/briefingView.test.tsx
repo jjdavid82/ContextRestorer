@@ -146,7 +146,7 @@ function installBridge(
       // `BriefingView` is handed a `briefingId` (or an explicit window) by its
       // parent, so the resume point is `app/page.tsx`'s concern, not this
       // component's. `null` is the first-run answer.
-      resumePoint: vi.fn(async () => ({ windowStart: null })),
+      resumePoint: vi.fn(async () => ({ windowStart: null, maxChangedItems: 7 })),
       // NFR-10 time-to-re-entry view (Task 3.7). Present only to satisfy the
       // bridge contract: nothing in the briefing view reads it today.
       metrics: vi.fn(async () => []),
@@ -269,6 +269,7 @@ describe('BriefingView — pending then stream', () => {
           description: 'Sign off on the two SRE reqs.',
           confidence: 0.9,
           citationArtifactId: 'art-p1',
+          sourceQuote: null,
         },
       ],
     });
@@ -310,6 +311,7 @@ describe('BriefingView — pending then stream', () => {
           description: 'Sign off on the two SRE reqs.',
           confidence: 0.9,
           citationArtifactId: 'art-p1',
+          sourceQuote: null,
         },
       ],
     });
@@ -332,6 +334,7 @@ describe('BriefingView — pending then stream', () => {
           description: 'Sign off on the two SRE reqs.',
           confidence: 0.9,
           citationArtifactId: 'art-p1',
+          sourceQuote: null,
         },
       ],
       resolvePendingResult: { ok: false, reason: 'internal_error' },
@@ -354,6 +357,7 @@ describe('BriefingView — pending then stream', () => {
           description: 'Sign off on the two SRE reqs.',
           confidence: 0.9,
           citationArtifactId: 'art-p1',
+          sourceQuote: null,
         },
       ],
       // Simulates feedback given in an EARLIER run of the app (or a prior
@@ -378,6 +382,7 @@ describe('BriefingView — pending then stream', () => {
           description: 'Sign off on the two SRE reqs.',
           confidence: 0.9,
           citationArtifactId: 'art-p1',
+          sourceQuote: null,
         },
       ],
     });
@@ -427,49 +432,154 @@ describe('BriefingView — rehydration from briefing:snapshot', () => {
 /* 2. Fixed section order                                                     */
 /* -------------------------------------------------------------------------- */
 
-describe('BriefingView — section order', () => {
-  it('renders the four sections in canonical order regardless of arrival order', async () => {
+describe('BriefingView — grouping and order (P2)', () => {
+  it('renders two groups, obligations first, with counts as headings', async () => {
     const mock = installBridge();
     await renderBriefing(mock);
 
-    // Deliberately backwards, plus an unknown section that must be folded in.
+    // Deliberately backwards.
     mock.emitChunk(chunk({ section: 'Worth knowing', claim: 'Lin gave notice.' }));
     mock.emitChunk(chunk({ section: 'Quietly resolved', claim: 'Vendor thread wrapped.' }));
     mock.emitChunk(chunk({ section: 'What moved', claim: 'Acme escalation resolved.' }));
-    mock.emitChunk(chunk({ section: 'Waiting on you', claim: 'Review PR #2847.' }));
 
-    await screen.findByText('Review PR #2847.');
+    await screen.findByText('Acme escalation resolved.');
 
-    // Trailing `?` is the `SectionInfoIcon` tooltip badge, not part of the
-    // section name.
+    // Trailing `?` is the `SectionInfoIcon` tooltip badge, not part of the text.
     const headings = screen
       .getAllByRole('heading', { level: 3 })
       .map((h) => h.textContent?.replace(/\?$/, ''));
-    expect(headings).toEqual([
-      'Waiting on you',
-      'What moved',
-      'Quietly resolved',
-      'Worth knowing',
-    ]);
 
-    // Each claim landed under its own heading, not merely somewhere on the page.
-    const whatMoved = screen.getByRole('region', { name: 'What moved' });
-    expect(within(whatMoved).getByText('Acme escalation resolved.')).toBeTruthy();
+    // The four generator sections collapse to two GROUPS on screen, and each
+    // heading states the size of the job rather than naming a category.
+    expect(headings).toEqual(['Nothing needs you', '3 things changed']);
   });
 
-  it('files a claim with an unrecognised section under "Worth knowing"', async () => {
+  it('keeps canonical section order inside the merged changed group', async () => {
+    const mock = installBridge();
+    await renderBriefing(mock);
+
+    mock.emitChunk(chunk({ section: 'Worth knowing', claim: 'Lin gave notice.' }));
+    mock.emitChunk(chunk({ section: 'What moved', claim: 'Acme escalation resolved.' }));
+
+    await screen.findByText('Lin gave notice.');
+
+    // Merging the sections must not reshuffle them: "What moved" still precedes
+    // "Worth knowing" even though it arrived second.
+    const changed = screen.getByRole('region', { name: 'Changed while you were out' });
+    const texts = within(changed)
+      .getAllByRole('listitem')
+      .map((li) => li.textContent ?? '');
+    expect(texts[0]).toContain('Acme escalation resolved.');
+    expect(texts[1]).toContain('Lin gave notice.');
+  });
+
+  it('still shows a claim with an unrecognised section rather than dropping it', async () => {
     const mock = installBridge();
     await renderBriefing(mock);
 
     mock.emitChunk(chunk({ section: 'Hallucinated Heading', claim: 'Unfiled but cited.' }));
 
+    // The four-section layout filed this under "Worth knowing"; with one merged
+    // group the visible guarantee is simpler and stronger — a cited claim the
+    // model misfiled is never lost.
     await screen.findByText('Unfiled but cited.');
-    const worthKnowing = screen.getByRole('region', { name: 'Worth knowing' });
-    expect(within(worthKnowing).getByText('Unfiled but cited.')).toBeTruthy();
+    const changed = screen.getByRole('region', { name: 'Changed while you were out' });
+    expect(within(changed).getByText('Unfiled but cited.')).toBeTruthy();
+  });
+
+  it('caps the changed list and collapses the rest behind a count (A-4)', async () => {
+    const mock = installBridge();
+    await renderBriefing(mock);
+
+    // The mocked `resumePoint` reports maxChangedItems: 7.
+    for (let i = 0; i < 9; i += 1) {
+      mock.emitChunk(
+        chunk({
+          section: 'What moved',
+          claim: `Change number ${i}.`,
+          citation: citation({ artifactId: `art-${i}` }),
+        }),
+      );
+    }
+
+    await screen.findByText('Change number 0.');
+    const changed = screen.getByRole('region', { name: 'Changed while you were out' });
+
+    expect(within(changed).getAllByRole('listitem')).toHaveLength(7);
+    // The count is always visible — a capped item is collapsed, never a silent
+    // omission — and the heading still reports the true total.
+    expect(within(changed).getByText('9 things changed')).toBeTruthy();
+    const more = within(changed).getByRole('button', { name: /show 2 more/i });
+
+    fireEvent.click(more);
+    expect(within(changed).getAllByRole('listitem')).toHaveLength(9);
+  });
+
+  it('never caps obligations (AC-3)', async () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({
+      pendingId: `p-${i}`,
+      description: `Obligation ${i}.`,
+      confidence: 0.9,
+      citationArtifactId: `art-p-${i}`,
+      sourceQuote: null,
+    }));
+    const mock = installBridge({ pending: many });
+    await renderBriefing(mock);
+
+    await screen.findByText('Obligation 0.');
+    // An obligation hidden by a display cap is a recall miss the user cannot
+    // see, so the cap that applies to the changed list must not apply here.
+    const waiting = screen.getByRole('region', { name: /need/i });
+    expect(within(waiting).getAllByRole('listitem').length).toBeGreaterThanOrEqual(9);
+    expect(within(waiting).queryByRole('button', { name: /show .* more/i })).toBeNull();
   });
 });
 
 /* -------------------------------------------------------------------------- */
+/* 2b. P4 — verbatim evidence on obligations                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('BriefingView — inline source quote (P4)', () => {
+  it('shows the verbatim quote under an obligation', async () => {
+    const mock = installBridge({
+      pending: [
+        {
+          pendingId: 'p1',
+          description: 'Approve the vendor SOW.',
+          confidence: 0.9,
+          citationArtifactId: 'art-p1',
+          sourceQuote: 'Can you approve the SOW before Friday? Legal is holding.',
+        },
+      ],
+    });
+    await renderBriefing(mock);
+
+    // The evidence is on the page, not one click away: this is the claim the
+    // user most needs to check, and AC-4 precision measured 48%.
+    expect(
+      await screen.findByText('Can you approve the SOW before Friday? Legal is holding.'),
+    ).toBeTruthy();
+  });
+
+  it('renders the item without a quote when none could be resolved', async () => {
+    const mock = installBridge({
+      pending: [
+        {
+          pendingId: 'p1',
+          description: 'Approve the vendor SOW.',
+          confidence: 0.9,
+          citationArtifactId: 'art-p1',
+          sourceQuote: null,
+        },
+      ],
+    });
+    await renderBriefing(mock);
+
+    await screen.findByText('Approve the vendor SOW.');
+    expect(document.querySelector('.pending-quote')).toBeNull();
+  });
+});
+
 /* 3. OI-1 footer                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -558,6 +668,7 @@ describe('ClaimBullet — low-confidence flag', () => {
           description: 'Maybe you owe Marcus a review.',
           confidence: LOW_CONFIDENCE_FLAG_THRESHOLD - 0.1,
           citationArtifactId: 'art-low',
+          sourceQuote: null,
         },
       ],
     });
@@ -575,6 +686,7 @@ describe('ClaimBullet — low-confidence flag', () => {
           description: 'Approve the SRE reqs.',
           confidence: 0.95,
           citationArtifactId: 'art-high',
+          sourceQuote: null,
         },
       ],
     });
@@ -753,8 +865,10 @@ describe('BriefingView — accessibility (NFR-9)', () => {
     expect(title.tagName).toBe('H2');
     expect(title.textContent).toBe('What you missed');
 
+    // Two groups since P2, not four sections — the headings are still real
+    // `<h3>`s, which is what NFR-9 actually pins here.
     const sections = screen.getAllByRole('heading', { level: 3 });
-    expect(sections).toHaveLength(4);
+    expect(sections).toHaveLength(2);
     for (const heading of sections) expect(heading.tagName).toBe('H3');
   });
 

@@ -25,6 +25,7 @@ const validConfig: AppConfig = {
   budgets: { retrievalMs: 1_500, assemblyMs: 500, generationMs: 20_000, citationMs: 500 },
   retention: { rawEventDays: 30 },
   onboarding: { minDeclaredProjects: 3 },
+  briefing: { maxChangedItems: 7 },
 };
 
 const clone = (): AppConfig => structuredClone(validConfig);

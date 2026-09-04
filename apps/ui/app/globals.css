@@ -209,6 +209,22 @@
   color: var(--cr-color-text);
 }
 
+.section-heading__info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  margin-left: var(--cr-space-1);
+  border: 1px solid var(--cr-color-border-strong);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--cr-color-text-muted);
+  cursor: help;
+  vertical-align: middle;
+}
+
 /* For a `.section-heading` that is the FIRST thing inside its own `.card`
    (`SourceHealth.tsx`/`PipelineStatus.tsx`): the card's own padding already
    provides top breathing room, so the heading's usual top margin on top of
@@ -227,6 +243,23 @@
   list-style: disc;
   margin: 0;
   padding: 0 0 0 1.2rem;
+}
+
+/*
+ * P4: the verbatim source quote under an obligation.
+ *
+ * Visually subordinate to the claim above it — this is evidence, not a second
+ * assertion — but NOT muted to the point of being decorative: the user is meant
+ * to read it. The left rule carries the "quoted" meaning without relying on
+ * colour alone (NFR-9), and `--cr-color-text` keeps it at full contrast rather
+ * than the muted token used for genuinely secondary notes.
+ */
+.pending-quote {
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 0.65rem;
+  border-left: 3px solid var(--cr-color-border);
+  color: var(--cr-color-text);
+  font-style: normal;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -275,6 +308,22 @@
   margin-bottom: var(--cr-space-1);
   font-size: var(--cr-font-size-sm);
   color: var(--cr-color-text-muted);
+}
+
+/* A row of `.form-field`s side by side (e.g. the briefing window's From/To
+   pickers) instead of stacked. `align-items: flex-end` lines up the inputs
+   themselves, not the labels above them, which is what reads as "aligned"
+   when the two fields sit next to each other. */
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cr-space-4);
+  margin: var(--cr-space-3) 0;
+  align-items: flex-end;
+}
+
+.form-row .form-field {
+  margin: 0;
 }
 
 /* One checkbox/radio + its label — used by the onboarding candidate list and

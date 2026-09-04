@@ -55,13 +55,15 @@ export const BRIEFING_SECTIONS = [
 
 export type BriefingSection = (typeof BRIEFING_SECTIONS)[number];
 
-/** `section name → meaning`, shown as a tooltip on each section heading. */
-const SECTION_MEANING: Record<BriefingSection, string> = {
-  'Waiting on you': 'Outstanding obligations that are on this person right now',
-  'What moved': 'Decisions made and work that visibly advanced',
-  'Quietly resolved': "Questions/blockers/obligations that closed without the user's input",
-  'Worth knowing': "Context they'd want but that requires nothing from them",
-};
+/**
+ * Per-section tooltips are gone with the four-section layout (P2).
+ *
+ * The three streamed sections now render as one group under
+ * {@link CHANGED_GROUP_MEANING}, and "Waiting on you" carries its own wording
+ * inside `PendingSection`. The section NAMES still exist — the generator emits
+ * them and `briefing_claims.section` stores them — they are simply no longer
+ * headings the reader has to triage between.
+ */
 
 /**
  * Bucket for a claim whose `section` is not one of the four.
@@ -74,6 +76,32 @@ const DEFAULT_SECTION: BriefingSection = 'Worth knowing';
 
 /** The three sections that are streamed rather than painted from `pending_items`. */
 const STREAMED_SECTIONS = BRIEFING_SECTIONS.filter((s) => s !== 'Waiting on you');
+
+/**
+ * P2: the four generator sections collapse into TWO groups on screen.
+ *
+ * "Quietly resolved" and "Worth knowing" are the lowest-value sections and the
+ * ones fabrication fills — `DEFAULT_SECTION` already files every unattributable
+ * claim into the latter. Merging them with "What moved" into one *changed* list
+ * removes two headings the reader has to triage between without losing a single
+ * claim: nothing is dropped, only regrouped.
+ *
+ * Deliberately a renderer-side mapping rather than a generator change. The
+ * prompt still emits four sections and `briefing_claims.section` still stores
+ * them, so the eval harness, the persisted narrative and the section ordering
+ * contract are all untouched by a presentation decision.
+ */
+const CHANGED_SECTIONS = STREAMED_SECTIONS;
+
+/**
+ * A-4: fallback cap for the changed list, used until `briefing:resumePoint`
+ * answers. Mirrors `config/default.json`'s `briefing.maxChangedItems`.
+ */
+const DEFAULT_MAX_CHANGED_ITEMS = 7;
+
+/** Tooltip for the merged changed group — the union of the three sections it replaces. */
+const CHANGED_GROUP_MEANING =
+  'Decisions, progress, things that closed without you, and context worth knowing';
 
 /** How far back a self-initiated briefing looks. */
 const BRIEFING_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -141,6 +169,10 @@ export function BriefingView({
   const [openClaimId, setOpenClaimId] = useState<string | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [claimVerdicts, setClaimVerdicts] = useState<Record<string, FeedbackInput['verdict']>>({});
+  /** A-4 cap for the changed list; replaced by the config value once known. */
+  const [maxChangedItems, setMaxChangedItems] = useState(DEFAULT_MAX_CHANGED_ITEMS);
+  /** True once the user has expanded past the cap. Never collapses again. */
+  const [showAllChanged, setShowAllChanged] = useState(false);
   // Tracks which claim ids a lookup has already been sent for, so a claim that
   // comes back with NO verdict does not get re-queried on every re-render.
   const requestedVerdictIds = useRef<Set<string>>(new Set());
@@ -245,6 +277,29 @@ export function BriefingView({
     };
   }, [externalBriefingId, windowStart, windowEnd]);
 
+  // A-4: the display cap is config-driven (NFR-7), so it is read rather than
+  // hard-coded. Best-effort — the constant above stands in if the read fails,
+  // because a briefing that renders with a default cap beats one that does not
+  // render at all.
+  useEffect(() => {
+    let active = true;
+    try {
+      getBridge()
+        .briefing.resumePoint()
+        .then((resume) => {
+          if (active && Number.isInteger(resume.maxChangedItems) && resume.maxChangedItems > 0) {
+            setMaxChangedItems(resume.maxChangedItems);
+          }
+        })
+        .catch(() => undefined);
+    } catch {
+      // No bridge (plain browser / static export) — keep the default.
+    }
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const toggleDrilldown = useCallback((claimId: string): void => {
     setOpenClaimId((current) => (current === claimId ? null : claimId));
   }, []);
@@ -342,8 +397,8 @@ export function BriefingView({
    * through rather than rendered by the caller directly: it needs to land
    * INSIDE `FeedbackControls`' row (same line as Relevant/Not relevant/Wrong),
    * and only this function has the `FeedbackControls` element to put it in.
-   * `bulletsFor` (streamed claims, no pending item behind them) calls this
-   * with no second argument, so nothing extra renders there.
+   * `bulletsForChunks` (streamed claims, no pending item behind them) calls
+   * this with no second argument, so nothing extra renders there.
    */
   const renderDetail = useCallback(
     (claimId: string, resolveAction?: ReactNode): ReactNode => {
@@ -399,9 +454,6 @@ export function BriefingView({
       );
     });
 
-  const bulletsFor = (section: BriefingSection): ReactNode[] =>
-    bulletsForChunks(claims.filter((chunk) => sectionOf(chunk) === section));
-
   // Artifact ids already backed by a real `pending_items` row (painted by
   // `PendingSection` itself, with the "Mark resolved" control). Excluded here so
   // a claim that just got promoted via the refetch above does not also render as
@@ -412,6 +464,15 @@ export function BriefingView({
   const waitingOnYouClaims = claims.filter(
     (chunk) => sectionOf(chunk) === 'Waiting on you' && !pendingArtifactIds.has(claimIdOf(chunk)),
   );
+
+  // P2: every non-obligation claim, in canonical section order. Sorted rather
+  // than concatenated per section so one flat list still reads in the order the
+  // four-section layout would have shown.
+  const changedClaims = CHANGED_SECTIONS.flatMap((section) =>
+    claims.filter((chunk) => sectionOf(chunk) === section),
+  );
+  const visibleChanged = showAllChanged ? changedClaims : changedClaims.slice(0, maxChangedItems);
+  const hiddenChangedCount = changedClaims.length - visibleChanged.length;
 
   return (
     <section className="cr-briefing" aria-label="Briefing">
@@ -490,24 +551,48 @@ export function BriefingView({
           ) : null}
         </PendingSection>
 
-        {STREAMED_SECTIONS.map((section) => {
-          const bullets = bulletsFor(section);
-          return (
-            <section key={section} aria-label={section}>
-              <h3 className="section-heading">
-                {section}
-                <SectionInfoIcon meaning={SECTION_MEANING[section]} />
-              </h3>
-              {bullets.length > 0 ? (
-                <ul className="bullet-list">{bullets}</ul>
-              ) : (
-                <p className="muted-note">
-                  {done === null ? 'Still writing…' : 'Nothing here.'}
-                </p>
-              )}
-            </section>
-          );
-        })}
+        {/*
+          P2/P4: ONE "changed" group, not three sections. The generator still
+          emits four sections and they are still what gets persisted — this is a
+          presentation grouping only, ordered by `CHANGED_SECTIONS` so a claim's
+          relative position is unchanged from the four-section layout.
+
+          The heading is a COUNT ("4 things changed"), so the reader learns the
+          size of the job before reading any of it.
+        */}
+        <section aria-label="Changed while you were out">
+          <h3 className="section-heading">
+            {changedClaims.length === 0
+              ? 'Nothing else changed'
+              : `${changedClaims.length} thing${changedClaims.length === 1 ? '' : 's'} changed`}
+            <SectionInfoIcon meaning={CHANGED_GROUP_MEANING} />
+          </h3>
+
+          {visibleChanged.length > 0 ? (
+            <ul className="bullet-list">{bulletsForChunks(visibleChanged)}</ul>
+          ) : (
+            <p className="muted-note">{done === null ? 'Still writing…' : 'Nothing here.'}</p>
+          )}
+
+          {/*
+            A-4: the overflow is COLLAPSED, never dropped, and the count is
+            always visible — the cap makes this a briefing rather than a feed,
+            but a hidden item the user cannot even count would be a silent
+            omission. Obligations above have no equivalent control because they
+            are never capped at all.
+          */}
+          {hiddenChangedCount > 0 ? (
+            <p>
+              <button
+                type="button"
+                className="cr-interactive feedback-button"
+                onClick={() => setShowAllChanged(true)}
+              >
+                Show {hiddenChangedCount} more
+              </button>
+            </p>
+          ) : null}
+        </section>
       </div>
 
       <footer className="briefing-view__footer">

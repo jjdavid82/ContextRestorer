@@ -31,6 +31,9 @@ const {
   citationForArtifact,
   getBriefingSnapshot,
   getResumePoint,
+  sourceQuoteFor,
+  MAX_SOURCE_QUOTE_CHARS,
+  DEFAULT_MAX_CHANGED_ITEMS,
   listPending,
   parseBriefingWindow,
   rankPendingItems,
@@ -150,6 +153,8 @@ function seedEvent(opts: {
   occurredAt: number;
   source?: SourceId;
   sourceEventId?: string;
+  /** Body text. Defaults to `body of <eventId>`. */
+  text?: string;
 }): Event {
   const event: Event = {
     eventId: opts.eventId,
@@ -159,7 +164,7 @@ function seedEvent(opts: {
     actorId: 'U-alice',
     occurredAt: opts.occurredAt,
     ingestedAt: opts.occurredAt + 10,
-    payload: { text: `body of ${opts.eventId}`, isNoiseCandidate: false },
+    payload: { text: opts.text ?? `body of ${opts.eventId}`, isNoiseCandidate: false },
     redactionCount: 0,
   };
   events.insertIfAbsent(event);
@@ -425,6 +430,9 @@ describe('every item carries its citation and confidence', () => {
       pendingId: 'p1',
       description: 'send Dana the migration plan',
       confidence: 0.42,
+      // No artifact/event readers on these deps, so P4's inline quote resolves
+      // to null — see the sourceQuoteFor block for the wired case.
+      sourceQuote: null,
       citationArtifactId: artifact,
     });
   });
@@ -440,6 +448,7 @@ describe('every item carries its citation and confidence', () => {
       'confidence',
       'description',
       'pendingId',
+      'sourceQuote',
     ]);
   });
 
@@ -867,6 +876,7 @@ describe('briefing:resumePoint (F-2)', () => {
 
     expect(getResumePoint({ pending, briefings, startGeneration: () => {} } as Deps)).toEqual({
       windowStart: null,
+      maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS,
     });
   });
 
@@ -876,7 +886,7 @@ describe('briefing:resumePoint (F-2)', () => {
 
     expect(
       getResumePoint({ pending, resume: briefings, startGeneration: () => {} } as Deps),
-    ).toEqual({ windowStart: 2_000_000 });
+    ).toEqual({ windowStart: 2_000_000, maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS });
   });
 
   it('degrades to null when no resume reader is wired', () => {
@@ -888,6 +898,7 @@ describe('briefing:resumePoint (F-2)', () => {
     // rejecting, so the primary button stays usable.
     expect(getResumePoint({ pending, startGeneration: () => {} } as Deps)).toEqual({
       windowStart: null,
+      maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS,
     });
   });
 
@@ -900,7 +911,7 @@ describe('briefing:resumePoint (F-2)', () => {
 
     expect(
       getResumePoint({ pending, resume: exploding, startGeneration: () => {} } as Deps),
-    ).toEqual({ windowStart: null });
+    ).toEqual({ windowStart: null, maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS });
   });
 
   it('treats a non-finite stored value as never-acknowledged', () => {
@@ -908,7 +919,7 @@ describe('briefing:resumePoint (F-2)', () => {
 
     expect(
       getResumePoint({ pending, resume: nonsense, startGeneration: () => {} } as Deps),
-    ).toEqual({ windowStart: null });
+    ).toEqual({ windowStart: null, maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS });
   });
 
   it('registers the channel and takes no argument', () => {
@@ -922,6 +933,101 @@ describe('briefing:resumePoint (F-2)', () => {
 
     // Invoked the way `ipcMain` will invoke it: an event, and nothing else.
     const listener = entry?.[1] as (event: unknown) => unknown;
-    expect(listener({})).toEqual({ windowStart: 2_000_000 });
+    expect(listener({})).toEqual({
+      windowStart: 2_000_000,
+      maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS,
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* P4 — the inline verbatim source quote                                      */
+/* -------------------------------------------------------------------------- */
+
+describe('sourceQuoteFor (P4)', () => {
+  it('returns the latest message text on the artifact', () => {
+    seedThreadArtifact({ artifactId: 'art-q', threadKey: 'C-q:1' });
+    seedEvent({ eventId: 'evt-old', threadKey: 'C-q:1', occurredAt: 1_000 });
+    seedEvent({ eventId: 'evt-new', threadKey: 'C-q:1', occurredAt: 5_000 });
+
+    expect(sourceQuoteFor('art-q', graph, events)).toBe('body of evt-new');
+  });
+
+  it('collapses whitespace so a quote stays one line', () => {
+    seedThreadArtifact({ artifactId: 'art-ws', threadKey: 'C-ws:1' });
+    seedEvent({
+      eventId: 'evt-ws',
+      threadKey: 'C-ws:1',
+      occurredAt: 1_000,
+      text: '  can you\n\n  approve this?  ',
+    });
+
+    expect(sourceQuoteFor('art-ws', graph, events)).toBe('can you approve this?');
+  });
+
+  it('truncates a long body at the quote limit', () => {
+    seedThreadArtifact({ artifactId: 'art-long', threadKey: 'C-long:1' });
+    seedEvent({
+      eventId: 'evt-long',
+      threadKey: 'C-long:1',
+      occurredAt: 1_000,
+      text: 'x'.repeat(MAX_SOURCE_QUOTE_CHARS + 50),
+    });
+
+    const quote = sourceQuoteFor('art-long', graph, events);
+    // A one-line proof under a one-line claim — long enough to scroll would
+    // rebuild the density the list layout removed.
+    expect(quote).toHaveLength(MAX_SOURCE_QUOTE_CHARS + 1); // + the ellipsis
+    expect(quote?.endsWith('…')).toBe(true);
+  });
+
+  it('returns null for a missing artifact, no events, or an empty body', () => {
+    expect(sourceQuoteFor('art-nope', graph, events)).toBeNull();
+
+    seedThreadArtifact({ artifactId: 'art-empty', threadKey: 'C-empty:1' });
+    expect(sourceQuoteFor('art-empty', graph, events)).toBeNull();
+
+    seedThreadArtifact({ artifactId: 'art-blank', threadKey: 'C-blank:1' });
+    seedEvent({ eventId: 'evt-blank', threadKey: 'C-blank:1', occurredAt: 1_000, text: '   ' });
+    expect(sourceQuoteFor('art-blank', graph, events)).toBeNull();
+  });
+
+  it('returns null when no readers are wired, rather than throwing', () => {
+    expect(sourceQuoteFor('art-q', undefined, undefined)).toBeNull();
+    expect(sourceQuoteFor(null, graph, events)).toBeNull();
+  });
+
+  it('is attached to every item listPending returns', () => {
+    seedThreadArtifact({ artifactId: 'art-p', threadKey: 'C-p:1' });
+    seedEvent({ eventId: 'evt-p', threadKey: 'C-p:1', occurredAt: 1_000 });
+    seedPending({ pendingId: 'p1', confidence: 0.9, createdAt: 1_000, artifactId: 'art-p' });
+
+    const [item] = listPending(makeDeps({ artifacts: graph, events }));
+    expect(item?.sourceQuote).toBe('body of evt-p');
+  });
+
+  it('leaves sourceQuote null when the readers are not wired', () => {
+    seedPending({ pendingId: 'p1', confidence: 0.9, createdAt: 1_000 });
+
+    const [item] = listPending(makeDeps());
+    // First paint must still work on a partially-wired host; the renderer
+    // simply shows the obligation with no inline evidence.
+    expect(item?.sourceQuote).toBeNull();
+  });
+});
+
+describe('briefing:resumePoint carries the A-4 cap', () => {
+  it('reports the configured cap', () => {
+    expect(
+      getResumePoint({ pending, maxChangedItems: 5, startGeneration: () => {} } as Deps),
+    ).toEqual({ windowStart: null, maxChangedItems: 5 });
+  });
+
+  it('falls back to the default for an absent or nonsensical cap', () => {
+    for (const maxChangedItems of [undefined, 0, -3, 2.5, Number.NaN]) {
+      expect(
+        getResumePoint({ pending, maxChangedItems, startGeneration: () => {} } as Deps),
+      ).toEqual({ windowStart: null, maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS });
+    }
   });
 });

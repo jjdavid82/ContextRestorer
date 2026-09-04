@@ -400,6 +400,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       // `briefing:resumePoint` (F-2). Absent, the channel is still registered
       // and answers `{ windowStart: null }`.
       ...(deps.briefingResume !== undefined ? { resume: deps.briefingResume } : {}),
+      // A-4 display cap, read from the same config every other handler uses.
+      maxChangedItems: deps.config.briefing.maxChangedItems,
       clock: deps.clock ?? systemClock,
       startGeneration:
         deps.startGeneration ??

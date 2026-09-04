@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import type { PendingItemView } from '../types/bridge';
 import { CITATION_CHIP_LABEL, ClaimBullet } from './ClaimBullet';
+import { SectionInfoIcon } from './SectionInfoIcon';
 
 /**
  * The "Waiting on you" section (Task 3.6).
@@ -105,8 +106,25 @@ export function PendingSection({
 
   return (
     <section aria-labelledby="cr-section-waiting-on-you">
+      {/*
+        P2: the heading is a COUNT, so the reader learns the size of the job
+        before reading any of it. Counted over CITED items only — the same set
+        that actually renders — so the number can never promise a row that §7.6
+        then suppresses.
+
+        A-4: this list is deliberately UNCAPPED. AC-3 targets >= 90% recall, and
+        an obligation hidden behind a display cap is a recall miss the user
+        cannot see; only the changed list is capped.
+      */}
       <h3 id="cr-section-waiting-on-you" className="section-heading">
-        Waiting on you
+        {loading
+          ? 'Waiting on you'
+          : citedItems.length === 0
+            ? 'Nothing needs you'
+            : `${citedItems.length} thing${citedItems.length === 1 ? '' : 's'} need${
+                citedItems.length === 1 ? 's' : ''
+              } you`}
+        <SectionInfoIcon meaning="Outstanding obligations that are on this person right now" />
       </h3>
 
       {loading ? (
@@ -138,6 +156,20 @@ export function PendingSection({
                 lowConfidenceNote={PENDING_LOW_CONFIDENCE_NOTE}
                 {...(onCitationClick === undefined ? {} : { onCitationClick })}
               >
+                {/*
+                  P4: verbatim evidence, inline, for obligations only.
+
+                  This is the artifact's OWN text (`sourceQuote`, resolved in
+                  `ipc/briefing.ts`), never model output — which is the whole
+                  point. An item asserting that someone is waiting on the user is
+                  the claim they most need to check, and AC-4 precision measured
+                  48%; making them click through to find that out is the wrong
+                  default. The changed list paraphrases instead, because being
+                  wrong there is cheap.
+                */}
+                {item.sourceQuote !== null ? (
+                  <blockquote className="pending-quote">{item.sourceQuote}</blockquote>
+                ) : null}
                 {renderDetail !== undefined ? renderDetail(claimId, resolveAction) : resolveAction}
               </ClaimBullet>
             );

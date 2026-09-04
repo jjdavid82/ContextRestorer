@@ -83,6 +83,55 @@ const PROJECT_REL = 'belongs_to';
 export const DEFAULT_STAKES_WEIGHT = 1.0;
 
 /**
+ * Longest verbatim source quote shown inline beneath an obligation (P4).
+ *
+ * Far shorter than `MAX_EVENT_TEXT_CHARS` (2,000, the drill-down panel's limit):
+ * this is a one-line proof sitting under a one-line claim, not the message. A
+ * quote long enough to need scrolling would recreate the density the list layout
+ * exists to remove.
+ */
+export const MAX_SOURCE_QUOTE_CHARS = 180;
+
+/**
+ * The most recent message on the artifact backing an obligation, clipped.
+ *
+ * P4 keeps verbatim evidence visible for "Needs you" items and paraphrases only
+ * in the changed list: an item asserting that someone is waiting on the user is
+ * exactly the claim they must be able to check without a click, and AC-4
+ * precision measured 48%. The quote is the artifact's own text — never model
+ * output — so it is evidence rather than a second assertion.
+ *
+ * `null` whenever it cannot be resolved (no artifact, no events, empty body).
+ * The renderer then shows the item without a quote rather than an empty one.
+ */
+export function sourceQuoteFor(
+  artifactId: string | null,
+  artifacts: ArtifactReader | undefined,
+  events: ThreadEventReader | undefined,
+): string | null {
+  if (artifactId === null || artifacts === undefined || events === undefined) return null;
+
+  try {
+    const [latest] = resolveEvents(artifactId, { artifacts, events, maxEvents: 1 });
+    if (latest === undefined) return null;
+
+    const text: unknown = latest.payload['text'];
+    if (typeof text !== 'string') return null;
+    const trimmed = text.trim().replace(/\s+/g, ' ');
+    if (trimmed === '') return null;
+
+    return trimmed.length <= MAX_SOURCE_QUOTE_CHARS
+      ? trimmed
+      : `${trimmed.slice(0, MAX_SOURCE_QUOTE_CHARS)}…`;
+  } catch (error) {
+    // A missing quote degrades the item to "no inline evidence", which the
+    // renderer already handles; it must never fail the first-paint read.
+    console.error('[briefing] source quote lookup failed', artifactId, error);
+    return null;
+  }
+}
+
+/**
  * The slice of `PendingItemsRepo` this module uses.
  *
  * Structural, so the real repo satisfies it with no adapter, and a test can pass
@@ -192,6 +241,8 @@ export interface BriefingHandlerDeps {
    * run anyway.
    */
   resume?: ResumePointReader;
+  /** A-4 display cap, from `config.briefing.maxChangedItems`. */
+  maxChangedItems?: number;
   /** Artifact/person source for resolving a claim's citation; `GraphRepo` in production. */
   artifacts?: ArtifactReader;
   /** Thread event source for the same resolution; `EventsRepo` in production. */
@@ -254,6 +305,8 @@ function stakesWeightFor(
 export function rankPendingItems(
   items: readonly PendingItem[],
   graph?: StakesReader,
+  /** Optional artifact/event readers used to attach the P4 inline quote. */
+  sources?: { artifacts?: ArtifactReader; events?: ThreadEventReader },
 ): PendingItemView[] {
   const cache = new Map<string, number>();
 
@@ -277,6 +330,10 @@ export function rankPendingItems(
     description: item.description,
     confidence: item.confidence,
     citationArtifactId: item.citationArtifactId,
+    // P4: verbatim evidence, inline, for obligations only. Resolved here rather
+    // than by a second round trip per item — this path is the first-paint read
+    // and must stay one screenful in one call.
+    sourceQuote: sourceQuoteFor(item.citationArtifactId, sources?.artifacts, sources?.events),
   }));
 }
 
@@ -287,7 +344,12 @@ export function rankPendingItems(
  * by `ipcMain.handle`, not by anything in here waiting on a model.
  */
 export function listPending(deps: BriefingHandlerDeps): PendingItemView[] {
-  return rankPendingItems(deps.pending.listOpen(), deps.graph);
+  return rankPendingItems(deps.pending.listOpen(), deps.graph, {
+    // Spread-free: both are already optional on the deps, and `sourceQuoteFor`
+    // treats either being absent as "no quote available".
+    ...(deps.artifacts === undefined ? {} : { artifacts: deps.artifacts }),
+    ...(deps.events === undefined ? {} : { events: deps.events }),
+  });
 }
 
 /**
@@ -449,7 +511,14 @@ export function getBriefingSnapshot(arg: unknown, deps: BriefingHandlerDeps): Br
   }
 }
 
-/** `briefing:resumePoint` result: where the next briefing should start. */
+/**
+ * `briefing:resumePoint` result: where the next briefing should start, and how
+ * many changed items to show.
+ *
+ * The display cap rides along here rather than on its own channel because the
+ * renderer needs both at exactly the same moment — the click that requests a
+ * briefing — and a second round trip for one integer would be pure ceremony.
+ */
 export interface ResumePoint {
   /**
    * `window_end` of the furthest-forward acknowledged briefing, or `null` when
@@ -459,7 +528,19 @@ export interface ResumePoint {
    * it with a default lookback.
    */
   windowStart: number | null;
+  /**
+   * A-4: how many "things changed" items to render before collapsing the rest
+   * behind "show N more". Config-driven (NFR-7), from `briefing.maxChangedItems`.
+   *
+   * Applies to that list ONLY. Obligations are never capped — AC-3 targets
+   * >= 90% recall and an obligation hidden by a display cap is a recall miss
+   * the user cannot see.
+   */
+  maxChangedItems: number;
 }
+
+/** Fallback cap when no config is wired. Matches `config/default.json`. */
+export const DEFAULT_MAX_CHANGED_ITEMS = 7;
 
 /**
  * The whole of `briefing:resumePoint` — the F-2 fix.
@@ -478,17 +559,24 @@ export interface ResumePoint {
  * the primary button unusable.
  */
 export function getResumePoint(deps: BriefingHandlerDeps): ResumePoint {
-  if (deps.resume === undefined) return { windowStart: null };
+  const maxChangedItems =
+    deps.maxChangedItems !== undefined && Number.isInteger(deps.maxChangedItems) && deps.maxChangedItems > 0
+      ? deps.maxChangedItems
+      : DEFAULT_MAX_CHANGED_ITEMS;
+
+  if (deps.resume === undefined) return { windowStart: null, maxChangedItems };
 
   try {
     const windowStart = deps.resume.lastAcknowledgedWindowEnd();
     // A non-finite stored value would produce an unusable window downstream;
     // treating it as "never acknowledged" is the safe degradation.
-    if (windowStart === null || !Number.isFinite(windowStart)) return { windowStart: null };
-    return { windowStart };
+    if (windowStart === null || !Number.isFinite(windowStart)) {
+      return { windowStart: null, maxChangedItems };
+    }
+    return { windowStart, maxChangedItems };
   } catch (error) {
     console.error('[briefing] resume point read failed', error);
-    return { windowStart: null };
+    return { windowStart: null, maxChangedItems };
   }
 }
 

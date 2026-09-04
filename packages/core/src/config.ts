@@ -30,6 +30,11 @@ export interface AppConfig {
   retention: { rawEventDays: number };
   onboarding: { minDeclaredProjects: number };
   /**
+   * Briefing presentation (A-4). `maxChangedItems` caps the "things changed"
+   * list; obligations are deliberately NOT capped — see `assertValid`.
+   */
+  briefing: { maxChangedItems: number };
+  /**
    * OPTIONAL. Absent in the shipped config; populated only once a real Slack /
    * Google OAuth app exists. `assertValid` deliberately does not check it — an
    * unconfigured source must degrade to "not connected", never to a startup abort.
@@ -99,13 +104,23 @@ function assertValid(c: AppConfig): void {
   // Guarded like `debounce` above: a config file with no `onboarding` key at all
   // must fail with a config error, not an unguarded TypeError from the deref.
   if (!c.onboarding) throw new Error('config: onboarding is required');
-  // OI-3 originally fixed this at >= 3 (mandatory declaration, to avoid a
-  // flat, unranked first briefing). Relaxed to "any non-negative integer" by
-  // explicit user decision: declared-project stakes are not yet wired into
-  // ranking anywhere in the pipeline (no code path creates the `belongs_to`
-  // graph edge `wStakes` reads), so requiring 3 currently gates onboarding on
-  // a signal that has no effect yet. Revisit once project-linking ships.
+  // OI-3 fixes this at >= 3 (mandatory declaration, to avoid a flat, unranked
+  // first briefing). It was relaxed to "any non-negative integer" while nothing
+  // in the pipeline created the `belongs_to` edge `wStakes` reads, which made
+  // the requirement gate onboarding on a signal with no effect. A-2 supplies
+  // that write path, so the shipped value is 3 again; the validator stays
+  // permissive so an advanced user can lower it locally (NFR-7).
   if (!Number.isInteger(c.onboarding.minDeclaredProjects) || c.onboarding.minDeclaredProjects < 0) {
     throw new Error('config: onboarding.minDeclaredProjects must be a non-negative integer');
+  }
+
+  if (!c.briefing) throw new Error('config: briefing is required');
+  // A-4: the cap applies ONLY to the "things changed" list. Obligations are
+  // never capped — AC-3 targets >= 90% recall, and an obligation hidden by a
+  // display cap is a recall miss the user cannot see. A cap of 0 would empty
+  // the changed list entirely, which is a misconfiguration rather than a
+  // preference, so the floor is 1.
+  if (!Number.isInteger(c.briefing.maxChangedItems) || c.briefing.maxChangedItems < 1) {
+    throw new Error('config: briefing.maxChangedItems must be a positive integer');
   }
 }

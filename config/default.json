@@ -17,5 +17,6 @@
   "ranking": { "wStakes": 3.0, "wPendingOnMe": 5.0, "wSelfParticipation": 1.5, "wRecency": 0.5 },
   "budgets": { "retrievalMs": 5000, "assemblyMs": 2000, "generationMs": 360000, "citationMs": 5000 },
   "retention": { "rawEventDays": 90 },
-  "onboarding": { "minDeclaredProjects": 3 }
+  "onboarding": { "minDeclaredProjects": 3 },
+  "briefing": { "maxChangedItems": 7 }
 }

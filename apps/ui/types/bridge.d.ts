@@ -89,6 +89,11 @@ export interface PendingItemView {
   confidence: number;
   /** Artifact backing this item; feeds `claim.drilldown` / deep links. */
   citationArtifactId: string | null;
+  /**
+   * Short verbatim quote from the message behind this obligation (P4).
+   * Source text, never model output. `null` when unresolvable.
+   */
+  sourceQuote: string | null;
 }
 
 /** A citation anchoring a claim to a concrete ingested event. */
@@ -180,6 +185,11 @@ export interface FeedbackInput {
  */
 export interface ResumePoint {
   windowStart: number | null;
+  /**
+   * A-4 display cap for the "things changed" list, from
+   * `config.briefing.maxChangedItems`. Obligations are never capped.
+   */
+  maxChangedItems: number;
 }
 
 /**

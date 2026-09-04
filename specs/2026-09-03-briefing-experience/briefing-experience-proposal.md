@@ -369,8 +369,8 @@ and need nothing else. So the near-term order is:
 | # | Work | Depends on |
 |---|---|---|
 | 1 | ~~A-2 — channel → project tagging, restore the OI-3 onboarding gate~~ — **DONE 2026-09-03** | nothing |
-| 2 | P2 / P4 — list layout, counts as headings, verbatim-on-obligations | Q-1 (done) |
-| 3 | A-4 — the configurable cap on the changed list | A-2 |
+| 2 | ~~P2 / P4 — list layout, counts as headings, verbatim-on-obligations~~ — **DONE 2026-09-03** (renderer half; structured LLM output still open) | Q-1 (done) |
+| 3 | ~~A-4 — the configurable cap on the changed list~~ — **DONE 2026-09-03** | A-2 |
 | 4 | 0b — eval re-baseline on the shipped config | nothing, but must precede 5 |
 | 5 | F-4 / P3 — grounding gate, thread-level extraction | 0b, for a comparable baseline |
 | 6 | P0 — deterministic-first | its own design doc |

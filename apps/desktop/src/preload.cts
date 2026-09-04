@@ -117,6 +117,14 @@ export interface PendingItem {
   confidence: number;
   /** Artifact backing this item; feeds `claim.drilldown` and the external deep link. */
   citationArtifactId: string | null;
+  /**
+   * A short verbatim quote from the message behind this obligation (P4).
+   *
+   * The artifact's own text, never model output — it is the evidence for the
+   * claim above it, which is why obligations show it inline while the changed
+   * list does not. `null` when it could not be resolved.
+   */
+  sourceQuote: string | null;
 }
 
 /** A citation anchoring a claim to a concrete ingested event. */
@@ -229,6 +237,11 @@ export interface CaughtUpResult extends OkResult {
  */
 export interface ResumePoint {
   windowStart: number | null;
+  /**
+   * A-4: how many "things changed" items to show before collapsing the rest.
+   * Config-driven (`briefing.maxChangedItems`). Obligations are never capped.
+   */
+  maxChangedItems: number;
 }
 
 /**
