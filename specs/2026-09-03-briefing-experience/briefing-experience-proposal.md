@@ -312,10 +312,18 @@ item, and that line sits directly above the evidence for it.
 reversal linkage; exactly one action (`Done`) and only on items that need one; the overflow
 count so nothing is silently hidden; the OI-1 still-processing disclosure in the footer.
 
-**The open trade.** Paraphrasing the supporting line moves verbatim evidence one click away,
-in exchange for a screen readable in ~15 seconds. If verification-at-a-glance matters more,
-keep the literal quote visible on *Needs you* items — where the stakes are real — and
-paraphrase only in the changed list.
+**DECIDED 2026-09-03 — verbatim on obligations, paraphrase on the rest.** Paraphrasing the
+supporting line moves verbatim evidence one click away, in exchange for a screen readable in
+~15 seconds. That trade is worth making where being wrong is cheap and not where it is not:
+
+- ***Needs you*** items keep the **literal quoted text**. An item asserting that someone is
+  waiting on the user is exactly the claim they must be able to check without a click, and
+  AC-4 precision is 48% — the evidence has to be on the page.
+- ***Changed*** items carry a **paraphrased** supporting sentence, with the verbatim text one
+  click away.
+
+The rejected alternative was verbatim everywhere: more trustworthy, but it re-introduces the
+density that made the card draft unreadable — the failure this section already corrected once.
 
 **Implementation consequences either way:** this deletes `SectionRouter`, the heading regex
 and the marker regex, and with them the label-shape hazard documented in `renderContext`
@@ -353,6 +361,19 @@ These are the most valuable things in the build and none of the above touches th
 | 4 | F-4 fix: grounding check in the runtime gate | AC-5, AC-6 |
 | 5 | P3 (thread-level extraction) | AC-3, AC-4, and the F-1 ceiling |
 | 6 | P2 / P4 | Cognitive load, and the F-8 machinery |
+
+**Revised order after the 2026-09-03 sign-offs.** A-2 moves up: it is a self-contained write
+path, it unblocks A-4's cap, and AC-7 cannot move without it. P2/P4 are also unblocked by Q-1
+and need nothing else. So the near-term order is:
+
+| # | Work | Depends on |
+|---|---|---|
+| 1 | A-2 — channel → project tagging, restore the OI-3 onboarding gate | nothing |
+| 2 | P2 / P4 — list layout, counts as headings, verbatim-on-obligations | Q-1 (done) |
+| 3 | A-4 — the configurable cap on the changed list | A-2 |
+| 4 | 0b — eval re-baseline on the shipped config | nothing, but must precede 5 |
+| 5 | F-4 / P3 — grounding gate, thread-level extraction | 0b, for a comparable baseline |
+| 6 | P0 — deterministic-first | its own design doc |
 
 **On step 0b.** An earlier draft of this document asserted that the whole of step 0 was "not
 optional." That was too strong for the eval half, and the bench result is what showed it: the
@@ -393,9 +414,11 @@ Not proposed for reversal: X-2 (no learned ranking), X-3 (local-only), or any SE
 | ID | Question | Status |
 |---|---|---|
 | Q-1 | Is "narrative briefing" a product requirement or a presentation choice? P4 depends on the answer. | **DECIDED 2026-09-03** — presentation choice; ship a ranked list of short sentences. See A-1. |
-| Q-2 | Is the `belongs_to` edge (and with it FR-5) in scope now, or is stated-stakes ranking deferred? Today `wStakes` is dead config. | **Open** — needs sign-off. Recommendation in A-2. |
+| Q-2 | Is the `belongs_to` edge (and with it FR-5) in scope now, or is stated-stakes ranking deferred? Today `wStakes` is dead config. | **DECIDED 2026-09-03** — in scope; wire the write path. See A-2. |
 | Q-3 | Does "Still learning your preferences" stay, given X-2? If nothing learns, the sentence should go. | **DONE 2026-09-03** — removed from `BriefingView.tsx` and `onboarding/page.tsx`. See A-3. |
-| Q-4 | Is a ~7-item cap acceptable, or is completeness over the window a requirement? | **Open**, and blocked on Q-2 — see A-4. |
+| Q-4 | Is a ~7-item cap acceptable, or is completeness over the window a requirement? | **DECIDED 2026-09-03** — per-section: obligations uncapped, changed list capped. See A-4. |
+
+All four are now settled. The remaining gate on implementation is sequencing (§5), not sign-off.
 
 ---
 
@@ -403,9 +426,12 @@ Not proposed for reversal: X-2 (no learned ranking), X-3 (local-only), or any SE
 
 Q-1 and Q-2 change how a ported requirement (FR-2, FR-5) reads, so they needed sign-off before
 implementation — the same bar `specs/2026-08-23-context-restorer/context-restorer-requirements.md`
-§8 applied to OI-1…OI-5. **Q-1 was signed off on 2026-09-03** and is recorded as a decision
-below. **Q-2 remains an open recommendation.** Q-3 and Q-4 sit inside existing decisions and
-can be taken by the build; Q-3 is already done.
+§8 applied to OI-1…OI-5. **All four were signed off on 2026-09-03** and are recorded as
+decisions below, with the reasoning that supported each preserved rather than replaced.
+
+Only Q-1 required amending a requirement (OI-6 in the requirements doc). Q-2 is the opposite
+case: it brings the *code* back into conformance with a requirement the doc already states —
+see A-2.
 
 ### A-1 — DECIDED: narrative is a presentation choice
 
@@ -439,7 +465,18 @@ the requirements doc's own preamble says the design doc wins. **Amending FR-2 is
 follow-up on this decision**, and it is a deliberate deviation to be recorded as such rather
 than edited in silently.
 
-### A-2 — Wire `belongs_to`; it is a write path, not a feature
+### A-2 — DECIDED: wire `belongs_to`; it is a write path, not a feature
+
+**Decision (2026-09-03):** in scope. Build the artifact → project write path, and restore
+`onboarding.minDeclaredProjects` and the onboarding gate to what OI-3 already specifies.
+
+**No requirement changes.** FR-5, FR-8 and OI-3 already say declarations are mandatory and
+used as ranking priors; it is the *implementation* that diverged, relaxing the gate to
+optional because the edge it depended on never existed. This decision closes that divergence
+rather than authorising a new one — the opposite of Q-1/OI-6. Nothing in the requirements doc
+needs amending, and `wStakes` stays.
+
+The reasoning is preserved below.
 
 FR-5's machinery is already built and tested — `ranker.ts`, `scoreDelta`, the weights in
 `config/default.json`, the stakes term in `retrieval.ts` and in `rankPendingItems`. The only
@@ -457,13 +494,13 @@ That is a declaration the user makes, not a cluster the system guesses, so it st
 X-2 and makes OI-3's "mandatory, assisted" declaration meaningful again instead of relaxed to
 optional.
 
-**Recommendation:** in scope, and move it earlier than §5 step 5 — AC-7 (73.1%) cannot improve
-while the largest non-obligation ranking term is inert.
+**Sequencing:** earlier than §5 step 5 — AC-7 (73.1%) cannot improve while the largest
+non-obligation ranking term is inert, and Q-4's cap must not ship ahead of it.
 
-**If the owner defers it instead:** delete `wStakes` from `config/default.json` and the stakes
-term from `scoreDelta`, and mark `stakesWeightFor` as always returning the default. Shipping a
-config key that names a weight the system cannot apply is the kind of thing this codebase
-otherwise refuses to do.
+*(The alternative, had this been deferred, was to delete `wStakes` from `config/default.json`
+and the stakes term from `scoreDelta` rather than leave a config key naming a weight the
+system cannot apply. Recorded because it is the fallback if the write path proves harder than
+it looks.)*
 
 ### A-3 — Remove the sentence; keep the expectation-setting
 
@@ -483,7 +520,10 @@ of P2, cut the per-bullet control count (F-7): keep one per-claim control ("Wron
 problem") and move Relevant / Not relevant to the briefing footer, where FR-7 is already
 satisfied by the briefing-level `FeedbackControls`.
 
-### A-4 — Cap the changed section; never cap the obligations
+### A-4 — DECIDED: cap the changed section; never cap the obligations
+
+**Decision (2026-09-03):** per-section, as below. The cap is a `config` value (NFR-7), and it
+does **not** ship before A-2 — a cap over a recency-ordered list is truncation, not editing.
 
 The two sections have opposite failure modes, so one cap is the wrong answer for both.
 
