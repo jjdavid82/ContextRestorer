@@ -278,6 +278,37 @@ export class BriefingsRepo {
   }
 
   /**
+   * The most recent model-written claim for each of `deltaIds` (P0).
+   *
+   * The synchronous path's reuse lookup: a delta the background pre-computer
+   * has already written prose for is rendered with THAT sentence rather than
+   * the deterministic restatement of its `summary`. One query for the whole
+   * window rather than one per delta, because this is on the request path.
+   *
+   * "Most recent" is by `rowid`, which for an append-only insert order is the
+   * newest write. A delta re-narrated by a later pre-computation pass should
+   * read as its latest version, not its first.
+   */
+  proseByDelta(deltaIds: readonly string[]): Map<string, { section: string; text: string }> {
+    const out = new Map<string, { section: string; text: string }>();
+    if (deltaIds.length === 0) return out;
+
+    const placeholders = deltaIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT delta_id, section, text FROM briefing_claims
+          WHERE produced_by = 'llm' AND delta_id IN (${placeholders})
+          ORDER BY rowid ASC`,
+      )
+      .all(...deltaIds) as Array<{ delta_id: string; section: string; text: string }>;
+
+    // Ascending order plus unconditional overwrite leaves the LAST (newest) row
+    // per delta in the map.
+    for (const row of rows) out.set(row.delta_id, { section: row.section, text: row.text });
+    return out;
+  }
+
+  /**
    * Delta ids on this window that ALREADY have model-written prose (P0).
    *
    * The synchronous path calls this once per request to decide, per delta,

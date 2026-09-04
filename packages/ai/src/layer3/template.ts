@@ -50,6 +50,7 @@ import {
   type AppConfig,
   type BriefingClaim,
   type BriefingMode,
+  type ClaimProvenance,
   type Clock,
   type PendingItem,
   type StateDelta,
@@ -219,6 +220,11 @@ interface TemplateClaim {
   deltaId: string;
   /** Rank position, used as the within-section tiebreaker. */
   arrival: number;
+  /**
+   * P0 provenance. Absent means `'template'` — this claim was rendered from a
+   * stored delta with no inference, which is the normal case.
+   */
+  producedBy?: ClaimProvenance;
 }
 
 /** One rendered bullet of the markdown body. */
@@ -389,7 +395,11 @@ export class TemplateBriefingRenderer {
     // ---- stage 2: rank and render ------------------------------------------
     const assemblySpan = trace.span('assembly');
     const ranked = this.rank(tips, openByDelta);
-    const claims = this.buildClaims(ranked, openByDelta);
+    // P0: one query for the whole window, before rendering, so a delta the
+    // pre-computer already covered reads as its prose rather than as a blunter
+    // restatement of the same fact.
+    const prose = this.briefings.proseByDelta(ranked.map((delta) => delta.deltaId));
+    const claims = this.buildClaims(ranked, openByDelta, prose);
     const candidates = countCandidates(ranked, openByDelta);
     assemblySpan.end();
 
@@ -419,6 +429,7 @@ export class TemplateBriefingRenderer {
         ordinal,
         section: claim.section,
         text: claim.text,
+        producedBy: claim.producedBy ?? 'template',
         citationArtifactId: claim.citationArtifactId,
         deltaId: claim.deltaId,
       });
@@ -629,6 +640,17 @@ export class TemplateBriefingRenderer {
   private buildClaims(
     ranked: readonly StateDelta[],
     openByDelta: ReadonlyMap<string, PendingItem[]>,
+    /**
+     * P0: model-written prose already on file, keyed by delta.
+     *
+     * When present for a delta, its sentence is used instead of the
+     * deterministic restatement of `summary` — the background pre-computer
+     * already answered this, and re-deriving a blunter version of an answer we
+     * hold would make the briefing worse for no reason.
+     *
+     * Empty by default, which is exactly the pre-P0 behaviour.
+     */
+    prose: ReadonlyMap<string, { section: string; text: string }> = new Map(),
   ): TemplateClaim[] {
     const claims: TemplateClaim[] = [];
 
@@ -661,12 +683,26 @@ export class TemplateBriefingRenderer {
 
       const citation = this.resolveCitation(delta.citationArtifactIds);
       if (citation === undefined) return;
+
+      // P0: prefer prose the pre-computer already wrote for this delta.
+      //
+      // Only for the non-obligation line. An obligation's text comes from
+      // `pending_items.description`, which Layer 2 wrote from an explicit
+      // `waiting_on` signal — that is stronger evidence than a Layer 3
+      // sentence, and F-5 exists because layer 3 prose once overrode it.
+      const written = prose.get(delta.deltaId);
+      // The stored section is free text (an older prompt version may have
+      // written anything), so it is only honoured when it is one of the four.
+      // Otherwise the deterministic mapping wins — a claim filed under an
+      // unknown heading would sort to the end and quietly reorder the briefing.
+      const writtenSection = BRIEFING_SECTIONS.find((name) => name === written?.section);
       claims.push({
-        section: sectionForKind(delta.kind),
-        text: sanitize(delta.summary),
+        section: writtenSection ?? sectionForKind(delta.kind),
+        text: sanitize(written?.text ?? delta.summary),
         citationArtifactId: citation,
         deltaId: delta.deltaId,
         arrival,
+        ...(written === undefined ? {} : { producedBy: 'llm' as const }),
       });
     });
 

@@ -1004,3 +1004,118 @@ describe('template ordering and D-6', () => {
     expect(readFileSync(result.narrativePath, 'utf8')).toContain('2 thread(s) still had');
   });
 });
+
+// ---------------------------------------------------------------------------
+// P0 — prose reuse on the deterministic path
+// ---------------------------------------------------------------------------
+
+describe('prose reuse (P0)', () => {
+  it('reuses a model-written claim for a delta the pre-computer already covered', async () => {
+    const { d1 } = seedThreeDeltas();
+
+    // Stand in for a background pre-computation pass: a claim on a PRIOR
+    // briefing, marked as model-written, for one of this window's deltas.
+    const prior = briefings.create({
+      windowStart: WINDOW.windowStart,
+      windowEnd: WINDOW.windowEnd,
+      generatedAt: NOW - 1_000,
+      mode: 'llm',
+      narrativePath: '/briefings/prior.md',
+      deltaIds: [d1.deltaId],
+      threadsStillProcessing: 0,
+    });
+    briefings.addClaim({
+      briefingId: prior.briefingId,
+      ordinal: 0,
+      section: 'What moved',
+      text: 'The team postponed the migration to Q4 after load testing.',
+      citationArtifactId: A1,
+      deltaId: d1.deltaId,
+      producedBy: 'llm',
+    });
+
+    const result = await makeRenderer().renderTemplate(WINDOW, { reason: 'requested' });
+    const claims = briefings.listClaims(result.briefingId);
+    const reused = claims.find((claim) => claim.deltaId === d1.deltaId);
+
+    // The pre-computer already answered this; re-deriving a blunter version of
+    // an answer we hold would make the briefing worse for no reason.
+    expect(reused?.text).toBe('The team postponed the migration to Q4 after load testing.');
+    expect(reused?.producedBy).toBe('llm');
+  });
+
+  it('renders deterministically for deltas with no prose, in the same briefing', async () => {
+    const { d1 } = seedThreeDeltas();
+    const prior = briefings.create({
+      windowStart: WINDOW.windowStart,
+      windowEnd: WINDOW.windowEnd,
+      generatedAt: NOW - 1_000,
+      mode: 'llm',
+      narrativePath: '/briefings/prior.md',
+      deltaIds: [d1.deltaId],
+      threadsStillProcessing: 0,
+    });
+    briefings.addClaim({
+      briefingId: prior.briefingId,
+      ordinal: 0,
+      section: 'What moved',
+      text: 'Prose for d1.',
+      citationArtifactId: A1,
+      deltaId: d1.deltaId,
+      producedBy: 'llm',
+    });
+
+    const result = await makeRenderer().renderTemplate(WINDOW, { reason: 'requested' });
+    const provenance = briefings
+      .listClaims(result.briefingId)
+      .map((claim) => claim.producedBy);
+
+    // A MIXED briefing is the expected steady state, not an edge case: the
+    // pre-computer covers what it has reached and the rest renders from deltas.
+    expect(new Set(provenance)).toEqual(new Set(['llm', 'template']));
+  });
+
+  it('marks every claim template when no prose exists at all', async () => {
+    seedThreeDeltas();
+
+    const result = await makeRenderer().renderTemplate(WINDOW, { reason: 'requested' });
+    const claims = briefings.listClaims(result.briefingId);
+
+    expect(claims.length).toBeGreaterThan(0);
+    expect(claims.every((claim) => claim.producedBy === 'template')).toBe(true);
+  });
+
+  it('ignores a stored section that is not one of the four', async () => {
+    const { d1 } = seedThreeDeltas();
+    const prior = briefings.create({
+      windowStart: WINDOW.windowStart,
+      windowEnd: WINDOW.windowEnd,
+      generatedAt: NOW - 1_000,
+      mode: 'llm',
+      narrativePath: '/briefings/prior.md',
+      deltaIds: [d1.deltaId],
+      threadsStillProcessing: 0,
+    });
+    briefings.addClaim({
+      briefingId: prior.briefingId,
+      ordinal: 0,
+      section: 'Hallucinated Heading',
+      text: 'Prose under a section that does not exist.',
+      citationArtifactId: A1,
+      deltaId: d1.deltaId,
+      producedBy: 'llm',
+    });
+
+    const result = await makeRenderer().renderTemplate(WINDOW, { reason: 'requested' });
+    const reused = briefings
+      .listClaims(result.briefingId)
+      .find((claim) => claim.deltaId === d1.deltaId);
+
+    // A claim filed under an unknown heading would sort to the end and quietly
+    // reorder the briefing, so the deterministic mapping wins on section even
+    // when the prose text is reused.
+    expect(['Waiting on you', 'What moved', 'Quietly resolved', 'Worth knowing']).toContain(
+      reused?.section,
+    );
+  });
+});

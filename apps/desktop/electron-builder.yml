@@ -42,8 +42,16 @@ extraResources:
   # recipient of the shared build can open `resources/config/default.json` and
   # fill in their own Ollama base URL / OAuth client id without unpacking
   # anything. See `apps/desktop/src/main.ts`'s `CONFIG_PATH`.
+  #
+  # `*.local.json` is excluded: it's the untracked, gitignored file where a
+  # dev's real Slack/Gmail OAuth client secret lives (see
+  # packages/core/src/config.ts). It must never be copied into a shareable
+  # build's resources.
   - from: ../../config
     to: config
+    filter:
+      - "**/*"
+      - "!*.local.json"
 win:
   # Portable = one double-clickable .exe, no installer, no admin rights —
   # the simplest thing to hand someone else.

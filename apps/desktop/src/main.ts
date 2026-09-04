@@ -879,30 +879,35 @@ function citationFor(
 }
 
 /**
- * The `IpcDeps.startGeneration` adapter: run the Layer 3 fallback chain for an
- * id the renderer has ALREADY been handed, streaming each accepted claim to it
- * as it lands.
+ * The `IpcDeps.startGeneration` adapter — **deterministic, no model on this
+ * path** (P0).
+ *
+ * This used to run `generateWithFallback`: preflight, then Layer 3 streaming
+ * from Ollama, then the template only if that failed. Measured on the shipped
+ * config that path was 97,925 ms to first token and 360,920 ms end to end
+ * (n=20), against AC-1 bars of 5,000 ms and 60,000 ms. No prompt or model change
+ * closes a 6x gap; the only remaining lever was to take the language model off
+ * the request path entirely.
+ *
+ * So the request path now renders from SQLite alone —
+ * `TemplateBriefingRenderer`, whose structural guarantee is that none of its
+ * dependencies can reach a model client. Where the background pre-computer has
+ * already written prose for a delta, that sentence is reused (see
+ * `proseByDelta`), so a briefing is as well-written as the work done before it
+ * was asked for, and never slower for it.
+ *
+ * The streaming contract is UNCHANGED — every claim still arrives as a
+ * `briefing:chunk` and the run still ends with `briefing:done`. The renderer
+ * needs no change; the chunks simply all arrive within milliseconds. Keeping
+ * the channel also leaves room for the pre-computer to push into an open window
+ * later without inventing a second delivery mechanism.
  *
  * Fire-and-forget by contract (`briefing:request` returns before this is
- * called), so this function returns `void` and owns every failure itself:
- * an escaping rejection here is an unhandled rejection in the main process.
- *
- * Routed through `generateWithFallback` rather than calling `generate` directly
- * (X-3, Task 4.3): local model, then local code. When Ollama is not running, or
- * dies mid-sentence, the user still gets a cited briefing assembled from the
- * deltas already on disk — and `result.mode` tells the renderer which they got,
- * so the "Simplified briefing" banner is driven by what actually happened.
- *
- * The `briefingId` is passed straight through, which is the whole point of that
- * option — without it the chain would mint its own and every chunk, every
- * persisted claim and the `briefings` row would carry an id the renderer has
- * never heard of. Both chain steps honour `onClaimAccepted`, so the stream
- * paints the same way on either branch.
+ * called), so this returns `void` and owns every failure itself: an escaping
+ * rejection here is an unhandled rejection in the main process.
  */
 function startBriefingGeneration(
-  generator: BriefingGenerator,
   templateRenderer: TemplateBriefingRenderer,
-  appConfig: AppConfig,
   graph: GraphRepo,
   events: EventsRepo,
   briefingId: string,
@@ -921,15 +926,9 @@ function startBriefingGeneration(
     });
   };
 
-  generateWithFallback(
-    generator,
-    templateRenderer,
-    appConfig.model.ollamaBaseUrl,
-    appConfig.model.chat,
-    appConfig.model.embed,
-    window,
-    { briefingId, onClaimAccepted },
-  ).then(
+  templateRenderer
+    .renderTemplate(window, { briefingId, reason: 'requested', onClaimAccepted })
+    .then(
     (result) => {
       sendToRenderer(DONE_CHANNEL, {
         briefingId,
@@ -1258,21 +1257,22 @@ if (!app.requestSingleInstanceLock()) {
         // would re-prepare every statement for no benefit.
         events,
         projectStore: graph,
-        // Layer 3, live. The adapter exists for one reason: `briefing:request`
-        // mints the id and hands it to the renderer BEFORE generation starts,
-        // whereas `generate()` would otherwise mint its own — so the id is
-        // threaded through, and every claim, chunk and row carries the id the
-        // renderer is already listening on.
+        // Layer 3's DETERMINISTIC path (P0). No model client is reachable from
+        // here — `TemplateBriefingRenderer`'s structural guarantee is that none
+        // of its dependencies can be one — which is what makes AC-1 a property
+        // of the design rather than something to tune towards.
+        //
+        // Model-written prose still reaches the user: the FR-3 scheduler below
+        // runs the full `generateWithFallback` chain in the background, and the
+        // claims it writes are marked `produced_by = 'llm'` and reused here by
+        // `proseByDelta` for any delta they cover. That is the pre-computation
+        // the P0 design describes, using the scheduler that already existed.
+        //
+        // The adapter also threads `briefingId` through: `briefing:request`
+        // mints the id and hands it to the renderer BEFORE this runs, so every
+        // claim, chunk and row must carry the id the renderer already listens on.
         startGeneration: (briefingId, window) =>
-          startBriefingGeneration(
-            generator,
-            templateRenderer,
-            config!,
-            graph,
-            events,
-            briefingId,
-            window,
-          ),
+          startBriefingGeneration(templateRenderer, graph, events, briefingId, window),
         // FR-3 recurring briefings (Task 3.8): the settings editor. The
         // `BriefingScheduleRunner` that acts on these rows is started below,
         // over this same repo instance.

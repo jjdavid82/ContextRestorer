@@ -12,6 +12,7 @@ export type {
   BriefingDone,
   BriefingHandle,
   BriefingMode,
+  BriefingSnapshot,
   BriefingWindow,
   Citation,
   ContextRestorerBridge,
