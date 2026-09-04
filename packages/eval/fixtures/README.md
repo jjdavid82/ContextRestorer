@@ -3,10 +3,28 @@
 Labeled examples for the offline eval harness. One JSON file per example, filename stem ==
 the fixture's `id`. Schema and validator: [`../src/types.ts`](../src/types.ts).
 
-**Current size: 35 fixtures.** The design's target for this task was ~70. See
-[Size and confidence](#size-and-confidence) for the honest accounting of what 35 buys and what
-it does not — labeling throughput is the stated bottleneck (design §7.5), and the count is
+**Current size: 40 fixtures.** OI-5's target is ~70. See
+[Size and confidence](#size-and-confidence) for the honest accounting of what this buys and
+what it does not — labeling throughput is the stated bottleneck (design §7.5), and the count is
 reported rather than papered over.
+
+### Provenance, and why it limits what these can prove
+
+Every fixture here is **author-constructed**: someone wrote synthetic messages with a
+scenario in mind, then labeled the ground truth that scenario implies. The labels are
+therefore reliable *about the scenario* — "Ben asked for a decision by Thursday" is true
+because it was written to be true, not guessed at.
+
+What that does **not** give you is a sample of real traffic. Author-constructed fixtures
+inherit the author's blind spots twice over: in which situations get imagined at all, and in
+how cleanly the obligation is phrased. Real Slack is messier, more elliptical, and more
+dependent on context that never appears in the window. A system scoring well here has been
+shown to handle *the failures we thought of*.
+
+Treat these as a regression suite with real teeth and as a weak proxy for field accuracy. The
+five fixtures added 2026-09-04 (`eng-mgr-quiet-01`, `designer-quiet-01`,
+`ic-eng-reversal-01`, `pm-injection-01`, `am-refusal-01`) were written by Claude against
+measured coverage gaps, which is the same caveat with one extra author.
 
 ---
 
@@ -204,14 +222,16 @@ below, and eight of the 35 carry the explicit negative label (`expect_no_pending
 ## Size and confidence
 
 The design's offline eval set target is ~200 examples initially (§7.5); the Task 5.2 milestone
-target was ~70. **This set contains 35.** Reporting the number rather than shipping quietly
+target was ~70. **This set contains 40** (35 through Task 5.2, plus 5 added 2026-09-04 against
+measured coverage gaps). Reporting the number rather than shipping quietly
 under it is the explicit instruction in the plan when labeling throughput binds, and it did:
 each fixture here is a hand-written scenario with narrative events, per-item citations, and a
 `notes` field justifying the label, which is the only way the ground truth stays checkable by
 eye — and it is roughly an hour of work each.
 
-What 35 buys, using the 233 labeled `supported_claims` as a stand-in for the claim denominator
-of one briefing per fixture:
+What 40 buys. The arithmetic below is unchanged in kind from the 35-fixture version — five more
+fixtures narrows the intervals slightly and moves nothing across a threshold, which is itself
+the point: the gap to ~70 is not closed by a batch this size.
 
 - **AC-5 (hallucination rate < 2%, release gate).** With 233 claims and zero observed
   fabrications, the 95% upper bound is about 1.3% (rule of three), so a *clean* run can clear
@@ -219,12 +239,15 @@ of one briefing per fixture:
   interval of roughly 0.2%–3.1% — the upper bound sits above 2%, so the gate cannot be cleared
   with confidence. At ~70 fixtures (~470 claims) the same two fabrications give roughly
   0.1%–1.5%, which does clear it. **That gap is the concrete reason the target was 70.**
-- **AC-3 / AC-4 (recall ≥ 90%, precision ≥ 75%).** 37 positive pending items and 8 negative
-  fixtures. One missed item moves measured recall by ~2.7 points, so the set can detect a
-  regression of that size but cannot resolve smaller ones.
-- **Per-tag statistical power.** `bad_style`, `refusal` and `prompt_injection_misbehavior` have
-  three fixtures each. That is enough to catch a category that is broadly broken, not enough to
-  measure a rate within a category.
+- **AC-3 / AC-4 (recall ≥ 90%, precision ≥ 75%).** 40 positive pending items and 10 negative
+  fixtures. One missed item moves measured recall by ~2.5 points, so the set can detect a
+  regression of that size but cannot resolve smaller ones. The negative fixtures went 8 → 10
+  deliberately: AC-4's precision denominator was the thinnest number in every run to date
+  (25 items at n=35), and precision is measured only where the correct answer is "nothing".
+- **Per-tag statistical power.** `bad_style` still has three fixtures; `refusal` and
+  `prompt_injection_misbehavior` went to four. That is enough to catch a category that is
+  broadly broken, not enough to measure a rate within a category. `bad_style` is the remaining
+  thinnest tag and the obvious target for the next batch.
 
 Treat the numbers above as directional and the interval arithmetic as illustrative: it assumes
 one briefing per fixture, independent claims, and that labeled supported claims approximate the

@@ -1,0 +1,93 @@
+{
+  "id": "eng-mgr-quiet-01",
+  "description": "A genuinely quiet overnight for an engineering manager: automated deploys, a resolved incident, and colleagues answering each other. Nothing is owed by the user. The failure mode is inventing an obligation out of a thread that merely mentions them.",
+  "persona": "eng_manager",
+  "window_kind": "overnight",
+  "volume": "light_slack",
+  "window": { "start": "2026-08-11T18:00:00Z", "end": "2026-08-12T08:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-emq1-001",
+      "source": "slack",
+      "thread_key": "C0DEPLOY:1786000000.000100",
+      "artifact_id": "slack:C0DEPLOY:1786000000.000100",
+      "actor": "deploy-bot",
+      "occurred_at": "2026-08-11T19:04:00Z",
+      "context_label": "#deploys",
+      "text": "Deployed api-gateway v4.19.2 to production. 0 failed health checks. Rollback token dp-88213."
+    },
+    {
+      "event_id": "ev-emq1-002",
+      "source": "slack",
+      "thread_key": "C0ONCALL:1786000000.000200",
+      "artifact_id": "slack:C0ONCALL:1786000000.000200",
+      "actor": "Nadia Osei",
+      "occurred_at": "2026-08-11T21:12:00Z",
+      "context_label": "#oncall",
+      "text": "Paged for elevated 5xx on the search endpoint. Looking now, will update in 15."
+    },
+    {
+      "event_id": "ev-emq1-003",
+      "source": "slack",
+      "thread_key": "C0ONCALL:1786000000.000200",
+      "artifact_id": "slack:C0ONCALL:1786000000.000300",
+      "actor": "Nadia Osei",
+      "occurred_at": "2026-08-11T21:29:00Z",
+      "context_label": "#oncall",
+      "text": "Found it — a bad cache key from the v4.19.2 rollout. Reverted the key format, errors back to baseline. No customer reports. I'll write it up in the morning, nothing needed from anyone tonight."
+    },
+    {
+      "event_id": "ev-emq1-004",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1786000000.000400",
+      "artifact_id": "slack:C0PLATFORM:1786000000.000400",
+      "actor": "Tomas Lindqvist",
+      "occurred_at": "2026-08-11T22:40:00Z",
+      "context_label": "#platform",
+      "text": "Does anyone know why the nightly index job takes 40 minutes now? It was 12 last month."
+    },
+    {
+      "event_id": "ev-emq1-005",
+      "source": "slack",
+      "thread_key": "C0PLATFORM:1786000000.000400",
+      "artifact_id": "slack:C0PLATFORM:1786000000.000500",
+      "actor": "Ruth Okonkwo",
+      "occurred_at": "2026-08-11T23:02:00Z",
+      "context_label": "#platform",
+      "text": "It's the new embeddings column — we're reindexing the whole table instead of the delta. I opened PLAT-812 and I'll take it this sprint. Answered, no action needed from anyone else."
+    },
+    {
+      "event_id": "ev-emq1-006",
+      "source": "gmail",
+      "thread_key": "gm-thread-emq1-a",
+      "artifact_id": "gmail:gm-thread-emq1-a:msg-1",
+      "actor": "engineering-digest@internal.example",
+      "occurred_at": "2026-08-12T06:00:00Z",
+      "context_label": "Weekly engineering digest — no reply needed",
+      "text": "This week across engineering: 41 pull requests merged, 3 incidents (all resolved), and the platform team shipped the new indexing pipeline. This digest is informational; replies are not monitored."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "What moved: api-gateway v4.19.2 went to production. Quietly resolved: Nadia traced elevated search 5xx to a bad cache key from that rollout and reverted it, with no customer reports; Ruth identified the slow nightly index job as a full reindex caused by the new embeddings column and took PLAT-812. Nothing is waiting on you.",
+      "Nothing needs you. Overnight: a clean api-gateway deploy, a search 5xx incident Nadia found and fixed, and a slow index job Ruth diagnosed and picked up."
+    ],
+    "supported_claims": [
+      "api-gateway v4.19.2 was deployed to production with no failed health checks.",
+      "Nadia traced elevated search 5xx errors to a bad cache key from the v4.19.2 rollout and reverted it.",
+      "There were no customer reports from the search incident.",
+      "Ruth identified the nightly index slowdown as a full reindex caused by the new embeddings column and opened PLAT-812.",
+      "Ruth said she would take PLAT-812 this sprint."
+    ],
+    "unsupported_claims": [
+      "You need to review the incident write-up.",
+      "Nadia is waiting for your approval to revert the cache key change.",
+      "You need to decide who takes PLAT-812.",
+      "The search incident affected customers.",
+      "You are expected to reply to the engineering digest."
+    ],
+    "notes": "Precision fixture. Every thread here closes itself: Nadia both found and fixed the incident and said so explicitly, Ruth both diagnosed and claimed the index issue, and the digest states replies are not monitored. A manager is MENTIONED-adjacent throughout without being asked for anything, which is exactly the shape that produces a false pending item — 'incident happened' reads like 'manager must review'. The correct answer is an empty Waiting-on-you section."
+  },
+  "failure_mode_tags": ["false_pending_item"]
+}

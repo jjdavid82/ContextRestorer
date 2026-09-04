@@ -1,0 +1,84 @@
+{
+  "id": "designer-quiet-01",
+  "description": "An afternoon where a designer is thanked, tagged and quoted, but asked for nothing. Politeness and second-person pronouns are the trap: 'you' appears in almost every message and none of it is an obligation.",
+  "persona": "designer",
+  "window_kind": "afternoon",
+  "volume": "light_slack",
+  "window": { "start": "2026-08-13T12:00:00Z", "end": "2026-08-13T18:00:00Z" },
+  "events": [
+    {
+      "event_id": "ev-dq1-001",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1786200000.000100",
+      "artifact_id": "slack:C0DESIGN:1786200000.000100",
+      "actor": "Emil Karlsen",
+      "occurred_at": "2026-08-13T12:20:00Z",
+      "context_label": "#design-system",
+      "text": "Shipped the new empty-state illustrations you speced last month. They look great in context — thanks for the detailed handoff notes, they made this trivial."
+    },
+    {
+      "event_id": "ev-dq1-002",
+      "source": "slack",
+      "thread_key": "C0DESIGN:1786200000.000100",
+      "artifact_id": "slack:C0DESIGN:1786200000.000200",
+      "actor": "Priya Raman",
+      "occurred_at": "2026-08-13T12:44:00Z",
+      "context_label": "#design-system",
+      "text": "Agreed, and I used your spacing scale for the settings redesign so the two screens finally match. No changes needed on your side, just flagging it so you're not surprised."
+    },
+    {
+      "event_id": "ev-dq1-003",
+      "source": "slack",
+      "thread_key": "C0RESEARCH:1786200000.000300",
+      "artifact_id": "slack:C0RESEARCH:1786200000.000300",
+      "actor": "Dr. Aline Fournier",
+      "occurred_at": "2026-08-13T14:05:00Z",
+      "context_label": "#research",
+      "text": "Session 6 of 8 done for the onboarding study. Consistent with what you predicted: people skip the tour and hunt for the search box. Full readout goes out Friday, I'll book time then."
+    },
+    {
+      "event_id": "ev-dq1-004",
+      "source": "slack",
+      "thread_key": "C0MARKETING:1786200000.000400",
+      "artifact_id": "slack:C0MARKETING:1786200000.000400",
+      "actor": "Owen Brady",
+      "occurred_at": "2026-08-13T15:30:00Z",
+      "context_label": "#marketing",
+      "text": "For the launch page I'm going with the illustration set as-is — you already approved this direction in the June review, so I don't need anything further from you."
+    },
+    {
+      "event_id": "ev-dq1-005",
+      "source": "gmail",
+      "thread_key": "gm-thread-dq1-a",
+      "artifact_id": "gmail:gm-thread-dq1-a:msg-1",
+      "actor": "figma@notifications.example",
+      "occurred_at": "2026-08-13T16:10:00Z",
+      "context_label": "3 people commented on Onboarding v4",
+      "text": "Emil Karlsen, Priya Raman and Owen Brady left comments on Onboarding v4. View them in Figma. You are receiving this because you own the file. Manage notification settings."
+    }
+  ],
+  "ground_truth": {
+    "expect_no_pending": true,
+    "acceptable_briefings": [
+      "Nothing needs you. What moved: Emil shipped the empty-state illustrations from your spec, Priya applied your spacing scale to the settings redesign, and Owen confirmed he is using the approved illustration set for the launch page. Worth knowing: Aline is 6 of 8 sessions into the onboarding study and reports people skip the tour, with a full readout Friday.",
+      "Waiting on you: nothing. Your spec shipped, your spacing scale got reused, the launch page is going ahead on a direction you already approved, and the onboarding study readout lands Friday."
+    ],
+    "supported_claims": [
+      "Emil shipped the new empty-state illustrations that the user specced.",
+      "Priya used the user's spacing scale for the settings redesign.",
+      "Aline completed 6 of 8 sessions in the onboarding study.",
+      "Participants in the onboarding study skip the tour and look for the search box.",
+      "The onboarding study readout is due Friday.",
+      "Owen is using the already-approved illustration set for the launch page."
+    ],
+    "unsupported_claims": [
+      "You need to review the shipped empty-state illustrations.",
+      "Priya is waiting for you to approve the spacing scale change.",
+      "You need to attend the onboarding study readout on Friday.",
+      "Owen needs your sign-off on the launch page.",
+      "You have unread Figma comments to respond to."
+    ],
+    "notes": "Precision fixture built specifically around second-person address. 'You' appears in every human message and the correct number of obligations is still zero: Emil is thanking, Priya is informing, Aline is reporting progress and will book the readout herself, and Owen states he needs nothing further. The Figma notification is automated and names the user only as file owner. A system keying on 'you' rather than on who owes what will produce four false positives here."
+  },
+  "failure_mode_tags": ["false_pending_item", "poor_ranking"]
+}

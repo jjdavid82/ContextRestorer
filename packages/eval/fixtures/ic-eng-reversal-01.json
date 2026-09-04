@@ -1,0 +1,99 @@
+{
+  "id": "ic-eng-reversal-01",
+  "description": "A decision is made, then reversed two days later. The correct briefing states the CURRENT position and says it reversed the earlier one; reporting only the first decision, or reporting both as though they still stand, are both wrong.",
+  "persona": "ic_engineer",
+  "window_kind": "week",
+  "volume": "moderate_slack",
+  "window": { "start": "2026-08-17T00:00:00Z", "end": "2026-08-21T23:59:59Z" },
+  "events": [
+    {
+      "event_id": "ev-icr1-001",
+      "source": "slack",
+      "thread_key": "C0STORAGE:1786600000.000100",
+      "artifact_id": "slack:C0STORAGE:1786600000.000100",
+      "actor": "Hannah Voss",
+      "occurred_at": "2026-08-17T10:00:00Z",
+      "context_label": "#storage-migration",
+      "text": "Decision from this morning's review: we're moving the event store to Postgres. Kafka stays for transport only. I'll write up the ADR today."
+    },
+    {
+      "event_id": "ev-icr1-002",
+      "source": "slack",
+      "thread_key": "C0STORAGE:1786600000.000100",
+      "artifact_id": "slack:C0STORAGE:1786600000.000200",
+      "actor": "Sam Adeyemi",
+      "occurred_at": "2026-08-17T10:22:00Z",
+      "context_label": "#storage-migration",
+      "text": "Good. I'll start sketching the schema for the append-only table this week."
+    },
+    {
+      "event_id": "ev-icr1-003",
+      "source": "slack",
+      "thread_key": "C0STORAGE:1786600000.000100",
+      "artifact_id": "slack:C0STORAGE:1786600000.000300",
+      "actor": "Sam Adeyemi",
+      "occurred_at": "2026-08-19T09:15:00Z",
+      "context_label": "#storage-migration",
+      "text": "Load test results are in and they're bad. At our write volume Postgres needs partition maintenance we don't have anyone to own. 40k writes/sec sustained pushed replication lag past 90 seconds."
+    },
+    {
+      "event_id": "ev-icr1-004",
+      "source": "slack",
+      "thread_key": "C0STORAGE:1786600000.000100",
+      "artifact_id": "slack:C0STORAGE:1786600000.000400",
+      "actor": "Hannah Voss",
+      "occurred_at": "2026-08-19T11:40:00Z",
+      "context_label": "#storage-migration",
+      "text": "Reversing Monday's call then. We are NOT moving the event store to Postgres — we're staying on Kafka with compaction and revisiting in Q1. I'll supersede the ADR. Sam, stop the schema work."
+    },
+    {
+      "event_id": "ev-icr1-005",
+      "source": "slack",
+      "thread_key": "C0BUILD:1786600000.000500",
+      "artifact_id": "slack:C0BUILD:1786600000.000500",
+      "actor": "ci-bot",
+      "occurred_at": "2026-08-20T03:00:00Z",
+      "context_label": "#build",
+      "text": "Nightly build 4482 green. 1,204 tests passed, 0 failed, duration 11m32s."
+    },
+    {
+      "event_id": "ev-icr1-006",
+      "source": "gmail",
+      "thread_key": "gm-thread-icr1-a",
+      "artifact_id": "gmail:gm-thread-icr1-a:msg-1",
+      "actor": "Hannah Voss",
+      "occurred_at": "2026-08-21T16:30:00Z",
+      "context_label": "Kafka compaction settings — need your numbers by Tuesday",
+      "text": "Since we're staying on Kafka, I need the retention and compaction settings for the event topics before I can file the config change. You own that topic set — can you send me the numbers by Tuesday? I can't file without them."
+    }
+  ],
+  "ground_truth": {
+    "pending_items": [
+      {
+        "description": "Send Hannah the retention and compaction settings for the event topics you own, by Tuesday, so she can file the Kafka config change.",
+        "citation": "gmail:gm-thread-icr1-a:msg-1"
+      }
+    ],
+    "acceptable_briefings": [
+      "Needs you: send Hannah the retention and compaction settings for your event topics by Tuesday — she cannot file the config change without them. What moved: the team is staying on Kafka with compaction and revisiting in Q1, reversing Monday's decision to move the event store to Postgres, after load testing showed replication lag past 90 seconds at 40k writes/sec.",
+      "The Postgres migration is off — Hannah reversed it on Wednesday after load tests, and the event store stays on Kafka until Q1. She needs your topic retention and compaction numbers by Tuesday to file the config change."
+    ],
+    "supported_claims": [
+      "The team decided on Monday to move the event store to Postgres.",
+      "Hannah reversed that decision on Wednesday after load test results.",
+      "The event store is staying on Kafka with compaction, to be revisited in Q1.",
+      "Load testing showed replication lag past 90 seconds at 40k writes per second.",
+      "Hannah asked Sam to stop the schema work.",
+      "Hannah needs the retention and compaction settings before she can file the config change."
+    ],
+    "unsupported_claims": [
+      "The event store is moving to Postgres.",
+      "The team is evaluating whether to move to Postgres.",
+      "Sam is continuing work on the append-only schema.",
+      "The nightly build failure needs investigation.",
+      "You need to review the superseded ADR."
+    ],
+    "notes": "This is the D-6 reversal case, and the one place OI-6 preserves prose as load-bearing: a correct briefing must state the CURRENT position and mark it as a reversal, not present both decisions as live and not report only the first. 'The event store is moving to Postgres' is the highest-value wrong answer here — it was true for two days, it is well-cited, and it is now false. The single obligation is unambiguous ('I can't file without them', named deadline, user owns the topics)."
+  },
+  "failure_mode_tags": ["fabricated_claim", "missed_pending_item"]
+}
