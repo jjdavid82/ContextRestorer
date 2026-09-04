@@ -28,7 +28,7 @@ Either way, **[Ollama](https://ollama.com) must be installed and running
 locally first**, with both models pulled — this is the one dependency neither
 path can skip:
 ```
-ollama pull qwen2.5:7b
+ollama pull qwen2.5:14b
 ollama pull nomic-embed-text
 ```
 The app refuses to start (with a dialog naming the exact remedy) if Ollama is

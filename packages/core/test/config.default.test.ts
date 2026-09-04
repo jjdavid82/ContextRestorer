@@ -13,7 +13,11 @@ describe('config/default.json', () => {
     expect(() => loadConfig(configPath)).not.toThrow();
 
     const cfg = loadConfig(configPath);
-    expect(cfg.model.chat).toBe('qwen2.5:7b');
+    // Reverted from 7b on 2026-09-03: the n=9 eval measured hallucination at
+    // 43.5% vs 23.6% on 14b and citation accuracy 20 points lower, while the
+    // bench showed 7b failing AC-1 by 6x regardless — so the smaller model cost
+    // accuracy and bought nothing.
+    expect(cfg.model.chat).toBe('qwen2.5:14b');
     expect(cfg.model.ollamaBaseUrl).toMatch(/^http:\/\/(localhost|127\.0\.0\.1):11434$/);
     expect(cfg.debounce.slack.hardCapMs).toBeGreaterThan(cfg.debounce.slack.quietWindowMs);
     expect(cfg.debounce.gmail.hardCapMs).toBeGreaterThan(cfg.debounce.gmail.quietWindowMs);

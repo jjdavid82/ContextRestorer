@@ -29,17 +29,26 @@ finding. It is not a tuning gap, and no amount of prompt iteration closes it.
 |---|--:|--:|---|---|
 | AC-1 first token P95 | **97,925 ms** | < 5,000 ms | 20 runs | shipped (7b) |
 | AC-1 total P95 | **360,920 ms** | < 60,000 ms | 20 runs | shipped (7b) |
-| AC-5 hallucination (release gate) | 23.6% | < 2% | 34/144 claims | 14b — **stale** |
-| AC-3 pending recall | 33.3% | ≥ 90% | 12/36 items | 14b — **stale** |
-| AC-4 pending precision | 48.0% | ≥ 75% | 12/25 items | 14b — **stale** |
-| AC-6 citation accuracy | 76.4% | ≥ 95% | 110/144 citations | 14b — **stale** |
-| AC-7 top-3 relevance | 73.1% | ≥ 80% | 19/26 cases | 14b — **stale** |
+| AC-5 hallucination (release gate) | 23.6% → **43.5%** | < 2% | 144 → 46 claims | 14b → 7b |
+| AC-3 pending recall | 33.3% → **22.2%** | ≥ 90% | 36 → 9 items | 14b → 7b |
+| AC-4 pending precision | 48.0% → **50.0%** | ≥ 75% | 25 → 4 items | 14b → 7b |
+| AC-6 citation accuracy | 76.4% → **56.5%** | ≥ 95% | 144 → 46 citations | 14b → 7b |
+| AC-7 top-3 relevance | 73.1% → **42.9%** | ≥ 80% | 26 → 7 cases | 14b → 7b |
 
-AC-1 was re-measured on 2026-09-03 against the shipped config (`qwen2.5:7b`,
-`budgets.generationMs: 360000`) on an otherwise-idle machine. The five quality rows are still
-the 2026-08-28 `qwen2.5:14b` run and have **not** been re-baselined; the archived originals
-are in `baseline-2026-08-28-qwen14b/`. Do not quote a quality row and a latency row together
-without saying they came from different models (RO-2).
+Both halves were re-measured on 2026-09-03. AC-1 on the full 20-run bench; the quality rows on
+an **n=9 partial eval** (11 fixtures requested, 2 lost to `fetch failed`), which is why each
+row shows the 14b baseline and the 7b result side by side rather than replacing one with the
+other. The archived 14b originals are in `baseline-2026-08-28-qwen14b/`.
+
+**Read the 7b column as direction, not as a measurement.** n=9 is a quarter of the 14b sample
+and an eighth of OI-5's target; the report is labelled a partial run (RO-2); and the two lost
+fixtures were the `wrong_citation` case and the largest recall denominator (4 items).
+
+**The finding that survives those caveats: the 14b → 7b change was a regression.** Hallucination
+roughly doubled and citation accuracy fell 20 points, while the bench had already shown 7b
+failing AC-1 by 6×. The smaller model cost accuracy and bought nothing measurable.
+`config/default.json` was reverted to `qwen2.5:14b` on 2026-09-03 as a result — the cheapest
+quality change available, and independent of everything else in this document.
 
 What the re-run changed, and what it did not:
 
@@ -127,7 +136,16 @@ exactly the failure T-4 exists to prevent, arriving through the mechanism built 
 The eval harness already computes a lexical grounding check (≥60% of a claim's content tokens
 present in the cited source text). That check existed only in the report.
 
-**Status (2026-09-03): shipped into the runtime gate, in `observe` mode.** The tokenizer and
+**Status (2026-09-03): shipped in `observe` mode, and MEASURED — do not enforce.** The n=9
+eval found **18 of 46 published claims (39.1%) ungrounded**, against 20 the same run scored as
+hallucinated. Those are close enough that enforcing would drop roughly as many true claims as
+false ones, which is exactly the trade `observe` mode existed to avoid guessing at. Keep
+`briefing.groundingMode: 'observe'` until the check can distinguish a faithful paraphrase from
+a fabrication — a lexical containment test cannot.
+
+The original rationale follows.
+
+**Shipped into the runtime gate, in `observe` mode.** The tokenizer and
 threshold moved to `@cr/core` so the gate and the harness cannot drift. It is deliberately NOT
 enforcing yet: containment is a lexical test, and a faithful abstractive summary can score low
 while being true — "the migration was postponed to Q4" shares one content token with "load

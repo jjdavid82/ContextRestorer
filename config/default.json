@@ -1,6 +1,6 @@
 {
   "model": {
-    "chat": "qwen2.5:7b",
+    "chat": "qwen2.5:14b",
     "embed": "nomic-embed-text",
     "ollamaBaseUrl": "http://localhost:11434"
   },
