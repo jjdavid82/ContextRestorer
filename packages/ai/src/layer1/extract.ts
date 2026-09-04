@@ -133,13 +133,24 @@ export const LAYER1_BATCH_SCHEMA_NAME = 'layer1_extraction_batch';
 /**
  * Most events sent in one batched Layer 1 call (P3 part 2).
  *
- * A cap, not a target. The whole point of batching is to stop paying one
- * ~29-85s model call per event, but prompt evaluation is the dominant term in
- * that latency, so an unbounded batch would trade N calls for one call that is
- * nearly as slow — and would make a single malformed response cost the whole
- * thread rather than one burst of it.
+ * A cap, not a target. Batching exists to stop paying one ~29-85s model call
+ * per event, but prompt evaluation is the dominant term in that latency, so an
+ * unbounded batch would trade N calls for one nearly as slow — and would make a
+ * single malformed response cost the whole thread rather than one burst of it.
+ *
+ * **Lowered 8 -> 4 on 2026-09-04, from measured failure rates.** Eval fixture
+ * failures (`fetch failed`, an opaque undici error) climbed 3% -> 29% -> 50% as
+ * the batch size and the model size grew together. `generateJson` sends
+ * `stream: false`, so the whole response must arrive before headers complete,
+ * and undici's default `headersTimeout` is 300s — a plausible ceiling for eight
+ * events through a 14B model at ~85s of generation each.
+ *
+ * That diagnosis is a HYPOTHESIS, not a confirmed cause: `fetch failed` does not
+ * say what failed. 4 was chosen to sit well inside the suspected ceiling while
+ * still cutting calls by ~4x, and the number should be revisited once the client
+ * reports timeouts attributably.
  */
-export const MAX_BATCH_EVENTS = 8;
+export const MAX_BATCH_EVENTS = 4;
 
 /** `ai_calls.layer` value for extraction. */
 const LAYER = 1;
