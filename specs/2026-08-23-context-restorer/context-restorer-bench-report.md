@@ -1,6 +1,6 @@
 # Context Restorer — Latency Benchmark (AC-1)
 
-_Generated 2026-09-04T07:08:28.957Z by `npm run bench:briefing` (Task 5.3)._
+_Generated 2026-09-04T16:54:56.043Z by `npm run bench:briefing` (Task 5.3)._
 
 This is the only measurement of AC-1 in the build. The Task 5.1 eval harness pins the clock inside each fixture's window, which makes every latency it records 0 and makes the §7.8 generation budget unable to elapse; it measures quality, not latency.
 
@@ -11,7 +11,7 @@ This is the only measurement of AC-1 in the build. The Task 5.1 eval harness pin
 | Metric | Observations | P50 | P95 |
 |---|--:|--:|--:|
 | First paint — pending items, NO model call | 0 | — ms | — ms |
-| Deterministic briefing — the P0 request path, NO model call | 20 | 20 ms | 116 ms |
+| Deterministic briefing — the P0 request path, NO model call | 20 | 2 ms | 3 ms |
 | First token — LLM stream (runs that produced one) | 0 | — ms | — ms |
 | Total — `generate()` end to end | 0 | — ms | — ms |
 | ↳ stage: retrieval | 0 | — ms | — ms |
@@ -25,7 +25,7 @@ _`↳ stage:` rows are the OI-1 stage spans from inside `generate()`. `generatio
 
 | Criterion | Requirement | Measured P95 | Sample | Status |
 |---|---|--:|--:|:--:|
-| AC-1 | Briefing delivered to the user, end to end (P95) — deterministic path < 60,000 ms | 116 ms | 20 run(s) | PASS |
+| AC-1 | Briefing delivered to the user, end to end (P95) — deterministic path < 60,000 ms | 3 ms | 20 run(s) | PASS |
 
 _First paint is **not** an AC-1 row and is not a substitute for first token. It is the Task 3.5 `briefing:pending` path — one SELECT over `pending_items`, ranked by stakes × confidence, with no model client in scope — measured as its own timed call. Reporting it as "first token" would hide a real regression in either path._
 
@@ -65,25 +65,25 @@ _`Events ingested` is NOT `events extracted`: Layer 1 is one chat call per event
 
 | # | Window (UTC) | First paint ms | Total ms | retrieval | assembly | firstToken | generation | citation | Claims | Dropped | Partial | Outcome |
 |--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--:|---|
-| 1 | 08-30T07:08 → 09-01T07:08 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 2 | 08-30T10:55 → 09-01T10:55 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 3 | 08-30T14:43 → 09-01T14:43 | 1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 4 | 08-30T18:30 → 09-01T18:30 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 5 | 08-30T22:17 → 09-01T22:17 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 6 | 08-31T02:05 → 09-02T02:05 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 7 | 08-31T05:52 → 09-02T05:52 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 8 | 08-31T09:39 → 09-02T09:39 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 9 | 08-31T13:27 → 09-02T13:27 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 10 | 08-31T17:14 → 09-02T17:14 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 11 | 08-31T21:02 → 09-02T21:02 | 5 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 12 | 09-01T00:49 → 09-03T00:49 | 10 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 13 | 09-01T04:36 → 09-03T04:36 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 14 | 09-01T08:24 → 09-03T08:24 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 15 | 09-01T12:11 → 09-03T12:11 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 16 | 09-01T15:58 → 09-03T15:58 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 17 | 09-01T19:46 → 09-03T19:46 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 18 | 09-01T23:33 → 09-03T23:33 | 2 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 19 | 09-02T03:20 → 09-04T03:20 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
-| 20 | 09-02T07:08 → 09-04T07:08 | 6 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 1 | 08-30T16:54 → 09-01T16:54 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 2 | 08-30T20:42 → 09-01T20:42 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 3 | 08-31T00:29 → 09-02T00:29 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 4 | 08-31T04:17 → 09-02T04:17 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 5 | 08-31T08:04 → 09-02T08:04 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 6 | 08-31T11:51 → 09-02T11:51 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 7 | 08-31T15:39 → 09-02T15:39 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 8 | 08-31T19:26 → 09-02T19:26 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 9 | 08-31T23:13 → 09-02T23:13 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 10 | 09-01T03:01 → 09-03T03:01 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 11 | 09-01T06:48 → 09-03T06:48 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 12 | 09-01T10:35 → 09-03T10:35 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 13 | 09-01T14:23 → 09-03T14:23 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 14 | 09-01T18:10 → 09-03T18:10 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 15 | 09-01T21:58 → 09-03T21:58 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 16 | 09-02T01:45 → 09-04T01:45 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 17 | 09-02T05:32 → 09-04T05:32 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 18 | 09-02T09:20 → 09-04T09:20 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 19 | 09-02T13:07 → 09-04T13:07 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
+| 20 | 09-02T16:54 → 09-04T16:54 | <1 | NaN | — | — | — | — | — | 3 | 0 | no | template |
 
 _A `no_context` row made no model call and is excluded from every LLM latency distribution above; its first-paint measurement still counts, because first paint does not depend on the model._

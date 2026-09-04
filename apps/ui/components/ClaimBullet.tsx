@@ -2,8 +2,6 @@
 
 import type { ReactNode } from 'react';
 
-import { ExternalLink } from './ExternalLink';
-
 /**
  * One briefing bullet: the claim sentence, its citation chip, and — when the
  * model was unsure — a visible low-confidence flag (Task 3.6, FR-6).
@@ -76,8 +74,6 @@ export interface ClaimBulletProps {
   claimId?: string | null;
   /** Chip label — every caller passes {@link CITATION_CHIP_LABEL}. Null hides the chip. */
   citationLabel?: string | null;
-  /** Deep link into Slack/Gmail, when the citation carries one (FR-6). */
-  externalUrl?: string | null;
   /** Model confidence in [0, 1]. Omitted for claims that carry no score. */
   confidence?: number;
   /**
@@ -98,7 +94,6 @@ export function ClaimBullet({
   text,
   claimId = null,
   citationLabel = null,
-  externalUrl = null,
   confidence,
   lowConfidenceNote = DEFAULT_LOW_CONFIDENCE_NOTE,
   onCitationClick,
@@ -107,7 +102,7 @@ export function ClaimBullet({
   const lowConfidence = confidence !== undefined && confidence < LOW_CONFIDENCE_FLAG_THRESHOLD;
   const chipVisible = claimId !== null && citationLabel !== null;
 
-  const hasMeta = chipVisible || (externalUrl !== null && externalUrl !== undefined) || lowConfidence;
+  const hasMeta = chipVisible || lowConfidence;
 
   return (
     <li className="claim-bullet">
@@ -130,14 +125,6 @@ export function ClaimBullet({
             >
               {citationLabel}
             </button>
-          ) : null}
-          {externalUrl !== null && externalUrl !== undefined ? (
-            // Routed through `shell:openExternal` rather than navigating: the shell
-            // blocks every non-`app://` navigation (Task 4.6). See `ExternalLink`.
-            // #0b3fbf on #ffffff — 8.3:1.
-            <ExternalLink className="cr-interactive claim-bullet__link" href={externalUrl}>
-              open in source
-            </ExternalLink>
           ) : null}
           {lowConfidence ? (
             // NFR-9: not a colour-only signal. The words "low confidence" plus the

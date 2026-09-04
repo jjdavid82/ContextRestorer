@@ -112,15 +112,17 @@ export default function ModelSettings(): ReactNode {
                 </option>
               ))}
             </select>
-          </label>{' '}
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={busy || selected === info.chat}
-            onClick={() => void save()}
-          >
-            {busy ? 'Saving…' : 'Save'}
-          </button>
+          </label>
+          <div>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy || selected === info.chat}
+              onClick={() => void save()}
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+          </div>
         </>
       )}
 

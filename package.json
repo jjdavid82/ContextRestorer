@@ -2,8 +2,13 @@
   "name": "context-restorer",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["packages/*", "apps/*"],
-  "engines": { "node": ">=24.0 <25" },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=24.0 <25"
+  },
   "scripts": {
     "typecheck": "tsc -b --pretty",
     "test": "vitest run",
@@ -17,11 +22,12 @@
     "package:win": "npm run typecheck && npm run build:ui && node -e \"require('fs').cpSync('packages/store/src/migrations','packages/store/dist/migrations',{recursive:true})\" && npm run package -w apps/desktop"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
-    "vitest": "^2.0.0",
+    "@electron/rebuild": "^4.2.0",
     "@types/node": "^24.0.0",
     "electron": "^43.0.0",
-    "@electron/rebuild": "^4.2.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "electron-reload": "^2.0.0-alpha.1",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
   }
 }
