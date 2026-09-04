@@ -57,7 +57,17 @@ export interface CreateBriefingInput {
   threadsStillProcessing: number;
   /** Defaults to `false`; see {@link BriefingsRepo.markPartial}. */
   partial?: boolean;
+  /**
+   * Why this briefing exists (P0). Defaults to `'delivered'` — a briefing a
+   * user asked for. `'precompute'` marks a background pass whose only product
+   * is prose for a later request to reuse, and which is excluded from
+   * {@link BriefingsRepo.latencyStats}.
+   */
+  purpose?: BriefingPurpose;
 }
+
+/** Why a briefing row exists (P0). See {@link CreateBriefingInput.purpose}. */
+export type BriefingPurpose = 'delivered' | 'precompute';
 
 /**
  * A latency distribution, for the local metrics view.
@@ -159,8 +169,8 @@ export class BriefingsRepo {
         `INSERT INTO briefings
            (briefing_id, window_start, window_end, generated_at, mode, narrative_path,
             delta_ids_json, threads_still_processing, caught_up_at, first_token_ms, total_ms,
-            partial)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+            partial, purpose)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
       )
       .run(
         briefingId,
@@ -172,6 +182,7 @@ export class BriefingsRepo {
         JSON.stringify(input.deltaIds),
         input.threadsStillProcessing,
         partial ? 1 : 0,
+        input.purpose ?? 'delivered',
       );
 
     return {
@@ -278,6 +289,33 @@ export class BriefingsRepo {
   }
 
   /**
+   * Delta ids in `[start, end)` that have no model-written claim yet (P0).
+   *
+   * The pre-computer's work queue. A delta drops out of it the moment any
+   * briefing — delivered or precompute — carries an `'llm'` claim for it, so
+   * prose written by the FR-3 scheduler counts and is not redone.
+   *
+   * Ordered oldest-first: a delta that has waited longest for prose is the one
+   * most likely to be read next, since briefing windows extend backwards.
+   */
+  deltasNeedingProse(start: number, end: number, limit: number): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT d.delta_id FROM state_deltas d
+          WHERE d.created_at >= ? AND d.created_at < ?
+            AND NOT EXISTS (
+              SELECT 1 FROM briefing_claims c
+               WHERE c.delta_id = d.delta_id AND c.produced_by = 'llm'
+            )
+          ORDER BY d.created_at ASC, d.delta_id ASC
+          LIMIT ?`,
+      )
+      .all(start, end, Math.max(0, Math.trunc(limit))) as Array<{ delta_id: string }>;
+
+    return rows.map((row) => row.delta_id);
+  }
+
+  /**
    * The most recent model-written claim for each of `deltaIds` (P0).
    *
    * The synchronous path's reuse lookup: a delta the background pre-computer
@@ -380,8 +418,12 @@ export class BriefingsRepo {
    */
   latencyStats(): DurationStats {
     return this.percentiles(
+      // P0: background pre-computation rows are EXCLUDED. AC-1 is a claim about
+      // how long a user waited, and a background run nobody was watching is not
+      // a wait. Including it would move the number this change exists to move,
+      // in the flattering direction.
       `SELECT total_ms AS ms FROM briefings
-        WHERE total_ms IS NOT NULL
+        WHERE total_ms IS NOT NULL AND purpose = 'delivered'
         ORDER BY total_ms ASC`,
     );
   }

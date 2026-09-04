@@ -64,6 +64,7 @@ import {
 import { startTrace, type StageTimings } from '@cr/observability';
 import type {
   AiCallsRepo,
+  BriefingPurpose,
   BriefingsRepo,
   DeltasRepo,
   GraphRepo,
@@ -498,6 +499,14 @@ export interface GenerateOptions {
    * transiently (AC-2).
    */
   onClaimAccepted?: (chunk: AcceptedClaimChunk) => void;
+  /**
+   * Why this run exists (P0). Defaults to `'delivered'`.
+   *
+   * `'precompute'` marks a background pass whose only product is prose for a
+   * later request to reuse. Such rows are excluded from `latencyStats()`,
+   * because AC-1 is a claim about how long a USER waited.
+   */
+  purpose?: BriefingPurpose;
 }
 
 /** A claim that survived the gate, ready to be ordered and persisted. */
@@ -702,6 +711,7 @@ ${chunk.text}`,
       narrativePath,
       deltaIds: ranked.map((delta) => delta.deltaId),
       threadsStillProcessing,
+      purpose: options.purpose ?? 'delivered',
     });
 
     // Nothing citable means nothing sayable: every claim the model could produce
@@ -1133,6 +1143,9 @@ ${chunk.text}`,
         text: claim.text,
         citationArtifactId: primary,
         deltaId: deltaId ?? null,
+        // P0: this is the only writer of model-authored claims, and
+        // `proseByDelta` is what makes them reusable by a later request.
+        producedBy: 'llm',
       });
     });
   }

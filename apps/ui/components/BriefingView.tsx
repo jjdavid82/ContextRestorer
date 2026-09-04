@@ -107,17 +107,16 @@ const CHANGED_GROUP_MEANING =
 const BRIEFING_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The phrase a template-mode briefing is announced with (Task 4.3, §7.8).
+ * @deprecated Nothing renders these since P0 removed the banner.
  *
- * Mirrors `SIMPLIFIED_BRIEFING_LABEL` in `@cr/ai`'s `layer3/template.ts`, which
- * is where the fallback decides that `briefings.mode = 'template'`. The renderer
- * cannot import from `@cr/ai` (it is a separately-compiled static export), so
- * the two constants are kept in sync by hand, exactly as `types/bridge.d.ts` is
- * kept in sync with the preload.
+ * `briefings.mode = 'template'` no longer means "the model was unavailable" —
+ * it means "no background pass had written prose for these deltas yet", which
+ * is the ordinary case and not something to warn about. Retained only so the
+ * strings are greppable while the fallback vocabulary is still in the store.
  */
 export const SIMPLIFIED_BRIEFING_LABEL = 'Simplified briefing';
 
-/** The remedy shown with it. Actionable, and short enough to read in a banner. */
+/** @deprecated See {@link SIMPLIFIED_BRIEFING_LABEL}. */
 export const SIMPLIFIED_BRIEFING_REMEDY =
   'Check that Ollama is running, then request a new briefing.';
 
@@ -504,27 +503,20 @@ export function BriefingView({
       ) : null}
 
       {/*
-        §7.8 / Task 4.3: the local model was not available, so this briefing was
-        assembled from stored state changes by the deterministic template. Every
-        line on the page is still cited — the difference is the *prose*, not the
-        provenance — but the user has to be told, or they will read a terser
-        briefing as "nothing much happened" rather than "the writer was down".
+        The "Simplified briefing" banner was removed by P0.
 
-        Not colour-only (NFR-9): the label is words, in bold, prefixed by an
-        icon-free "Simplified briefing" string and given `role="status"` so it is
-        announced. The left border is decoration on top of that, not the signal.
+        It told the user their briefing had been "assembled from stored state
+        changes" because "the local model was unavailable" — a degradation
+        notice. Under deterministic-first that is simply how every briefing is
+        built: the request path renders from SQLite by design, and model-written
+        prose is folded in per delta when a background pass has produced it.
+
+        Keeping the banner would have meant telling the user their briefing was
+        second-rate on the ordinary path, which is not a warning but a lie. The
+        honest disclosures that remain are the ones that describe real gaps —
+        the OI-1 still-processing count in the footer, and the low-confidence
+        flag on individual obligations.
       */}
-      {done !== null && done.mode === 'template' ? (
-        <p
-          role="status"
-          data-testid="simplified-briefing-banner"
-          className="briefing-view__banner"
-        >
-          <strong>{SIMPLIFIED_BRIEFING_LABEL}</strong> — local model unavailable, so this was
-          written from recorded state changes rather than generated.{' '}
-          {SIMPLIFIED_BRIEFING_REMEDY}
-        </p>
-      ) : null}
 
       {/*
         The streaming region. `aria-live="polite"` is what makes a briefing that

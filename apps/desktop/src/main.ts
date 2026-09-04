@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { loadConfig, newId, systemClock, type AppConfig } from '@cr/core';
 import {
   BriefingGenerator,
+  BriefingPrecomputer,
   CitationGate,
   DebounceScheduler,
   Layer1Extractor,
@@ -1181,9 +1182,36 @@ if (!app.requestSingleInstanceLock()) {
       // ingestion extracts synchronously per event (see `createPipeline`
       // below), well inside any thread's quiet window, so no such race
       // recurs on later ticks.
+      // P0: background prose pre-computation. Shares the debounce tick rather
+      // than owning a timer, because it wants to run just AFTER Layer 2 settles
+      // a thread — that is the moment a delta exists with no prose for it.
+      //
+      // Chained off the same tick deliberately: it must never run concurrently
+      // with synthesis against the same local Ollama, which has one queue. Its
+      // own re-entrancy guard then handles the case where a cycle outlives the
+      // 30s interval, which it usually will.
+      const precomputer = new BriefingPrecomputer(generator, briefings);
+
       void layer12.runExtractionSweep().then(() => {
         void layer12.scheduler.tick();
-        debounceTimer = setInterval(() => void layer12.scheduler.tick(), 30_000);
+        debounceTimer = setInterval(() => {
+          void layer12.scheduler
+            .tick()
+            .then(() => precomputer.runCycle())
+            .then((result) => {
+              if (result.claimsWritten > 0) {
+                console.info(
+                  `[precompute] wrote ${result.claimsWritten} claim(s) for ` +
+                    `${result.candidates} delta(s) with no prose`,
+                );
+              }
+            })
+            // `runCycle` never rejects, but `scheduler.tick()` might, and an
+            // unhandled rejection inside an interval crashes the main process.
+            .catch((error: unknown) => {
+              console.error('[precompute] background cycle failed', error);
+            });
+        }, 30_000);
         // Never keep the process alive solely to fire this — same reasoning
         // as the scheduler's own timeout timers.
         debounceTimer.unref();

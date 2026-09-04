@@ -10,9 +10,10 @@
 > that is called out explicitly under **Open Items** rather than filled with a guess.
 > If anything here conflicts with the design doc, **the design doc wins** — *except* where
 > this document records a dated, signed-off **amendment** under §8, which supersedes the
-> source for that requirement and states what changed and why. There is one such amendment
-> today: **OI-6** (FR-2 presentation). An amendment is the only sanctioned way to depart from
-> the source; an undocumented divergence is still a defect in this document.
+> source for that requirement and states what changed and why. There are two such amendments
+> today: **OI-6** (FR-2 presentation) and **OI-7** (Layer 3 generation moves to background
+> pre-computation). An amendment is the only sanctioned way to depart from the source; an
+> undocumented divergence is still a defect in this document.
 
 ---
 
@@ -211,6 +212,12 @@ design on evidence gathered after it was written, and is labelled as such.
 
 ### OI-1 — Latency budget split: **thin synchronous path, 45s cap**
 
+> **Superseded in part by OI-7 (2026-09-04).** The synchronous path no longer
+> calls a model at all, so the staged generation budget below describes the
+> BACKGROUND pre-computation pass rather than anything a user waits on. The
+> first-token mitigation it describes (paint pending items from the store while
+> retrieval runs) became the whole design rather than a mitigation.
+
 Background pre-computation owns all extraction and synthesis (consistent with D-3).
 The synchronous briefing path gets a 45s P95 target, allocated:
 
@@ -320,6 +327,63 @@ assembles that themselves. This was weighed and accepted as the cost of the chan
 **Traceability.** Decision Q-1 in `specs/2026-09-03-briefing-experience/briefing-experience-proposal.md`
 (§7, A-1); the layout it mandates is P4 in the same document. AC-1…AC-11 are unaffected: no
 acceptance criterion measured narrative form, which is the observation the decision rests on.
+
+---
+
+### OI-7 — Layer 3 generation moves to background pre-computation (amended 2026-09-04)
+
+The second **amendment** in this document (see OI-6 and the §8 preamble). It
+supersedes two things the source states: OI-1's allocation of a synchronous
+generation budget, and §7.8's designation of the deterministic template as the
+*fallback*.
+
+**What changed.** The synchronous briefing path no longer calls a language
+model. `briefing:request` renders from SQLite — open `pending_items` plus the
+window's current `state_deltas` — and folds in model-written prose for any delta
+a background pass has already covered. Generation runs in the background
+(`BriefingPrecomputer`, on the D-7 debounce tick) and its output is read by the
+next request.
+
+**Why.** AC-1 asks for P95 < 60s and first token < 5s. Measured on the shipped
+config, uncontended: **97,925 ms to first token, 360,920 ms end to end** (n=20,
+2026-09-03). Generation is ~99.9% of a run; retrieval, assembly and the citation
+gate together never exceed ~910 ms. No prompt or model change closes a 6× gap,
+and `budgets.generationMs` had already been raised 30s → 360s to stop the
+truncation — abandoning OI-1's cap rather than meeting it.
+
+**What is preserved:**
+
+- **Every guardrail.** The pre-computer calls the same
+  `BriefingGenerator.generate()`, so the citation gate (AC-2), T-1 wrapping,
+  SEC-5 output redaction and F-4's grounding counter apply identically. There is
+  no background path with weaker rules.
+- **Prose itself** (OI-6's cross-item linkage). It arrives from storage rather
+  than from the request.
+- **NFR-5 reproducibility**, which is *improved*: a deterministic render over the
+  same rows is reproducible by construction.
+
+**What is given up:**
+
+- **A first briefing has no prose.** A newly-onboarded user has no background
+  pass behind them, so their first briefing is deterministic-only. That is worse
+  than a hypothetical instant LLM briefing and much better than the real
+  alternative (six minutes, sometimes empty). It remains the R-6 cold-start
+  problem, unsolved.
+- **Freshly-settled threads lag.** A delta synthesized moments before the user
+  asks will not have prose yet.
+
+**Consequence for FR-2's "streamed".** Claims still arrive over
+`briefing:chunk` and the run still ends with `briefing:done` — the renderer is
+unchanged — but they now all arrive within milliseconds, so streaming is
+vestigial on the request path rather than load-bearing. FR-2 is **not** amended
+again for this: "streamed" was reworded in OI-6 for perceived latency, and a
+briefing that is complete immediately satisfies that intent more fully than one
+that trickles. Flagged rather than silently reinterpreted.
+
+**Consequence for §7.8.** `briefings.mode = 'template'` stops meaning "the model
+was unavailable" and starts meaning "no prose covered these deltas yet". The
+user-facing "Simplified briefing" banner was therefore **removed**: on the
+ordinary path it announced a degradation that was not occurring.
 
 ---
 

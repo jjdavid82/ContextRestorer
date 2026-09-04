@@ -610,54 +610,38 @@ describe('BriefingView — still-processing footer (OI-1)', () => {
 /* 3b. Template-mode banner (§7.8, Task 4.3)                                  */
 /* -------------------------------------------------------------------------- */
 
-describe('BriefingView — simplified-briefing banner (§7.8 fallback)', () => {
-  it('announces the fallback and its remedy when mode is "template"', async () => {
+describe('BriefingView — no degradation banner (P0)', () => {
+  it('does not tell the user a template-mode briefing is second-rate', async () => {
     const mock = installBridge();
     await renderBriefing(mock);
-
-    // Nothing before `briefing:done` — the mode is not known until then, and a
-    // banner that flickered in mid-stream would be a guess.
-    expect(screen.queryByTestId('simplified-briefing-banner')).toBeNull();
 
     mock.emitDone(doneEvent({ mode: 'template' }));
-
-    const banner = await screen.findByTestId('simplified-briefing-banner');
-    expect(banner.textContent).toContain(SIMPLIFIED_BRIEFING_LABEL);
-    expect(banner.textContent).toContain('local model unavailable');
-    // The user is told what to DO about it, not merely that something is off.
-    expect(banner.textContent).toContain(SIMPLIFIED_BRIEFING_REMEDY);
-  });
-
-  it('does not render the banner for a normal LLM briefing', async () => {
-    const mock = installBridge();
-    await renderBriefing(mock);
-
-    mock.emitDone(doneEvent({ mode: 'llm' }));
 
     await waitFor(() =>
       expect(screen.getByTestId('briefing-stream').getAttribute('aria-busy')).toBe('false'),
     );
+
+    // Under deterministic-first, `mode: 'template'` is how EVERY briefing is
+    // built on the request path — SQLite, no model — with prose folded in per
+    // delta when a background pass has produced it. The old banner announced
+    // that as "local model unavailable", which on the ordinary path is not a
+    // warning but a lie.
     expect(screen.queryByTestId('simplified-briefing-banner')).toBeNull();
+    expect(screen.queryByText(/local model unavailable/i)).toBeNull();
     expect(screen.queryByText(new RegExp(SIMPLIFIED_BRIEFING_LABEL, 'i'))).toBeNull();
   });
 
-  it('conveys the fallback in text, not by colour alone (NFR-9)', async () => {
+  it('still shows the disclosures that describe a REAL gap', async () => {
     const mock = installBridge();
     await renderBriefing(mock);
 
-    mock.emitDone(doneEvent({ mode: 'template' }));
-    const banner = await screen.findByTestId('simplified-briefing-banner');
+    mock.emitDone(doneEvent({ mode: 'template', threadsStillProcessing: 3 }));
 
-    // Announced to assistive tech, and readable with every style stripped.
-    expect(banner.getAttribute('role')).toBe('status');
-    expect(banner.textContent?.trim().length ?? 0).toBeGreaterThan(20);
-    expect(within(banner).getByText(SIMPLIFIED_BRIEFING_LABEL).tagName).toBe('STRONG');
+    // Removing a false warning must not remove the true ones: OI-1's backlog
+    // count says something the user genuinely cannot see otherwise.
+    expect(await screen.findByText(/3 threads still processing/)).toBeTruthy();
   });
 });
-
-/* -------------------------------------------------------------------------- */
-/* 4. Confidence flag                                                         */
-/* -------------------------------------------------------------------------- */
 
 describe('ClaimBullet — low-confidence flag', () => {
   it('flags a pending item whose confidence is below the threshold', async () => {

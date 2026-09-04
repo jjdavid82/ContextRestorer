@@ -12,3 +12,5 @@ export * from './layer3/citationGate.js';
 export * from './ranker.js';
 export * from './layer3/generate.js';
 export * from './layer3/template.js';
+export { BriefingPrecomputer } from './layer3/precompute.js';
+export type { PrecomputeResult, PrecomputeOptions, PrecomputeBriefings } from './layer3/precompute.js';

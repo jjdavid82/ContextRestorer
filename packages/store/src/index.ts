@@ -5,7 +5,7 @@ export type { Chunk, VectorStore, SearchFilter, SearchResult, OpenVectorsOptions
 export { EventsRepo } from './repos/events.js';
 export { GraphRepo } from './repos/graph.js';
 export { BriefingsRepo } from './repos/briefings.js';
-export type { CreateBriefingInput, AddClaimInput, DurationStats } from './repos/briefings.js';
+export type { CreateBriefingInput, AddClaimInput, DurationStats, BriefingPurpose } from './repos/briefings.js';
 export { FeedbackRepo } from './repos/feedback.js';
 export type { SubmitFeedbackInput } from './repos/feedback.js';
 export { AiCallsRepo } from './repos/aiCalls.js';
