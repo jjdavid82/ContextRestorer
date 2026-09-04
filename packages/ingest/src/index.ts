@@ -56,6 +56,7 @@ export {
   toEvent,
   type EnqueueExtraction,
   type IngestOutcome,
+  type ProjectForThread,
 } from './pipeline.js';
 export {
   suggestProjects,

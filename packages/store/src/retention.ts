@@ -59,6 +59,11 @@ const DELETE_ORDER: readonly string[] = [
   // Extractions reference events; both must precede their parents.
   'extractions',
   'events',
+  // Selected channels reference `projects` (migration 006's `project_id`), so
+  // they must be emptied BEFORE it. This row used to sit at the bottom of the
+  // list, among the standalone tables — correct until that column existed, and
+  // a foreign-key violation the moment it did.
+  'slack_selected_channels',
   // Graph tables, now unreferenced.
   'relationships',
   'people',
@@ -68,7 +73,6 @@ const DELETE_ORDER: readonly string[] = [
   'ai_calls',
   'synthesis_watermark',
   'briefing_schedules',
-  'slack_selected_channels',
 ];
 
 /**

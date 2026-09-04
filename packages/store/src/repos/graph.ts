@@ -320,6 +320,63 @@ export class GraphRepo {
     });
   }
 
+  /**
+   * Remove every `rel` edge leaving `fromId`, or just the one reaching `toId`.
+   *
+   * Added for the channel → project mapping (migration 006): re-tagging a
+   * channel has to *move* its artifacts' `belongs_to` edges, and without a
+   * removal the old project's edge would survive alongside the new one. An
+   * artifact linked to two projects takes the HIGHEST stakes weight
+   * (`retrieval.stakesWeightFor`), so a stale edge does not merely linger — it
+   * can outrank the answer the user just gave.
+   *
+   * The graph is otherwise append-only in spirit, which is why this is narrow
+   * and explicit rather than a general `deleteEdges`: `relationships` rows
+   * record structure, not history, and the only structure that legitimately
+   * changes is one the user restated.
+   *
+   * @returns the number of edges removed.
+   */
+  unrelate(input: { fromId: string; rel: string; toId?: string }): number {
+    const result =
+      input.toId === undefined
+        ? this.db
+            .prepare(`DELETE FROM relationships WHERE from_id = ? AND rel = ?`)
+            .run(input.fromId, input.rel)
+        : this.db
+            .prepare(`DELETE FROM relationships WHERE from_id = ? AND rel = ? AND to_id = ?`)
+            .run(input.fromId, input.rel, input.toId);
+
+    return result.changes;
+  }
+
+  /**
+   * Artifact ids whose `external_ref` begins with `prefix`, for one source.
+   *
+   * Exists so the channel → project linker can find every Slack thread already
+   * ingested from a channel: `artifactFor` sets a thread artifact's
+   * `external_ref` to the event's `threadKey`, and a Slack thread key is
+   * `${channelId}:${ts}` (`slackThreadKey`). The channel is therefore a literal
+   * prefix, and this is the query that turns "tag #platform-migration" into
+   * edges for the threads already on disk rather than only for ones that arrive
+   * afterwards.
+   *
+   * `prefix` is escaped and bound, never interpolated: it originates from a
+   * Slack API response and reaches this method through the settings UI.
+   */
+  artifactIdsByExternalRefPrefix(source: string, prefix: string): string[] {
+    const escaped = prefix.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    const rows = this.db
+      .prepare(
+        `SELECT artifact_id FROM artifacts
+          WHERE source = ? AND external_ref LIKE ? ESCAPE '\\'
+          ORDER BY artifact_id`,
+      )
+      .all(source, `${escaped}%`) as Array<{ artifact_id: string }>;
+
+    return rows.map((row) => row.artifact_id);
+  }
+
   /** Ids reachable from `fromId` along `rel` (the outbound half of an edge). */
   relatedIds(fromId: string, rel: string): string[] {
     return (this.stmtRelatedIds.all(fromId, rel) as Array<{ to_id: string }>).map((r) => r.to_id);

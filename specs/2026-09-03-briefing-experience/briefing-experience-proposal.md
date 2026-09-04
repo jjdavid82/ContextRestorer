@@ -368,7 +368,7 @@ and need nothing else. So the near-term order is:
 
 | # | Work | Depends on |
 |---|---|---|
-| 1 | A-2 — channel → project tagging, restore the OI-3 onboarding gate | nothing |
+| 1 | ~~A-2 — channel → project tagging, restore the OI-3 onboarding gate~~ — **DONE 2026-09-03** | nothing |
 | 2 | P2 / P4 — list layout, counts as headings, verbatim-on-obligations | Q-1 (done) |
 | 3 | A-4 — the configurable cap on the changed list | A-2 |
 | 4 | 0b — eval re-baseline on the shipped config | nothing, but must precede 5 |

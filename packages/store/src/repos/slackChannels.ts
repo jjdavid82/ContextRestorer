@@ -14,16 +14,45 @@ export interface SelectedSlackChannel {
   channelId: string;
   name: string;
   addedAt: number;
+  /**
+   * Declared project this channel's threads belong to (FR-8), or `null` when
+   * the user has not tagged it.
+   *
+   * `null` is the ordinary case, not a defect: an untagged channel is still
+   * polled, its threads still appear in briefings, they simply earn no stakes
+   * weight — the behaviour every channel had before migration 006.
+   */
+  projectId: string | null;
+}
+
+/**
+ * One channel as handed to {@link SlackChannelsRepo.setSelected}.
+ *
+ * `projectId` is optional and tri-state on purpose: absent means "leave the
+ * existing tag alone", `null` means "clear it", and a string sets it. The
+ * channel-checkbox save path sends no `projectId` at all and must not wipe tags
+ * as a side effect of toggling a checkbox.
+ */
+export interface SelectedChannelInput {
+  channelId: string;
+  name: string;
+  projectId?: string | null;
 }
 
 interface ChannelRow {
   channel_id: string;
   name: string;
   added_at: number;
+  project_id: string | null;
 }
 
 function toDomain(row: ChannelRow): SelectedSlackChannel {
-  return { channelId: row.channel_id, name: row.name, addedAt: row.added_at };
+  return {
+    channelId: row.channel_id,
+    name: row.name,
+    addedAt: row.added_at,
+    projectId: row.project_id,
+  };
 }
 
 /**
@@ -39,11 +68,13 @@ export class SlackChannelsRepo {
 
   constructor(private readonly db: Database) {
     this.stmtList = this.db.prepare<unknown[], ChannelRow>(
-      `SELECT channel_id, name, added_at FROM slack_selected_channels ORDER BY added_at ASC, channel_id ASC`,
+      `SELECT channel_id, name, added_at, project_id FROM slack_selected_channels
+        ORDER BY added_at ASC, channel_id ASC`,
     );
     this.stmtDeleteAll = this.db.prepare(`DELETE FROM slack_selected_channels`);
     this.stmtInsert = this.db.prepare(
-      `INSERT INTO slack_selected_channels (channel_id, name, added_at) VALUES (?, ?, ?)`,
+      `INSERT INTO slack_selected_channels (channel_id, name, added_at, project_id)
+       VALUES (?, ?, ?, ?)`,
     );
   }
 
@@ -60,16 +91,34 @@ export class SlackChannelsRepo {
    * shows them in. Existing rows keep their original `added_at` by reusing the
    * value already on disk when the incoming channel id matches one.
    */
-  setSelected(channels: ReadonlyArray<{ channelId: string; name: string }>, now: number): void {
-    const existing = new Map(this.list().map((c) => [c.channelId, c.addedAt]));
+  setSelected(channels: ReadonlyArray<SelectedChannelInput>, now: number): void {
+    const previous = this.list();
+    const addedAtById = new Map(previous.map((c) => [c.channelId, c.addedAt]));
+    // Preserved the same way `addedAt` is: a caller that omits `projectId`
+    // entirely (the pre-006 shape, and the channel-checkbox save path) is saying
+    // "I am not changing the tags", not "clear every tag". Only an explicit
+    // `null` clears one.
+    const projectById = new Map(previous.map((c) => [c.channelId, c.projectId]));
 
-    const apply = this.db.transaction((rows: ReadonlyArray<{ channelId: string; name: string }>) => {
+    const apply = this.db.transaction((rows: ReadonlyArray<SelectedChannelInput>) => {
       this.stmtDeleteAll.run();
       for (const row of rows) {
-        this.stmtInsert.run(row.channelId, row.name, existing.get(row.channelId) ?? now);
+        this.stmtInsert.run(
+          row.channelId,
+          row.name,
+          addedAtById.get(row.channelId) ?? now,
+          row.projectId === undefined ? (projectById.get(row.channelId) ?? null) : row.projectId,
+        );
       }
     });
 
     apply(channels);
+  }
+
+  /** Tag (or, with `null`, untag) one already-selected channel. */
+  setProject(channelId: string, projectId: string | null): void {
+    this.db
+      .prepare(`UPDATE slack_selected_channels SET project_id = ? WHERE channel_id = ?`)
+      .run(projectId, channelId);
   }
 }

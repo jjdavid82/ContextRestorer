@@ -50,8 +50,21 @@ export interface AvailableChannelsResult {
  */
 export interface SlackChannelStore {
   list(): SelectedSlackChannel[];
-  setSelected(channels: ReadonlyArray<{ channelId: string; name: string }>, now: number): void;
+  setSelected(
+    channels: ReadonlyArray<{ channelId: string; name: string; projectId?: string | null }>,
+    now: number,
+  ): void;
 }
+
+/**
+ * Rebuilds `belongs_to` edges after a selection is saved (A-2).
+ *
+ * Injected rather than imported so this module keeps no `@cr/store` runtime
+ * dependency beyond types, matching how every other handler here is wired. When
+ * absent the selection still saves — it simply does not backfill, which is the
+ * pre-A-2 behaviour.
+ */
+export type RelinkProjects = (channels: readonly SelectedSlackChannel[]) => void;
 
 export interface SlackChannelsHandlerDeps {
   /** Read for the live token; `undefined`/absent means Slack was never connected. */
@@ -60,22 +73,49 @@ export interface SlackChannelsHandlerDeps {
   channels: SlackChannelStore;
   /** Injected time source for `added_at`; nothing here calls `Date.now()`. */
   clock: { now(): number };
+  /**
+   * FR-5/FR-8 stakes linking, run after a successful save. Optional; see
+   * {@link RelinkProjects}.
+   */
+  relinkProjects?: RelinkProjects;
 }
 
-/** Narrow the renderer-supplied selection. `null` means "not a channel list". */
-export function parseSelection(
-  arg: unknown,
-): ReadonlyArray<{ channelId: string; name: string }> | null {
+/** One entry of a parsed selection. `projectId` follows the repo's tri-state. */
+export interface ParsedChannelSelection {
+  channelId: string;
+  name: string;
+  /** Absent = leave the tag alone; `null` = clear it; string = set it (A-2). */
+  projectId?: string | null;
+}
+
+/**
+ * Narrow the renderer-supplied selection. `null` means "not a channel list".
+ *
+ * `projectId` is optional and tri-state, mirroring
+ * `SlackChannelsRepo.setSelected`: a payload that omits it entirely — which is
+ * what the plain checkbox save sends — must not read as "clear every tag".
+ * Anything present but not a string or `null` is a malformed payload and
+ * rejects the whole selection, same as a bad `channelId`.
+ */
+export function parseSelection(arg: unknown): ReadonlyArray<ParsedChannelSelection> | null {
   const candidate = (arg as { channels?: unknown } | null)?.channels;
   if (!Array.isArray(candidate)) return null;
 
-  const parsed: Array<{ channelId: string; name: string }> = [];
+  const parsed: ParsedChannelSelection[] = [];
   for (const entry of candidate) {
-    const row = entry as { channelId?: unknown; name?: unknown } | null;
+    const row = entry as { channelId?: unknown; name?: unknown; projectId?: unknown } | null;
     if (row === null || typeof row !== 'object') return null;
     if (typeof row.channelId !== 'string' || row.channelId === '') return null;
     if (typeof row.name !== 'string' || row.name === '') return null;
-    parsed.push({ channelId: row.channelId, name: row.name });
+
+    if (row.projectId === undefined) {
+      parsed.push({ channelId: row.channelId, name: row.name });
+      continue;
+    }
+    if (row.projectId !== null && (typeof row.projectId !== 'string' || row.projectId === '')) {
+      return null;
+    }
+    parsed.push({ channelId: row.channelId, name: row.name, projectId: row.projectId });
   }
   return parsed;
 }
@@ -120,11 +160,25 @@ export function setSelectedChannels(arg: unknown, deps: SlackChannelsHandlerDeps
 
   try {
     deps.channels.setSelected(parsed, deps.clock.now());
-    return { ok: true };
   } catch (error) {
     console.error('[slackChannels] setSelected failed', error);
     return { ok: false, reason: 'internal_error' };
   }
+
+  // A-2: project the new tags onto `belongs_to` edges, including for threads
+  // already ingested. Deliberately AFTER the save has committed and outside its
+  // try: a relink failure must not report the selection as unsaved — the
+  // selection IS saved, and the next save (or app start) rebuilds the links
+  // anyway, since `rebuildProjectLinks` is idempotent.
+  if (deps.relinkProjects !== undefined) {
+    try {
+      deps.relinkProjects(deps.channels.list());
+    } catch (error) {
+      console.error('[slackChannels] project relink failed; selection was still saved', error);
+    }
+  }
+
+  return { ok: true };
 }
 
 /**

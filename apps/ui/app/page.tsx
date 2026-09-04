@@ -65,14 +65,10 @@ function readStoredHomeState(): StoredHomeState | null {
 /**
  * Placeholder home page.
  *
- * Beyond proving the preload bridge types resolve (Task 0.8), this reads
- * `onboarding:status` to decide whether the briefing action can run yet. The
- * original OI-3 gate required declared projects first; that requirement was
- * relaxed (declared-project stakes have no ranking effect until project
- * linking is implemented, so nothing was actually gated on a real signal).
- * The only remaining requirement is that status has loaded at all — a status
- * that failed to load still fails CLOSED, since `readyForBriefing` is derived
- * from it being non-null.
+ * Reads `onboarding:status` to decide whether the briefing action can run yet.
+ * The OI-3 gate (declare a project first) was relaxed while nothing wrote the
+ * `belongs_to` edge that made declarations matter; A-2 restored that write
+ * path, so the gate is back — see `readyForBriefing` below.
  */
 export default function HomePage(): ReactNode {
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
@@ -126,10 +122,23 @@ export default function HomePage(): ReactNode {
     };
   }, []);
 
-  // Declaring projects is optional (OI-3 relaxed — see `onboarding/page.tsx`):
-  // declared-project stakes have no ranking effect yet, so there is nothing to
-  // gate the briefing action on beyond having loaded onboarding status at all.
-  const readyForBriefing = status !== null;
+  /**
+   * OI-3, restored (A-2): at least one declared project before a briefing.
+   *
+   * This gate was relaxed to "status loaded at all" because declared-project
+   * stakes had no ranking effect — nothing wrote the `belongs_to` edge
+   * `wStakes` reads, so requiring declarations gated on a signal the system
+   * could not use. A-2 supplies that write path (tag a Slack channel with a
+   * project in Settings), so the requirement is load-bearing again.
+   *
+   * Deliberately >= 1 rather than OI-3's stated 3-5: the config's
+   * `minDeclaredProjects` (3) governs the DECLARATION step in onboarding, which
+   * is where that floor belongs. Blocking the primary action of an app the user
+   * has already onboarded, because they since removed a project, would be a
+   * worse failure than a slightly under-informed ranking. Fails CLOSED on a
+   * status that never loaded, as before.
+   */
+  const readyForBriefing = status !== null && status.projectsDeclared.length > 0;
 
   /**
    * Request a briefing over the window the user actually wants (F-2).
@@ -199,7 +208,8 @@ export default function HomePage(): ReactNode {
         {status !== null && status.projectsDeclared.length === 0 ? (
           <p>
             <small>
-              No projects declared yet — optional, but{' '}
+              Declare a project before your first briefing — it is what ranks your briefing by
+              what matters instead of by what is newest.{' '}
               {/* Root-relative, with the filename spelled out: the bundle is served
                   over the `app://` protocol (a fixed-host "standard" scheme), whose
                   handler cannot fetch a directory-style URL, and whose root-relative

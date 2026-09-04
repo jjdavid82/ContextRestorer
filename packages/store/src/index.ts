@@ -38,6 +38,16 @@ export type {
 } from './repos/briefingSchedules.js';
 // Slack channel selector (Task 1.7's gap, closed). Migration 004.
 export { SlackChannelsRepo } from './repos/slackChannels.js';
-export type { SelectedSlackChannel } from './repos/slackChannels.js';
+export type { SelectedSlackChannel, SelectedChannelInput } from './repos/slackChannels.js';
+
+// FR-5 / FR-8: the channel → project → artifact write path behind the stakes
+// ranker. See `projectLinks.ts` for why the edge is materialised rather than
+// resolved at read time.
+export {
+  rebuildProjectLinks,
+  SlackChannelProjectResolver,
+  PROJECT_REL,
+} from './projectLinks.js';
+export type { ProjectLinkSummary, ProjectLinkGraph } from './projectLinks.js';
 // Generic app-level settings (currently: the selected chat model). Migration 005.
 export { AppSettingsRepo } from './repos/appSettings.js';

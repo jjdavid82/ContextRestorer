@@ -211,3 +211,99 @@ describe('listAvailableChannels', () => {
     });
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* A-2 — project tagging and the relink hook                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('parseSelection project tags (A-2)', () => {
+  it('omits projectId entirely when the payload does not carry one', () => {
+    const parsed = parseSelection({ channels: [{ channelId: 'C1', name: 'general' }] });
+
+    // Absent must stay ABSENT rather than becoming `null`: the repo reads the
+    // difference as "leave the tag alone" vs "clear it", and the plain
+    // checkbox save sends no tag at all.
+    expect(parsed).toEqual([{ channelId: 'C1', name: 'general' }]);
+    expect(parsed?.[0] && 'projectId' in parsed[0]).toBe(false);
+  });
+
+  it('accepts an explicit project id and an explicit null', () => {
+    expect(
+      parseSelection({
+        channels: [
+          { channelId: 'C1', name: 'general', projectId: 'proj-1' },
+          { channelId: 'C2', name: 'random', projectId: null },
+        ],
+      }),
+    ).toEqual([
+      { channelId: 'C1', name: 'general', projectId: 'proj-1' },
+      { channelId: 'C2', name: 'random', projectId: null },
+    ]);
+  });
+
+  it('rejects a malformed projectId', () => {
+    for (const projectId of [42, '', {}, []]) {
+      expect(
+        parseSelection({ channels: [{ channelId: 'C1', name: 'general', projectId }] }),
+      ).toBeNull();
+    }
+  });
+});
+
+describe('setSelectedChannels relinks projects (A-2)', () => {
+  it('rebuilds links from the freshly saved selection', () => {
+    const saved = [{ channelId: 'C1', name: 'general', addedAt: 1_000, projectId: 'proj-1' }];
+    const relinkProjects = vi.fn();
+    const deps = makeDeps({
+      channels: { list: vi.fn(() => saved), setSelected: vi.fn() },
+      relinkProjects,
+    });
+
+    const result = setSelectedChannels(
+      { channels: [{ channelId: 'C1', name: 'general', projectId: 'proj-1' }] },
+      deps,
+    );
+
+    expect(result).toEqual({ ok: true });
+    // Handed what the STORE now holds, not the request body: the repo's
+    // tri-state merge means the two can differ, and the linker must act on the
+    // persisted truth.
+    expect(relinkProjects).toHaveBeenCalledWith(saved);
+  });
+
+  it('still reports success when the relink throws', () => {
+    const relinkProjects = vi.fn(() => {
+      throw new Error('graph is busy');
+    });
+    const deps = makeDeps({ relinkProjects });
+
+    // The selection IS saved at this point. Reporting failure would tell the
+    // user to re-save something that already persisted, and the next save (or
+    // app start) rebuilds the links anyway — the rebuild is idempotent.
+    expect(setSelectedChannels({ channels: [] }, deps)).toEqual({ ok: true });
+    expect(relinkProjects).toHaveBeenCalled();
+  });
+
+  it('does not relink when the save itself failed', () => {
+    const relinkProjects = vi.fn();
+    const deps = makeDeps({
+      channels: {
+        list: vi.fn(() => []),
+        setSelected: vi.fn(() => {
+          throw new Error('disk full');
+        }),
+      },
+      relinkProjects,
+    });
+
+    expect(setSelectedChannels({ channels: [] }, deps)).toEqual({
+      ok: false,
+      reason: 'internal_error',
+    });
+    expect(relinkProjects).not.toHaveBeenCalled();
+  });
+
+  it('saves normally with no linker wired', () => {
+    expect(setSelectedChannels({ channels: [] }, makeDeps())).toEqual({ ok: true });
+  });
+});

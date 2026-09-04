@@ -129,7 +129,13 @@ function installBridge(
   const bridge: ContextRestorerBridge = {
     onboarding: { status: vi.fn(async () => ({ sourcesConnected: [], projectsDeclared: [], ollamaReady: true })) },
     oauth: { connect: vi.fn(async () => ({ ok: true })), revoke: vi.fn(async () => ({ ok: true })) },
-    projects: { suggest: vi.fn(async () => ({ candidates: [] })), declare: vi.fn(async () => ({ ok: true })) },
+    projects: {
+      suggest: vi.fn(async () => ({ candidates: [] })),
+      declare: vi.fn(async () => ({ ok: true })),
+      // A-2 channel tagging. Bridge-contract only; the briefing view never
+      // reads it — the Settings channel panel does.
+      list: vi.fn(async () => []),
+    },
     briefing: {
       request,
       pending,

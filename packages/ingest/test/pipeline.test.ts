@@ -197,3 +197,97 @@ describe('ingestion pipeline', () => {
     expect(row.actor_id).toBe('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// A-2 — linking a new thread to its channel's declared project (FR-5 / FR-8)
+// ---------------------------------------------------------------------------
+
+describe('project linking on ingest', () => {
+  const PROJECT_REL = 'belongs_to';
+
+  /** A declared project the `belongs_to` edge can point at. */
+  function declareProject(name = 'Migration'): string {
+    return graphRepo.declareProject({ name, origin: 'declared', stakesWeight: 2 }).projectId;
+  }
+
+  it('links the thread artifact when the resolver names a project', async () => {
+    const projectId = declareProject();
+    const linked = new IngestionPipeline(
+      eventsRepo,
+      graphRepo,
+      watermarkRepo,
+      enqueueExtraction,
+      undefined,
+      () => projectId,
+    );
+
+    await linked.ingest(rawEvent('s1', { threadKey: 'C1:100.1' }));
+
+    // The edge must exist in the graph, because that is the only thing
+    // `toRankableDelta` and retrieval's stakes lookup ever read.
+    const artifact = artifactId('slack', 'thread', 'C1:100.1');
+    expect(graphRepo.relatedIds(artifact, PROJECT_REL)).toEqual([projectId]);
+  });
+
+  it('writes no edge when the resolver returns null', async () => {
+    const linked = new IngestionPipeline(
+      eventsRepo,
+      graphRepo,
+      watermarkRepo,
+      enqueueExtraction,
+      undefined,
+      () => null,
+    );
+
+    await linked.ingest(rawEvent('s1', { threadKey: 'C1:100.1' }));
+
+    expect(graphRepo.relatedIds(artifactId('slack', 'thread', 'C1:100.1'), PROJECT_REL)).toEqual([]);
+  });
+
+  it('does not duplicate the edge across later messages on the same thread', async () => {
+    const projectId = declareProject();
+    const linked = new IngestionPipeline(
+      eventsRepo,
+      graphRepo,
+      watermarkRepo,
+      enqueueExtraction,
+      undefined,
+      () => projectId,
+    );
+
+    await linked.ingest(rawEvent('s1', { threadKey: 'C1:100.1', occurredAt: 1_000 }));
+    await linked.ingest(rawEvent('s2', { threadKey: 'C1:100.1', occurredAt: 2_000 }));
+
+    // `relate` is idempotent on (from, rel, to) — re-linking is a no-op, not a
+    // second row.
+    expect(graphRepo.relatedIds(artifactId('slack', 'thread', 'C1:100.1'), PROJECT_REL)).toEqual([
+      projectId,
+    ]);
+  });
+
+  it('is not called on a replayed event', async () => {
+    const projectId = declareProject();
+    const resolver = vi.fn(() => projectId);
+    const linked = new IngestionPipeline(
+      eventsRepo,
+      graphRepo,
+      watermarkRepo,
+      enqueueExtraction,
+      undefined,
+      resolver,
+    );
+
+    await linked.ingest(rawEvent('s1', { threadKey: 'C1:100.1' }));
+    await linked.ingest(rawEvent('s1', { threadKey: 'C1:100.1' })); // duplicate
+
+    // The duplicate path returns before touching the graph at all (AC-10), and
+    // linking must not be the one thing that breaks that guarantee.
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it('behaves exactly as before when no resolver is supplied', async () => {
+    await pipeline.ingest(rawEvent('s1', { threadKey: 'C1:100.1' }));
+
+    expect(graphRepo.relatedIds(artifactId('slack', 'thread', 'C1:100.1'), PROJECT_REL)).toEqual([]);
+  });
+});

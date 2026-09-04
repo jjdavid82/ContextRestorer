@@ -123,6 +123,19 @@ export function artifactFor(event: Event): Artifact {
   };
 }
 
+/**
+ * Resolves an event's thread to the project its channel is tagged with (FR-8).
+ *
+ * A function rather than a repo so the pipeline stays ignorant of *how* the
+ * mapping is stored — `@cr/store`'s `SlackChannelProjectResolver` satisfies it,
+ * and so does a one-line test double. Returning `null` (the untagged case) must
+ * be cheap: this is called once per ingested event.
+ */
+export type ProjectForThread = (source: string, threadKey: string) => string | null;
+
+/** Edge kind joining an artifact to the project it belongs to. */
+const PROJECT_REL = 'belongs_to';
+
 export class IngestionPipeline {
   constructor(
     private readonly events: EventsRepo,
@@ -130,6 +143,12 @@ export class IngestionPipeline {
     private readonly watermarks: WatermarkRepo,
     private readonly enqueueExtraction: EnqueueExtraction,
     private readonly clock: Clock = systemClock,
+    /**
+     * FR-5/FR-8 stakes linking. Optional: omitted, ingestion behaves exactly as
+     * it did before A-2 and artifacts carry no project edge — which is what
+     * every existing call site (and every test that predates this) relies on.
+     */
+    private readonly projectForThread?: ProjectForThread,
   ) {}
 
   /**
@@ -166,7 +185,22 @@ export class IngestionPipeline {
     }
 
     // 4. graph — refresh the thread artifact's recency.
-    this.graph.upsertArtifact(artifactFor(event));
+    const artifact = artifactFor(event);
+    this.graph.upsertArtifact(artifact);
+
+    // 4b. FR-5/FR-8 — link the thread to its channel's declared project, so a
+    //     new conversation earns stakes weight from its first message rather
+    //     than only after the next settings save (which is what
+    //     `rebuildProjectLinks` handles for threads already on disk).
+    //
+    //     `relate` is idempotent on (from, rel, to), so re-linking a thread on
+    //     every subsequent message is a no-op rather than a duplicate row.
+    if (this.projectForThread !== undefined) {
+      const projectId = this.projectForThread(event.source, event.threadKey);
+      if (projectId !== null) {
+        this.graph.relate({ fromId: artifact.artifactId, rel: PROJECT_REL, toId: projectId });
+      }
+    }
 
     // 5. arm D-7 — new events only. The "don't reset oldest_unsynth_at" rule
     //    lives in WatermarkRepo.touch (COALESCE); do not reimplement it here.

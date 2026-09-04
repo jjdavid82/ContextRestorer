@@ -45,6 +45,7 @@ import {
 import { registerScheduleHandlers, type ScheduleStore } from './schedule.js';
 import {
   registerSlackChannelsHandlers,
+  type RelinkProjects,
   type SlackChannelStore,
 } from './slackChannels.js';
 import { registerClaimHandlers } from './claim.js';
@@ -185,6 +186,8 @@ export {
   type SlackChannelsHandlerDeps,
   type SlackChannelStore,
   type AvailableChannelsResult,
+  type ParsedChannelSelection,
+  type RelinkProjects,
 } from './slackChannels.js';
 export {
   registerModelSettingsHandlers,
@@ -270,6 +273,16 @@ export interface IpcDeps {
    * one more Slack Web API call over the same token, not a new store.
    */
   slackChannels?: SlackChannelStore;
+  /**
+   * Rebuilds artifact → project `belongs_to` edges after the channel selection
+   * is saved (A-2, FR-5/FR-8).
+   *
+   * Optional and independent of {@link IpcDeps.slackChannels}: a host that wires
+   * the settings page but not the linker still saves selections, it just does
+   * not backfill stakes onto threads already ingested. `main.ts` supplies the
+   * real implementation, which also refreshes the ingestion pipeline's resolver.
+   */
+  relinkProjects?: RelinkProjects;
   /**
    * Verdict sink behind `feedback:submit` (`FeedbackRepo`).
    *
@@ -457,6 +470,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       vault: deps.vault,
       channels: deps.slackChannels,
       clock: deps.clock ?? systemClock,
+      // A-2: rebuild `belongs_to` edges after a save. Absent, the selection
+      // still saves and simply does not backfill.
+      ...(deps.relinkProjects !== undefined ? { relinkProjects: deps.relinkProjects } : {}),
     });
   }
 

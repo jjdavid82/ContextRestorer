@@ -272,6 +272,23 @@ export interface SelectedSlackChannel {
   channelId: string;
   name: string;
   addedAt: number;
+  /**
+   * Declared project this channel's threads belong to (FR-8, A-2), or `null`
+   * when untagged. An untagged channel is polled exactly as before; it simply
+   * earns no stakes weight in the ranker.
+   */
+  projectId: string | null;
+}
+
+/**
+ * A declared project with its id. Mirrors `DeclaredProject` in the preload.
+ *
+ * `OnboardingStatus.projectsDeclared` carries names only, which is enough for a
+ * status line; tagging a channel writes a foreign key, and a name is not a key.
+ */
+export interface DeclaredProject {
+  projectId: string;
+  name: string;
 }
 
 /**
@@ -375,6 +392,8 @@ export interface ContextRestorerBridge {
   projects: {
     suggest(): Promise<ProjectSuggestions>;
     declare(names: string[]): Promise<OkResult>;
+    /** Declared projects with their ids, for the channel-tagging control (A-2). */
+    list(): Promise<DeclaredProject[]>;
   };
   briefing: {
     request(w: BriefingWindow): Promise<BriefingHandle>;
@@ -461,7 +480,13 @@ export interface ContextRestorerBridge {
     /** Live `conversations.list` call over the connected token. */
     listAvailable(): Promise<SlackChannelsResult>;
     getSelected(): Promise<SelectedSlackChannel[]>;
-    setSelected(channels: Array<{ channelId: string; name: string }>): Promise<OkResult>;
+    /**
+     * `projectId` is tri-state (A-2): omit it to leave existing tags alone,
+     * `null` clears one, a string sets it. The plain checkbox save omits it.
+     */
+    setSelected(
+      channels: Array<{ channelId: string; name: string; projectId?: string | null }>,
+    ): Promise<OkResult>;
   };
   /**
    * The chat-model picker (Settings page). `setChat` only PERSISTS the

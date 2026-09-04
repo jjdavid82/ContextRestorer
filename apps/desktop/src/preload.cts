@@ -81,6 +81,18 @@ export interface ProjectSuggestions {
   candidates: ProjectCandidate[];
 }
 
+/**
+ * A declared project with its id (A-2).
+ *
+ * `OnboardingStatus.projectsDeclared` carries names only, which is enough for a
+ * status line. Tagging a Slack channel writes a foreign key, and a name is not
+ * a key — hence this.
+ */
+export interface DeclaredProject {
+  projectId: string;
+  name: string;
+}
+
 /** Half-open briefing window `[windowStart, windowEnd)`, epoch milliseconds. */
 export interface BriefingWindow {
   windowStart: number;
@@ -539,6 +551,8 @@ export interface ContextRestorerBridge {
   projects: {
     suggest(): Promise<ProjectSuggestions>;
     declare(names: string[]): Promise<OkResult>;
+    /** Declared projects with their ids, for the channel-tagging control (A-2). */
+    list(): Promise<DeclaredProject[]>;
   };
   briefing: {
     request(window: BriefingWindow): Promise<BriefingHandle>;
@@ -650,6 +664,8 @@ const bridge: ContextRestorerBridge = {
   },
   projects: {
     suggest: () => ipcRenderer.invoke('projects:suggest') as Promise<ProjectSuggestions>,
+    // No argument to validate.
+    list: () => ipcRenderer.invoke('projects:list') as Promise<DeclaredProject[]>,
     declare: (names) => {
       assertProjectNames(names);
       return ipcRenderer.invoke('projects:declare', { names }) as Promise<OkResult>;

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { getBridge } from '../../lib/bridge';
-import type { SelectedSlackChannel, SlackChannel } from '../../types/bridge';
+import type { DeclaredProject, SelectedSlackChannel, SlackChannel } from '../../types/bridge';
 
 /**
  * Slack channel selector (closes Task 1.7's gap).
@@ -26,6 +26,10 @@ import type { SelectedSlackChannel, SlackChannel } from '../../types/bridge';
 export default function SlackChannelSettings(): ReactNode {
   const [available, setAvailable] = useState<SlackChannel[]>([]);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  /** Declared projects offered by the per-channel tag control (A-2, FR-8). */
+  const [projects, setProjects] = useState<DeclaredProject[]>([]);
+  /** `channelId -> projectId`; a channel absent from the map is untagged. */
+  const [tags, setTags] = useState<ReadonlyMap<string, string>>(new Map());
   const [notConnected, setNotConnected] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -35,12 +39,23 @@ export default function SlackChannelSettings(): ReactNode {
     setLoadError(null);
     setNotConnected(false);
     try {
-      const [listResult, selected] = await Promise.all([
+      const [listResult, selected, declared] = await Promise.all([
         getBridge().slack.listAvailable(),
         getBridge().slack.getSelected(),
+        // Best-effort: with no projects the tag control renders its own
+        // "declare one first" hint rather than blocking channel selection.
+        getBridge().projects.list().catch(() => [] as DeclaredProject[]),
       ]);
 
       setSelectedIds(new Set(selected.map((c: SelectedSlackChannel) => c.channelId)));
+      setProjects(declared);
+      setTags(
+        new Map(
+          selected.flatMap((c: SelectedSlackChannel) =>
+            c.projectId === null ? [] : [[c.channelId, c.projectId] as const],
+          ),
+        ),
+      );
 
       if (!listResult.ok) {
         if (listResult.reason === 'not_connected') {
@@ -70,13 +85,27 @@ export default function SlackChannelSettings(): ReactNode {
     });
   }, []);
 
+  const setTag = useCallback((channelId: string, projectId: string): void => {
+    setTags((prev) => {
+      const next = new Map(prev);
+      if (projectId === '') next.delete(channelId);
+      else next.set(channelId, projectId);
+      return next;
+    });
+  }, []);
+
   const save = useCallback(async (): Promise<void> => {
     setBusy(true);
     setSaveError(null);
     try {
+      // `projectId` is sent EXPLICITLY (never omitted) because this control is
+      // the thing that edits it: omitting it means "leave the tag alone", which
+      // would make clearing a tag impossible from here. `null` is the cleared
+      // state. Saving also rebuilds `belongs_to` edges for threads already
+      // ingested — see `rebuildProjectLinks`.
       const channels = available
         .filter((c) => selectedIds.has(c.id))
-        .map((c) => ({ channelId: c.id, name: c.name }));
+        .map((c) => ({ channelId: c.id, name: c.name, projectId: tags.get(c.id) ?? null }));
       const result = await getBridge().slack.setSelected(channels);
       if (!result.ok) setSaveError(result.reason ?? 'the selection was rejected');
     } catch (cause) {
@@ -84,7 +113,7 @@ export default function SlackChannelSettings(): ReactNode {
     } finally {
       setBusy(false);
     }
-  }, [available, selectedIds]);
+  }, [available, selectedIds, tags]);
 
   return (
     <section className="card">
@@ -92,7 +121,9 @@ export default function SlackChannelSettings(): ReactNode {
       <p>
         <small>
           Pick which channels Context Restorer should read. Nothing is polled until at least one
-          channel is selected here, even after Slack is connected.
+          channel is selected here, even after Slack is connected. Tag a channel with a project to
+          prioritise its threads in your briefing — untagged channels are still read, they just
+          carry no extra weight.
         </small>
       </p>
 
@@ -125,6 +156,38 @@ export default function SlackChannelSettings(): ReactNode {
                   </>
                 ) : null}
               </label>
+
+              {/* FR-8 / FR-5: the stated mapping that gives this channel's
+                  threads stakes weight in the ranker. Shown only for a selected
+                  channel — tagging one the app does not read would set a
+                  priority on nothing. Nothing is inferred here; an untagged
+                  channel simply earns no stakes, which is how every channel
+                  behaved before this control existed (X-2). */}
+              {selectedIds.has(channel.id) ? (
+                projects.length === 0 ? (
+                  <small className="muted-note">
+                    {' '}
+                    Declare a project to prioritise this channel.
+                  </small>
+                ) : (
+                  <label>
+                    {' '}
+                    <small>Project</small>{' '}
+                    <select
+                      value={tags.get(channel.id) ?? ''}
+                      aria-label={`Project for #${channel.name}`}
+                      onChange={(e) => setTag(channel.id, e.target.value)}
+                    >
+                      <option value="">— none —</option>
+                      {projects.map((project) => (
+                        <option key={project.projectId} value={project.projectId}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )
+              ) : null}
             </li>
           ))}
         </ul>

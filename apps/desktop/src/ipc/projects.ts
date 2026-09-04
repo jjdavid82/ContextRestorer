@@ -60,6 +60,12 @@ const SOURCES: readonly Source[] = ['slack', 'gmail'];
  */
 const MAX_NAME_LENGTH = 120;
 
+/** One declared project as `projects:list` reports it (A-2). */
+export interface DeclaredProject {
+  projectId: string;
+  name: string;
+}
+
 export interface ProjectsHandlerDeps {
   /** Read-only source of the suggestion evidence. */
   events: EventsRepo;
@@ -174,6 +180,29 @@ export function registerProjectsHandlers(deps: ProjectsHandlerDeps): void {
       // An empty suggestion list is a supported state; a rejected invoke is not.
       console.error('[projects] suggest failed', error);
       return { candidates: [] };
+    }
+  });
+
+  /**
+   * Declared projects, **with their ids** (A-2).
+   *
+   * `onboarding:status` already reports declared project *names*, which is all a
+   * status line needs. The channel-tagging control needs to write
+   * `slack_selected_channels.project_id`, and a name is not a key — two projects
+   * may legitimately share one after a rename, and the FK wants the id. Hence a
+   * separate channel rather than widening the status payload, which is read on
+   * every page load by callers that do not need this.
+   */
+  ipcMain.handle('projects:list', async (): Promise<DeclaredProject[]> => {
+    try {
+      return deps.graph
+        .listProjects()
+        .map((project) => ({ projectId: project.projectId, name: project.name }));
+    } catch (error) {
+      // An empty list degrades the tagging control to "no projects yet", which
+      // it already renders; a rejected invoke would break the settings page.
+      console.error('[projects] list failed', error);
+      return [];
     }
   });
 

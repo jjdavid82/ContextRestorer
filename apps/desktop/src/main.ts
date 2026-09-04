@@ -39,6 +39,9 @@ import {
   migrate,
   openDb,
   openVectors,
+  rebuildProjectLinks,
+  SlackChannelProjectResolver,
+  type SelectedSlackChannel,
   type VectorStore,
 } from '@cr/store';
 import {
@@ -48,6 +51,7 @@ import {
   SlackClient,
   TokenVault,
   type EnqueueExtraction,
+  type ProjectForThread,
   type PollSourceKind,
   type RawSourceEvent,
   type SourceClient,
@@ -479,8 +483,16 @@ function createPipeline(
   graph: GraphRepo,
   watermarks: WatermarkRepo,
   enqueueExtraction: EnqueueExtraction,
+  projectForThread?: ProjectForThread,
 ): IngestionPipeline {
-  return new IngestionPipeline(events, graph, watermarks, enqueueExtraction, systemClock);
+  return new IngestionPipeline(
+    events,
+    graph,
+    watermarks,
+    enqueueExtraction,
+    systemClock,
+    projectForThread,
+  );
 }
 
 /**
@@ -1178,13 +1190,47 @@ if (!app.requestSingleInstanceLock()) {
         debounceTimer.unref();
       });
 
-      const pipeline = createPipeline(events, graph, watermarks, () =>
-        layer12.runExtractionSweep(),
+      // A-2 (FR-5/FR-8): the live channel → project map the ingestion pipeline
+      // consults for each new thread. Held in a `let` and replaced wholesale by
+      // `relinkProjects` below, because the pipeline is constructed BEFORE the
+      // channel repo exists and must still see later edits — the closure passed
+      // into `createPipeline` reads this binding, not a snapshot of it.
+      let projectResolver = new SlackChannelProjectResolver([]);
+
+      const pipeline = createPipeline(
+        events,
+        graph,
+        watermarks,
+        () => layer12.runExtractionSweep(),
+        (source, threadKey) => projectResolver.projectFor(source, threadKey),
       );
       // Read by the poller every Slack cycle and by `slack:*` IPC — one
       // instance, since each repo prepares its whole statement set in its
       // constructor.
       const slackChannels = new SlackChannelsRepo(db!);
+
+      /**
+       * Re-derive the resolver and rebuild `belongs_to` edges from the current
+       * tags (A-2).
+       *
+       * Called on every settings save and once at startup. The startup call is
+       * what repairs a database whose links were written by an older build, or
+       * whose artifacts were ingested before their channel was tagged;
+       * `rebuildProjectLinks` is idempotent, so the usual case costs one query
+       * per tagged channel and writes nothing.
+       */
+      const relinkProjects = (channels: readonly SelectedSlackChannel[]): void => {
+        projectResolver = new SlackChannelProjectResolver(channels);
+        const summary = rebuildProjectLinks(channels, graph);
+        if (summary.linked > 0 || summary.unlinked > 0) {
+          console.info(
+            `[projects] stakes links rebuilt: +${summary.linked} -${summary.unlinked} ` +
+              `across ${summary.taggedChannels} tagged channel(s)`,
+          );
+        }
+      };
+      relinkProjects(slackChannels.list());
+
       poller = startPolling(config!, vault, slackChannels, pipeline);
 
       registerIpcHandlers({
@@ -1252,6 +1298,10 @@ if (!app.requestSingleInstanceLock()) {
         // Slack channel selector settings surface (closes Task 1.7's gap). Same
         // instance the poller reads every cycle — see the comment above.
         slackChannels,
+        // A-2: run after every successful `slack:setSelected`, so tagging a
+        // channel takes effect on threads already ingested rather than only on
+        // ones that arrive later.
+        relinkProjects,
         // Chat-model picker (Settings page). `appSettings`/`defaultChatModel`
         // are set by `runPreflightGate`, which always runs before this point.
         modelSettings: appSettings!,

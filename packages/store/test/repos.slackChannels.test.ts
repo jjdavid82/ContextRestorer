@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Database } from 'better-sqlite3';
 import { openDb, migrate } from '../src/index.js';
 import { SlackChannelsRepo } from '../src/repos/slackChannels.js';
+import { GraphRepo } from '../src/repos/graph.js';
 
 let db: Database;
 let repo: SlackChannelsRepo;
@@ -41,8 +42,8 @@ describe('SlackChannelsRepo', () => {
     );
 
     expect(repo.list()).toEqual([
-      { channelId: 'C1', name: 'general', addedAt: 1_000 },
-      { channelId: 'C2', name: 'random', addedAt: 1_000 },
+      { channelId: 'C1', name: 'general', addedAt: 1_000, projectId: null },
+      { channelId: 'C2', name: 'random', addedAt: 1_000, projectId: null },
     ]);
   });
 
@@ -50,7 +51,7 @@ describe('SlackChannelsRepo', () => {
     repo.setSelected([{ channelId: 'C1', name: 'general' }], 1_000);
     repo.setSelected([{ channelId: 'C2', name: 'random' }], 2_000);
 
-    expect(repo.list()).toEqual([{ channelId: 'C2', name: 'random', addedAt: 2_000 }]);
+    expect(repo.list()).toEqual([{ channelId: 'C2', name: 'random', addedAt: 2_000, projectId: null }]);
   });
 
   it('preserves the original addedAt for a channel that stays selected across a re-save', () => {
@@ -75,7 +76,7 @@ describe('SlackChannelsRepo', () => {
     repo.setSelected([{ channelId: 'C1', name: 'general-renamed' }], 2_000);
 
     expect(repo.list()).toEqual([
-      { channelId: 'C1', name: 'general-renamed', addedAt: 1_000 },
+      { channelId: 'C1', name: 'general-renamed', addedAt: 1_000, projectId: null },
     ]);
   });
 
@@ -84,5 +85,77 @@ describe('SlackChannelsRepo', () => {
     repo.setSelected([], 2_000);
 
     expect(repo.list()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A-2 — channel → project tagging (FR-5 / FR-8, migration 006)
+// ---------------------------------------------------------------------------
+
+describe('SlackChannelsRepo project tagging', () => {
+  /** A declared project the FK can point at. */
+  function declareProject(name: string): string {
+    return new GraphRepo(db).declareProject({ name, origin: 'declared', stakesWeight: 2 })
+      .projectId;
+  }
+
+  it('round-trips an explicit tag', () => {
+    const projectId = declareProject('Migration');
+    repo.setSelected([{ channelId: 'C1', name: 'general', projectId }], 1_000);
+
+    expect(repo.list()).toEqual([
+      { channelId: 'C1', name: 'general', addedAt: 1_000, projectId },
+    ]);
+  });
+
+  it('preserves the tag across a re-save that omits projectId', () => {
+    const projectId = declareProject('Migration');
+    repo.setSelected([{ channelId: 'C1', name: 'general', projectId }], 1_000);
+
+    // The channel-checkbox save path sends no `projectId` at all. Toggling an
+    // unrelated checkbox must not silently wipe every tag the user set.
+    repo.setSelected(
+      [
+        { channelId: 'C1', name: 'general' },
+        { channelId: 'C2', name: 'random' },
+      ],
+      2_000,
+    );
+
+    const byId = new Map(repo.list().map((c) => [c.channelId, c.projectId]));
+    expect(byId.get('C1')).toBe(projectId);
+    expect(byId.get('C2')).toBeNull();
+  });
+
+  it('clears the tag only on an explicit null', () => {
+    const projectId = declareProject('Migration');
+    repo.setSelected([{ channelId: 'C1', name: 'general', projectId }], 1_000);
+    repo.setSelected([{ channelId: 'C1', name: 'general', projectId: null }], 2_000);
+
+    expect(repo.list()[0]?.projectId).toBeNull();
+  });
+
+  it('setProject tags and untags one channel', () => {
+    const projectId = declareProject('Migration');
+    repo.setSelected([{ channelId: 'C1', name: 'general' }], 1_000);
+
+    repo.setProject('C1', projectId);
+    expect(repo.list()[0]?.projectId).toBe(projectId);
+
+    repo.setProject('C1', null);
+    expect(repo.list()[0]?.projectId).toBeNull();
+  });
+
+  it('drops the tag when the project is deleted, keeping the channel selected', () => {
+    const projectId = declareProject('Migration');
+    repo.setSelected([{ channelId: 'C1', name: 'general', projectId }], 1_000);
+
+    db.prepare(`DELETE FROM projects WHERE project_id = ?`).run(projectId);
+
+    // ON DELETE SET NULL, not CASCADE: losing a project must not silently stop
+    // the poller fetching from a channel the user selected.
+    expect(repo.list()).toEqual([
+      { channelId: 'C1', name: 'general', addedAt: 1_000, projectId: null },
+    ]);
   });
 });
