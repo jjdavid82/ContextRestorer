@@ -33,6 +33,11 @@ export interface AppConfig {
    * Briefing presentation (A-4). `maxChangedItems` caps the "things changed"
    * list; obligations are deliberately NOT capped — see `assertValid`.
    */
+  /**
+   * Background prose pre-computation (P0). `pauseOnBattery` defaults to true —
+   * see the `mayRun` wiring in `apps/desktop/src/main.ts`.
+   */
+  precompute: { pauseOnBattery: boolean };
   briefing: {
     maxChangedItems: number;
     /**
@@ -136,5 +141,10 @@ function assertValid(c: AppConfig): void {
   // than defaulted.
   if (!['off', 'observe', 'enforce'].includes(c.briefing.groundingMode)) {
     throw new Error("config: briefing.groundingMode must be 'off', 'observe' or 'enforce'");
+  }
+
+  if (!c.precompute) throw new Error('config: precompute is required');
+  if (typeof c.precompute.pauseOnBattery !== 'boolean') {
+    throw new Error('config: precompute.pauseOnBattery must be a boolean');
   }
 }

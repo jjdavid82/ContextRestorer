@@ -140,3 +140,54 @@ describe('BriefingPrecomputer', () => {
     expect(generator.generate).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('BriefingPrecomputer power policy (§9 Q4)', () => {
+  it('declines to run when mayRun says no, without querying for work', async () => {
+    const generator = generatorReturning(1);
+    const briefings = makeBriefings(['d1']);
+
+    const result = await new BriefingPrecomputer(generator, briefings, {
+      clock: new FakeClock(NOW),
+      mayRun: () => false,
+    }).runCycle();
+
+    // Reported as `skipped: 'paused'` rather than as a bare `ran: false`:
+    // "we chose not to" and "there was no work" are different facts about the
+    // same idle tick, and only one of them is worth investigating.
+    expect(result).toEqual({ candidates: 0, claimsWritten: 0, ran: false, skipped: 'paused' });
+    expect(generator.generate).not.toHaveBeenCalled();
+    // Not even the queue query — a paused cycle should cost nothing at all.
+    expect(briefings.calls).toHaveLength(0);
+  });
+
+  it('runs again as soon as mayRun allows it', async () => {
+    const generator = generatorReturning(2);
+    let onBattery = true;
+    const precomputer = new BriefingPrecomputer(generator, makeBriefings(['d1']), {
+      clock: new FakeClock(NOW),
+      mayRun: () => !onBattery,
+    });
+
+    expect((await precomputer.runCycle()).skipped).toBe('paused');
+
+    onBattery = false;
+    const resumed = await precomputer.runCycle();
+
+    // Pausing must not be sticky: the deltas stayed queued and are picked up on
+    // the first cycle after the machine is plugged in.
+    expect(resumed.ran).toBe(true);
+    expect(resumed.claimsWritten).toBe(2);
+  });
+
+  it('runs by default on a host with no notion of battery', async () => {
+    const generator = generatorReturning(1);
+
+    const result = await new BriefingPrecomputer(generator, makeBriefings(['d1']), {
+      clock: new FakeClock(NOW),
+    }).runCycle();
+
+    // The eval harness and every test construct it without a predicate; a
+    // default of "paused" would silently disable pre-computation there.
+    expect(result.ran).toBe(true);
+  });
+});

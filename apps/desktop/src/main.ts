@@ -4,7 +4,7 @@
  * Responsibilities: create the (tray-resident) main window, serve the UI over `app://`,
  * install the IPC handler table, and register the login item.
  */
-import { app, BrowserWindow, dialog, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, powerMonitor, safeStorage } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig, newId, systemClock, type AppConfig } from '@cr/core';
@@ -1190,7 +1190,20 @@ if (!app.requestSingleInstanceLock()) {
       // with synthesis against the same local Ollama, which has one queue. Its
       // own re-entrancy guard then handles the case where a cycle outlives the
       // 30s interval, which it usually will.
-      const precomputer = new BriefingPrecomputer(generator, briefings);
+      const precomputer = new BriefingPrecomputer(generator, briefings, {
+        // P0 design §9 Q4: do not run sustained local inference on battery.
+        //
+        // This is the most expensive thing the app does and the user never
+        // asked for it. Pausing costs blunter headlines on the next briefing,
+        // never a broken one — the request path is deterministic — so it is the
+        // cheapest restraint available. `onBatteryPower` is false on desktops
+        // and while charging, so the common case is unaffected.
+        //
+        // `precompute.pauseOnBattery: false` in config overrides it for a
+        // machine that is always plugged in but reports battery anyway.
+        mayRun: () =>
+          config!.precompute.pauseOnBattery === false || !powerMonitor.onBatteryPower,
+      });
 
       void layer12.runExtractionSweep().then(() => {
         void layer12.scheduler.tick();

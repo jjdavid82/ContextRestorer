@@ -55,6 +55,15 @@ export interface PrecomputeResult {
   ran: boolean;
   /** Present when the generation attempt failed. The cycle is a no-op then. */
   error?: string;
+  /**
+   * Present when the cycle declined to run at all (§9 Q4) — currently only
+   * `'paused'`, meaning {@link PrecomputeOptions.mayRun} said no.
+   *
+   * Distinct from `ran: false` with no reason, which means there was simply
+   * nothing to do: "we chose not to" and "there was no work" are different
+   * facts about the same idle tick.
+   */
+  skipped?: 'paused';
 }
 
 export interface PrecomputeOptions {
@@ -75,6 +84,17 @@ export interface PrecomputeOptions {
    */
   maxDeltasPerCycle?: number;
   clock?: Clock;
+  /**
+   * Whether a cycle may run right now (P0 design §9 Q4).
+   *
+   * Injected as a predicate rather than reading Electron's `powerMonitor`
+   * directly, so this package keeps no dependency on the desktop shell and a
+   * test can state the answer. `main.ts` supplies the real one.
+   *
+   * Defaults to always-allowed, which is the correct behaviour for any host
+   * that has no notion of battery — the eval harness and the tests included.
+   */
+  mayRun?: () => boolean;
 }
 
 const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -84,6 +104,7 @@ export class BriefingPrecomputer {
   private readonly lookbackMs: number;
   private readonly maxDeltas: number;
   private readonly clock: Clock;
+  private readonly mayRun: () => boolean;
   /** Guards against a slow cycle overlapping the next tick. */
   private running = false;
 
@@ -95,6 +116,7 @@ export class BriefingPrecomputer {
     this.lookbackMs = options.lookbackMs ?? DEFAULT_LOOKBACK_MS;
     this.maxDeltas = options.maxDeltasPerCycle ?? DEFAULT_MAX_DELTAS;
     this.clock = options.clock ?? systemClock;
+    this.mayRun = options.mayRun ?? ((): boolean => true);
   }
 
   /**
@@ -110,6 +132,13 @@ export class BriefingPrecomputer {
    */
   async runCycle(): Promise<PrecomputeResult> {
     if (this.running) return { candidates: 0, claimsWritten: 0, ran: false };
+
+    // §9 Q4: sustained local inference is the most expensive thing this app
+    // does, and the user never asked for it. Skipping a cycle costs blunter
+    // headlines on the next briefing — never a broken one, because the request
+    // path is deterministic — which makes this the cheapest restraint available.
+    if (!this.mayRun()) return { candidates: 0, claimsWritten: 0, ran: false, skipped: 'paused' };
+
     this.running = true;
 
     try {

@@ -1119,3 +1119,57 @@ describe('prose reuse (P0)', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// P0 design §9 Q3 — prose staleness is prevented by D-6, not by a guard
+// ---------------------------------------------------------------------------
+
+describe('stale prose (P0 §9 Q3)', () => {
+  it('does not reuse prose written for a SUPERSEDED version of a delta', async () => {
+    const { d1 } = seedThreeDeltas();
+
+    // Prose written for v1 of this thread.
+    const prior = briefings.create({
+      windowStart: WINDOW.windowStart,
+      windowEnd: WINDOW.windowEnd,
+      generatedAt: NOW - 10_000,
+      mode: 'llm',
+      narrativePath: '/briefings/prior.md',
+      deltaIds: [d1.deltaId],
+      threadsStillProcessing: 0,
+    });
+    briefings.addClaim({
+      briefingId: prior.briefingId,
+      ordinal: 0,
+      section: 'What moved',
+      text: 'STALE: describes the state before the reversal.',
+      citationArtifactId: A1,
+      deltaId: d1.deltaId,
+      producedBy: 'llm',
+    });
+
+    // The thread moves on: v2 supersedes v1.
+    deltas.append({
+      threadKey: d1.threadKey,
+      summary: 'The migration was un-postponed after all.',
+      kind: 'reversal',
+      confidence: 0.9,
+      sourceEventIds: [],
+      citationArtifactIds: [A1],
+      artifactId: A1,
+      model: MODEL,
+      promptVersion: PROMPT_VERSION,
+      createdAt: NOW - 5_000,
+    });
+
+    const result = await makeRenderer().renderTemplate(WINDOW, { reason: 'requested' });
+    const texts = briefings.listClaims(result.briefingId).map((claim) => claim.text);
+
+    // `deltaId` is derived as (threadKey, version), so prose keyed to v1 can
+    // never be reached once `currentForWindow()` returns v2 — D-6's versioning
+    // prevents this without a staleness guard. If delta ids ever stop being
+    // per-version, this test is what catches it.
+    expect(texts).not.toContain('STALE: describes the state before the reversal.');
+    expect(texts.some((text) => text.includes('un-postponed'))).toBe(true);
+  });
+});

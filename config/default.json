@@ -18,5 +18,6 @@
   "budgets": { "retrievalMs": 5000, "assemblyMs": 2000, "generationMs": 360000, "citationMs": 5000 },
   "retention": { "rawEventDays": 90 },
   "onboarding": { "minDeclaredProjects": 3 },
+  "precompute": { "pauseOnBattery": true },
   "briefing": { "maxChangedItems": 7, "groundingMode": "observe" }
 }

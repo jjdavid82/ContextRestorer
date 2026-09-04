@@ -218,9 +218,11 @@ Not "it compiles" — these are the claims that would need measuring:
 
 ## 9. Open questions for the design owner
 
-| # | Question |
-|---|---|
-| 1 | **Is §3's reframing accepted?** Background pre-computation rather than hot-swap. Everything else follows from it. |
-| 2 | **FR-2 "streamed" again.** OI-6 already reworded FR-2 once. This design removes streaming from the synchronous path entirely. Amend again, or keep a streaming path for the background pass only? |
-| 3 | **How stale may prose be?** A background headline written before the last three messages arrived describes a thread that has moved. Options: show it anyway, suppress prose for threads with newer events, or re-queue. |
-| 4 | **Does the pre-computer run on battery / metered power?** It is sustained local inference on a laptop. D-4 fixed the model stack but said nothing about when it is allowed to run. |
+All four were answered on 2026-09-04.
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | Is §3's reframing accepted? | **Yes.** Background pre-computation, not hot-swap. Implemented in four slices. |
+| 2 | FR-2 "streamed" again? | **Not amended.** Claims still arrive over `briefing:chunk` and the run still ends with `briefing:done`; they simply all arrive within milliseconds. OI-6 reworded FR-2 for *perceived latency*, and a briefing that is complete immediately serves that intent more fully than one that trickles. Recorded in OI-7 rather than silently reinterpreted. |
+| 3 | How stale may prose be? | **No guard needed — D-6 already prevents it.** `deltaId` is derived as `(threadKey, version)`, so prose written for v1 is keyed to an id `currentForWindow()` stops returning the moment v2 supersedes it. Stale prose is unreachable by construction. A guard would have added a query and implied a risk that does not exist; a test pins the property instead, so if delta ids ever stop being per-version it fails loudly. The residual case — a thread with events Layer 2 has not synthesized yet — makes the tip delta stale, but the deterministic line renders from that same delta, so there is no prose-specific asymmetry and OI-1's still-processing disclosure already covers it. |
+| 4 | Battery / metered power? | **Paused on battery**, via an injected `mayRun` predicate (`powerMonitor.onBatteryPower` in `main.ts`), overridable with `precompute.pauseOnBattery: false`. Pausing costs blunter headlines on the next briefing and never a broken one, because the request path is deterministic — the cheapest restraint available for the most expensive thing the app does. |
