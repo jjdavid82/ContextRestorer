@@ -75,7 +75,7 @@ import type { RetrievalService, RetrievedChunk } from '../retrieval.js';
 import { assemblePrompt } from '../prompt/assemble.js';
 import { wrapUntrusted } from '../prompt/wrap.js';
 import { rankDeltas, toRankableDelta, type RankableDeltaContext } from '../ranker.js';
-import type { CitationGate, DropReason } from './citationGate.js';
+import type { CitationGate, DropReason, GroundingOptions } from './citationGate.js';
 import { ClaimBuffer } from './citationGate.js';
 
 // ---------------------------------------------------------------------------
@@ -407,6 +407,15 @@ export interface BriefingGenerationResult {
   redactionCount: number;
   /** Distinct detector kinds redacted across all accepted claims. Safe to log. */
   redactionKinds: string[];
+  /**
+   * F-4: accepted claims whose cited source text did not support them.
+   *
+   * Under `groundingMode: 'observe'` (the default) these were still published —
+   * the number exists so the eval can quantify what enforcing would cost before
+   * anyone enforces it. Under `'enforce'` it is always 0, because such claims
+   * are dropped as `unsupported` instead.
+   */
+  groundingFailures: number;
   /** OI-1: threads with unsynthesized work at request time. */
   threadsStillProcessing: number;
   /** §7.8: generation was cut short. Everything present is still real. */
@@ -530,6 +539,8 @@ interface GateTally {
   dropsByReason: GateDropCounts;
   /** Accepted claims that had at least one value redacted (not the value count). */
   redactedClaims: number;
+  /** F-4 'observe': accepted claims the grounding check would have withheld. */
+  groundingFailures: number;
   redactionCount: number;
   redactionKinds: string[];
 }
@@ -668,6 +679,35 @@ export class BriefingGenerator {
       ...ranked.flatMap((delta) => delta.citationArtifactIds),
     ]);
 
+    // F-4 grounding source: the RAW INGESTED TEXT of each retrieved chunk, and
+    // deliberately nothing else.
+    //
+    // Delta summaries are in this prompt too, and are excluded on purpose —
+    // they are Layer 2's own model output, so grounding a Layer 3 claim against
+    // one would check model output against model output and prove nothing. An
+    // artifact known only through a delta therefore has no entry here, and
+    // `isGrounded` treats a missing entry as "cannot check" rather than "not
+    // supported" (see its rule 2), so such a claim is passed through exactly as
+    // it was before F-4.
+    //
+    // Several chunks can share an artifact; their texts are joined so a claim
+    // grounded across two messages of the same thread is not judged against
+    // whichever one happened to be indexed first.
+    const sourceTextByArtifact = new Map<string, string>();
+    for (const chunk of chunks) {
+      const existing = sourceTextByArtifact.get(chunk.artifactId);
+      sourceTextByArtifact.set(
+        chunk.artifactId,
+        existing === undefined ? chunk.text : `${existing}
+${chunk.text}`,
+      );
+    }
+    const grounding: GroundingOptions = {
+      sourceTextFor: (artifactId: string): string | undefined =>
+        sourceTextByArtifact.get(artifactId),
+      mode: this.config.briefing.groundingMode,
+    };
+
     const { system, prompt } = assemblePrompt({
       system: SYSTEM_PROMPT,
       // T-1: the ONLY route artifact text takes into a prompt.
@@ -706,7 +746,7 @@ export class BriefingGenerator {
       // Real-time claim-level streaming (§12.2). `ClaimBuffer` has already
       // proven this claim is WHOLE — nothing partial reaches here — so this is
       // the earliest instant at which a claim can honestly be shown.
-      if (notify !== undefined) this.announce(notify, claim, allowed);
+      if (notify !== undefined) this.announce(notify, claim, allowed, grounding);
     });
     const buffer = new ClaimBuffer((claim) => router.push(claim));
 
@@ -795,7 +835,7 @@ export class BriefingGenerator {
 
     // ---- stage 4: citation --------------------------------------------------
     const citationSpan = trace.span('citation');
-    const tally = this.gate(collected, allowed);
+    const tally = this.gate(collected, allowed, grounding);
     const { accepted } = tally;
     this.persist(briefingId, accepted, ranked);
     citationSpan.end();
@@ -839,6 +879,11 @@ export class BriefingGenerator {
       claimsDropped: tally.dropped,
       gateDrops: tally.dropsByReason,
       redactedClaims: tally.redactedClaims,
+      // F-4: how many PUBLISHED claims the grounding check would have withheld
+      // under 'enforce'. This is the number that decides whether enforcing is
+      // safe, and it is only knowable by shipping the detector in observe mode.
+      groundingFailures: tally.groundingFailures,
+      groundingMode: this.config.briefing.groundingMode,
       redactionCount: tally.redactionCount,
       redactionKinds: tally.redactionKinds,
       partial,
@@ -857,6 +902,7 @@ export class BriefingGenerator {
       claimsDroppedByReason: tally.dropsByReason,
       redactionCount: tally.redactionCount,
       redactionKinds: tally.redactionKinds,
+      groundingFailures: tally.groundingFailures,
       threadsStillProcessing,
       partial,
       outcome,
@@ -945,9 +991,10 @@ export class BriefingGenerator {
     notify: (chunk: AcceptedClaimChunk) => void,
     claim: CollectedClaim,
     allowed: ReadonlySet<string>,
+    grounding: GroundingOptions,
   ): void {
     try {
-      const result = this.citationGate.accept(claim.text, allowed);
+      const result = this.citationGate.accept(claim.text, allowed, grounding);
       if (!result.accepted) return;
       notify({
         section: claim.section,
@@ -970,18 +1017,23 @@ export class BriefingGenerator {
    * because the counts are what an operator needs and the text is untrusted
    * model output that would then have to be redacted, stored and expired.
    */
-  private gate(collected: readonly CollectedClaim[], allowed: ReadonlySet<string>): GateTally {
+  private gate(
+    collected: readonly CollectedClaim[],
+    allowed: ReadonlySet<string>,
+    grounding: GroundingOptions,
+  ): GateTally {
     const accepted: AcceptedClaim[] = [];
     let dropped = 0;
     const dropsByReason: GateDropCounts = {};
     let redactedClaims = 0;
+    let groundingFailures = 0;
     let redactionCount = 0;
     // A Set, then spread: the same detector firing on three claims is one KIND
     // of leak, and the count already carries the magnitude.
     const redactionKinds = new Set<string>();
 
     collected.forEach((claim, arrival) => {
-      const result = this.citationGate.accept(claim.text, allowed);
+      const result = this.citationGate.accept(claim.text, allowed, grounding);
       if (!result.accepted) {
         dropped += 1;
         // `reason` is documented as always present on a drop; `?? 'no_citation'`
@@ -998,6 +1050,8 @@ export class BriefingGenerator {
         redactionCount += result.redactionCount;
         for (const kind of result.redactionKinds ?? []) redactionKinds.add(kind);
       }
+
+      if (result.groundingFailed === true) groundingFailures += 1;
 
       accepted.push({
         section: claim.section,
@@ -1021,6 +1075,7 @@ export class BriefingGenerator {
       dropped,
       dropsByReason,
       redactedClaims,
+      groundingFailures,
       redactionCount,
       redactionKinds: [...redactionKinds],
     };
@@ -1193,6 +1248,7 @@ export class BriefingGenerator {
       claimsDroppedByReason: {},
       redactionCount: 0,
       redactionKinds: [],
+      groundingFailures: 0,
       threadsStillProcessing: input.threadsStillProcessing,
       partial: false,
       outcome: 'no_context',

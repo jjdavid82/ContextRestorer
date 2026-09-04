@@ -321,6 +321,7 @@ const CONFIG = {
   retrieval: { topK: 10, budgetMs: 5_000 },
   ranking: { wStakes: 3, wPendingOnMe: 5, wSelfParticipation: 2, wRecency: 1 },
   budgets: { retrievalMs: 5_000, assemblyMs: 2_000, generationMs: 30_000, citationMs: 2_000 },
+  briefing: { maxChangedItems: 7, groundingMode: 'observe' as const },
 } as unknown as AppConfig;
 
 // ---------------------------------------------------------------------------

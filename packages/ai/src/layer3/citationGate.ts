@@ -13,7 +13,7 @@
  * only failure mode we are willing to have is "the briefing is shorter than it
  * could have been".
  *
- * The gate runs four checks, in this order, and the order matters:
+ * The gate runs five checks, in this order, and the order matters:
  *
  *   1. `no_citation`      — no `[artifact:…]` marker at all.
  *   2. `not_in_context`   — cites an id the generator was never shown. This is
@@ -24,6 +24,14 @@
  *   3. `unknown_artifact` — cites an id that does not exist in the graph.
  *   4. `injection_pattern`— the text reads like the model followed an injected
  *                           instruction rather than reporting thread content (T-1).
+ *   5. `unsupported`      — the citations are all real and in context, but no
+ *                           cited artifact's SOURCE TEXT supports what the claim
+ *                           says (F-4). Checks 1-3 prove a claim points at
+ *                           something; only this one asks whether that thing
+ *                           says what the claim says. Last, because it is the
+ *                           only check that needs the source text loaded, and
+ *                           the cheaper structural checks have already rejected
+ *                           everything they can.
  *
  * Accepted text then goes through `redactOutput()` (SEC-5) before it is
  * returned, because generated prose can restate a secret that was legitimately
@@ -33,6 +41,7 @@
  * no reason would be an untraceable silent deletion, which is its own bug class.
  */
 
+import { containment, contentTokens } from '@cr/core';
 import { redactOutput } from '@cr/redact';
 import type { GraphRepo } from '@cr/store';
 
@@ -46,7 +55,23 @@ import type { GraphRepo } from '@cr/store';
 export const MARKER = /\[artifact:([A-Za-z0-9:_\-.]+)\]/g;
 
 /** Why a claim was withheld. Always populated on a drop; never on an accept. */
-export type DropReason = 'no_citation' | 'unknown_artifact' | 'not_in_context' | 'injection_pattern';
+export type DropReason =
+  | 'no_citation'
+  | 'unknown_artifact'
+  | 'not_in_context'
+  | 'injection_pattern'
+  /**
+   * F-4: every marker validated, but no cited artifact's SOURCE TEXT supports
+   * what the claim says.
+   *
+   * The gap this closes: the checks above prove a claim points at something
+   * real and retrievable. They cannot prove it says something that thing
+   * supports. The 2026-08-28 eval measured 76.4% citation accuracy alongside a
+   * 23.6% hallucination rate (n=35) — the signature of well-formed citations
+   * attached to unsupported sentences, i.e. exactly the failure T-4 exists to
+   * prevent arriving through the mechanism built to prevent it.
+   */
+  | 'unsupported';
 
 /** Outcome of gating one claim. */
 export interface GateResult {
@@ -62,6 +87,15 @@ export interface GateResult {
   citationArtifactIds: string[];
   /** Present iff `accepted === false`. */
   reason?: DropReason;
+  /**
+   * F-4, `'observe'` mode: present (and `true`) on an ACCEPTED claim whose
+   * cited source text did not support it.
+   *
+   * A counter, not a verdict. The claim was published; this says the grounding
+   * check would have withheld it under `'enforce'`. Absent when the check
+   * passed, when it could not run, or when the mode is `'off'`.
+   */
+  groundingFailed?: true;
   /**
    * SEC-5 observability. Present iff an ACCEPTED claim actually had something
    * redacted; absent on a clean accept and on every drop.
@@ -358,6 +392,65 @@ export function looksLikeInjectionResponse(text: string): boolean {
 // The gate
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimum fraction of a claim's content tokens that must appear in the cited
+ * artifact's source text for the claim to count as grounded (F-4).
+ *
+ * **0.60**, the same value and the same `containment` function the eval harness
+ * uses to score AC-5 — see `@cr/core`'s `text.ts` for why they are shared
+ * rather than duplicated. A threshold the runtime and the metric disagreed on
+ * would make the release gate describe a different system from the one running.
+ *
+ * Not 1.0: a faithful paraphrase legitimately introduces connective words the
+ * source lacks. Not lower: below about half, a claim can share only its topic
+ * with the source and still pass, which is the fabrication shape this exists to
+ * catch.
+ */
+export const GROUNDING_CONTAINMENT_THRESHOLD = 0.6;
+
+/**
+ * Source text for a cited artifact, or `undefined` when none is available.
+ *
+ * A function, not a map, so the caller decides what counts as "source": the
+ * generator supplies RETRIEVAL CHUNK text — the raw ingested message the model
+ * was actually shown — and deliberately not Layer 2 delta summaries, which are
+ * themselves model output. Grounding model output against model output would
+ * check nothing.
+ */
+export type SourceTextFor = (artifactId: string) => string | undefined;
+
+/**
+ * How the F-4 grounding check behaves.
+ *
+ * - `'off'`     — not run at all. Exactly the pre-F-4 gate.
+ * - `'observe'` — run and REPORTED, never enforced. A claim that fails is still
+ *                accepted, and carries {@link GateResult.groundingFailed} so the
+ *                generator can count it into the trace.
+ * - `'enforce'` — a claim that fails is dropped as `unsupported`.
+ *
+ * **`'observe'` is the shipped default, and that is a deliberate refusal to
+ * enforce a check nobody has measured yet.** Containment is a LEXICAL test: a
+ * faithful abstractive summary can score low and still be true — "the migration
+ * was postponed to Q4" shares one content token with "load testing showed a 40%
+ * regression, calling it, we move this to Q4", and enforcing at 0.6 would delete
+ * a correct claim. The eval harness says as much about its own copy of this
+ * check ("this is an approximation ... spot-check the claims it scored as
+ * supported").
+ *
+ * So the staging is: ship the detector, let the eval quantify how many claims it
+ * WOULD drop and what that does to AC-5 and AC-3, and only then flip the mode.
+ * Trading a measured 23.6% hallucination rate for an UNMEASURED recall loss is
+ * not an improvement — and a recall loss is invisible to the user, which makes
+ * it the worse of the two failures.
+ */
+export type GroundingMode = 'off' | 'observe' | 'enforce';
+
+/** Per-generation grounding context: where source text comes from, and what to do. */
+export interface GroundingOptions {
+  sourceTextFor: SourceTextFor;
+  mode: GroundingMode;
+}
+
 export class CitationGate {
   constructor(private graph: GraphRepo) {}
 
@@ -368,10 +461,22 @@ export class CitationGate {
    * @param allowedArtifactIds The ids that were actually in the retrieval
    *                           context for this generation. An id outside this
    *                           set is not a citation, it is a coincidence.
+   * @param grounding          F-4 grounding context, per generation. A call
+   *                           ARGUMENT rather than a constructor dependency
+   *                           because it has the same lifetime as
+   *                           `allowedArtifactIds` — both describe the context
+   *                           of one `generate()` call, while the gate itself is
+   *                           built once and reused. Omitting it skips the
+   *                           grounding check and reproduces the pre-F-4
+   *                           behaviour exactly.
    * @returns An accepted result carrying redacted, marker-free text, or a drop
    *          carrying a `reason` (always set).
    */
-  accept(claim: string, allowedArtifactIds: ReadonlySet<string>): GateResult {
+  accept(
+    claim: string,
+    allowedArtifactIds: ReadonlySet<string>,
+    grounding?: GroundingOptions,
+  ): GateResult {
     const ids = [...claim.matchAll(MARKER)].map((m) => m[1] as string);
     if (ids.length === 0) return drop(claim, 'no_citation');
 
@@ -385,6 +490,14 @@ export class CitationGate {
 
     const bare = claim.replace(MARKER, '').trim();
     if (looksLikeInjectionResponse(bare)) return drop(claim, 'injection_pattern');
+
+    // F-4: does any cited artifact's source text actually support this?
+    // In 'observe' mode the answer is recorded below rather than acted on.
+    const grounded =
+      grounding === undefined || grounding.mode === 'off'
+        ? true
+        : isGrounded(bare, ids, grounding.sourceTextFor);
+    if (!grounded && grounding?.mode === 'enforce') return drop(claim, 'unsupported');
 
     // SEC-5: output-side scan, secrets AND PII. This is the SINGLE scan point
     // that governs both destinations: the `text` returned here is what the
@@ -406,9 +519,13 @@ export class CitationGate {
       // `undefined`, and a clean claim should carry no redaction fields at all
       // rather than a pair of zeroes a caller has to filter out.
       ...(count > 0 ? { redactionCount: count, redactionKinds: kinds } : {}),
+      ...(grounded ? {} : { groundingFailed: true as const }),
     };
   }
+
 }
+
+
 
 // ---------------------------------------------------------------------------
 // Streaming claim boundaries
@@ -474,4 +591,52 @@ export class ClaimBuffer {
     if (claim.length === 0) return;
     this.onClaim(claim);
   }
+}
+
+/**
+ * True when at least ONE cited artifact's source text supports `text` (F-4).
+ *
+ * Three deliberate choices:
+ *
+ * 1. **Any-of, not all-of.** A claim may legitimately cite two artifacts where
+ *    one carries the substance and the other corroborates a detail. Requiring
+ *    every citation to independently support the whole sentence would drop
+ *    correct multi-source claims, and the all-of rule already applies where it
+ *    belongs — to whether each id is real and in context.
+ *
+ * 2. **No text available means ACCEPT, not drop.** Retrieval returns at most
+ *    `topK` chunks, and a claim can legitimately cite an artifact whose text
+ *    was never returned (a delta's citation, for instance). Dropping on the
+ *    absence of evidence would silently delete true claims whenever retrieval
+ *    was narrow — trading a hallucination problem for a recall problem, and an
+ *    invisible one. The check only ever fires when there IS text to check
+ *    against and it does not support the claim.
+ *
+ * 3. **Disabled entirely when no `sourceTextFor` was supplied**, so the gate's
+ *    pre-F-4 behaviour is exactly recoverable.
+ */
+function isGrounded(
+  text: string,
+  ids: readonly string[],
+  sourceTextFor: SourceTextFor | undefined,
+): boolean {
+  if (sourceTextFor === undefined) return true;
+
+  const claimTokens = contentTokens(text);
+  // A claim with no content tokens asserts nothing checkable. It is not
+  // evidence of fabrication, and `containment` scores an empty needle 0, so
+  // it is passed through rather than dropped as unsupported.
+  if (claimTokens.size === 0) return true;
+
+  let sawAnySource = false;
+  for (const id of ids) {
+    const source = sourceTextFor(id);
+    if (source === undefined || source.trim() === '') continue;
+    sawAnySource = true;
+    if (containment(claimTokens, contentTokens(source)) >= GROUNDING_CONTAINMENT_THRESHOLD) {
+      return true;
+    }
+  }
+
+  return !sawAnySource;
 }

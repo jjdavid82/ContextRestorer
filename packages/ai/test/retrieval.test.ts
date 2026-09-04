@@ -58,7 +58,7 @@ function config(overrides: Partial<AppConfig['retrieval']> = {}): AppConfig {
     budgets: { retrievalMs: 5000, assemblyMs: 2000, generationMs: 30000, citationMs: 5000 },
     retention: { rawEventDays: 90 },
     onboarding: { minDeclaredProjects: 3 },
-    briefing: { maxChangedItems: 7 },
+    briefing: { maxChangedItems: 7, groundingMode: 'observe' as const },
   };
 }
 

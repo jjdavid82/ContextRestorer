@@ -460,6 +460,10 @@ export class TemplateBriefingRenderer {
       reason,
       claimsAccepted: claims.length,
       claimsDropped: Math.max(0, candidates - claims.length),
+      // Always 0: the template renders stored delta summaries verbatim and runs
+      // no model, so there is no generated prose for the F-4 grounding check to
+      // have an opinion about.
+      groundingFailures: 0,
       // No citation GATE ran: the template only renders rows whose citations
       // already resolve in the graph, so its drops have exactly one cause and it
       // is not one of the gate's four reasons. Reporting `{}` rather than

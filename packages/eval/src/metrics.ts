@@ -181,94 +181,20 @@ export interface MatchOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Words carrying no discriminating signal about *which* obligation this is.
+ * The tokenizer and the two set metrics now live in `@cr/core` (`src/text.ts`)
+ * and are re-exported here unchanged, so every existing import site in this
+ * package keeps working.
  *
- * Kept deliberately small: it covers function words and the handful of verbs
- * that appear in essentially every obligation ("need", "please"), and nothing
- * domain-specific. A large stopword list would start deciding what an
- * obligation is *about*, which is the metric's job to measure, not to assume.
+ * They moved for F-4: the runtime citation gate in `@cr/ai` now applies the
+ * SAME grounding check this harness uses to score AC-5. Two copies of the
+ * tokenizer would let the metric drift away from the function that actually
+ * ships, which is the one thing a release gate must not do. `@cr/eval` depends
+ * on `@cr/ai`, so the shared code cannot live in either — `@cr/core` is the
+ * only package both already depend on.
  */
-const STOPWORDS: ReadonlySet<string> = new Set([
-  'a', 'about', 'after', 'all', 'also', 'am', 'an', 'and', 'any', 'are', 'as', 'at', 'back',
-  'be', 'because', 'been', 'before', 'being', 'but', 'by', 'can', 'cannot', 'could', 'did',
-  'do', 'does', 'doing', 'done', 'for', 'from', 'get', 'gets', 'give', 'got', 'had', 'has',
-  'have', 'he', 'her', 'here', 'hers', 'him', 'his', 'how', 'i', 'if', 'in', 'into', 'is',
-  'it', 'its', 'just', 'me', 'more', 'most', 'must', 'my', 'need', 'needed', 'needs', 'no',
-  'not', 'now', 'of', 'on', 'one', 'only', 'or', 'other', 'our', 'out', 'over', 'own',
-  'please', 'said', 'same', 'says', 'she', 'should', 'since', 'so', 'some', 'such', 'than',
-  'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those',
-  'through', 'to', 'too', 'until', 'up', 'us', 'very', 'was', 'we', 'were', 'what', 'when',
-  'where', 'which', 'while', 'who', 'whom', 'why', 'will', 'with', 'would', 'you', 'your',
-]);
+import { contentTokens, dice, containment } from '@cr/core';
+export { contentTokens, dice, containment };
 
-/**
- * Content tokens of `text`, as a set.
- *
- * Lowercased, split on every non-alphanumeric run, single characters and
- * stopwords dropped. Two-character tokens are KEPT on purpose — `v2` and `v3`
- * are the entire distinction in `injection-01.json`, and a three-character floor
- * would erase it.
- *
- * A set, not a bag: repeating a word does not make an obligation more similar to
- * another one that repeats it.
- */
-export function contentTokens(text: string): Set<string> {
-  const tokens = new Set<string>();
-  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
-    if (raw.length < 2) continue;
-    if (STOPWORDS.has(raw)) continue;
-    tokens.add(raw);
-  }
-  return tokens;
-}
-
-/** Size of `a ∩ b`. */
-function intersectionSize(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
-  // Iterate the smaller set: the cost is |min|, not |a|.
-  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-  let shared = 0;
-  for (const token of small) if (large.has(token)) shared += 1;
-  return shared;
-}
-
-/**
- * Sørensen–Dice coefficient over two token sets: `2|A∩B| / (|A|+|B|)`.
- *
- * Dice rather than Jaccard, and rather than a containment coefficient, because
- * the two failure modes here pull in opposite directions:
- *
- *  - **Jaccard is too harsh on length asymmetry.** A labeled ground-truth
- *    description is a long, careful sentence; a model's is short. A perfectly
- *    correct 10-token prediction against a 20-token label with 6 tokens shared
- *    scores Jaccard 6/24 = 0.25 — indistinguishable from noise.
- *  - **Containment (`|A∩B| / min(|A|,|B|)`) is too lenient.** A two-token
- *    prediction that happens to be a subset of the label scores 1.0.
- *
- * Dice sits between them: the same 10-vs-20-token pair scores 12/30 = 0.40,
- * while the two-token subset scores 4/22 = 0.18. It is symmetric, standard, and
- * monotone in both token precision and token recall, so one threshold governs
- * both directions of error.
- *
- * Returns 0 when either side has no content tokens — an empty description
- * matches nothing, including another empty one.
- */
-export function dice(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  return (2 * intersectionSize(a, b)) / (a.size + b.size);
-}
-
-/**
- * Fraction of `needle`'s tokens that appear in `haystack`.
- *
- * Asymmetric on purpose: this answers "is everything this sentence says present
- * in that source text?", which is the grounding question, not the similarity
- * question. Used by the harness to decide whether a cited artifact supports a
- * claim; exported here so the two live next to the tokenizer they share.
- */
-export function containment(needle: ReadonlySet<string>, haystack: ReadonlySet<string>): number {
-  if (needle.size === 0) return 0;
-  return intersectionSize(needle, haystack) / needle.size;
-}
 
 /**
  * Dice similarity of two descriptions' content-token sets, in `[0, 1]`.

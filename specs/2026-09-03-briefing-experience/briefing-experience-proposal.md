@@ -125,8 +125,16 @@ hallucination is the signature of well-formed citations attached to unsupported 
 exactly the failure T-4 exists to prevent, arriving through the mechanism built to prevent it.
 
 The eval harness already computes a lexical grounding check (≥60% of a claim's content tokens
-present in the cited source text). That check exists only in the report. It belongs in the
-runtime gate.
+present in the cited source text). That check existed only in the report.
+
+**Status (2026-09-03): shipped into the runtime gate, in `observe` mode.** The tokenizer and
+threshold moved to `@cr/core` so the gate and the harness cannot drift. It is deliberately NOT
+enforcing yet: containment is a lexical test, and a faithful abstractive summary can score low
+while being true — "the migration was postponed to Q4" shares one content token with "load
+testing showed a 40% regression, calling it, we move this to Q4". Enforcing at 0.6 before
+measuring would trade a MEASURED 23.6% hallucination rate for an UNMEASURED recall loss, and a
+recall loss is invisible to the user. `observe` publishes the claim and counts it, so 0b can
+quantify what enforcing would cost before `briefing.groundingMode` is flipped.
 
 ### F-5 — Precision is attacked from inside the generator
 
@@ -372,7 +380,7 @@ and need nothing else. So the near-term order is:
 | 2 | ~~P2 / P4 — list layout, counts as headings, verbatim-on-obligations~~ — **DONE 2026-09-03** (renderer half; structured LLM output still open) | Q-1 (done) |
 | 3 | ~~A-4 — the configurable cap on the changed list~~ — **DONE 2026-09-03** | A-2 |
 | 4 | 0b — eval re-baseline on the shipped config | nothing, but must precede 5 |
-| 5 | F-4 / P3 — grounding gate, thread-level extraction | 0b, for a comparable baseline |
+| 5 | F-4 (detector) — **DONE 2026-09-03 in `observe` mode**; enforcing still needs 0b. P3 outstanding | 0b, for a comparable baseline |
 | 6 | P0 — deterministic-first | its own design doc |
 
 **On step 0b.** An earlier draft of this document asserted that the whole of step 0 was "not

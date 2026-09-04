@@ -33,7 +33,15 @@ export interface AppConfig {
    * Briefing presentation (A-4). `maxChangedItems` caps the "things changed"
    * list; obligations are deliberately NOT capped — see `assertValid`.
    */
-  briefing: { maxChangedItems: number };
+  briefing: {
+    maxChangedItems: number;
+    /**
+     * F-4 grounding check: `'off' | 'observe' | 'enforce'`. Ships as
+     * `'observe'` — see `GroundingMode` in `@cr/ai`'s citation gate for why a
+     * lexical check is measured before it is enforced.
+     */
+    groundingMode: 'off' | 'observe' | 'enforce';
+  };
   /**
    * OPTIONAL. Absent in the shipped config; populated only once a real Slack /
    * Google OAuth app exists. `assertValid` deliberately does not check it — an
@@ -122,5 +130,11 @@ function assertValid(c: AppConfig): void {
   // preference, so the floor is 1.
   if (!Number.isInteger(c.briefing.maxChangedItems) || c.briefing.maxChangedItems < 1) {
     throw new Error('config: briefing.maxChangedItems must be a positive integer');
+  }
+  // A typo here must not silently disable a guardrail (or silently enable one
+  // that deletes claims), so the value is checked against the closed set rather
+  // than defaulted.
+  if (!['off', 'observe', 'enforce'].includes(c.briefing.groundingMode)) {
+    throw new Error("config: briefing.groundingMode must be 'off', 'observe' or 'enforce'");
   }
 }

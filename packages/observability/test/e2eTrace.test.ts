@@ -118,6 +118,7 @@ const DEBOUNCE = {
 /** Only `budgets` and `ranking` are read by Layer 3; the rest is noise. */
 const CONFIG = {
   budgets: { retrievalMs: 5_000, assemblyMs: 2_000, generationMs: 30_000, citationMs: 2_000 },
+  briefing: { maxChangedItems: 7, groundingMode: 'observe' as const },
   ranking: { wStakes: 3, wPendingOnMe: 5, wSelfParticipation: 2, wRecency: 1 },
 } as unknown as AppConfig;
 

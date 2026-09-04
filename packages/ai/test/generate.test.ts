@@ -158,6 +158,7 @@ const artifact = (artifactId: string): Artifact => ({
 const makeConfig = (generationMs: number): AppConfig =>
   ({
     budgets: { retrievalMs: 5_000, assemblyMs: 2_000, generationMs, citationMs: 2_000 },
+    briefing: { maxChangedItems: 7, groundingMode: 'observe' as const },
     ranking: { wStakes: 3, wPendingOnMe: 5, wSelfParticipation: 2, wRecency: 1 },
   }) as unknown as AppConfig;
 

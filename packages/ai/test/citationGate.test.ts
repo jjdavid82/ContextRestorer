@@ -287,3 +287,125 @@ describe('citation gate', () => {
     expect(result.droppedClaim).not.toContain('AKIAIOSFODNN7EXAMPLE');
   });
 });
+
+// ---------------------------------------------------------------------------
+// F-4 — the grounding check
+// ---------------------------------------------------------------------------
+
+/**
+ * The fifth check: the citations are all real and in context, but does the
+ * cited SOURCE TEXT actually support what the claim says?
+ *
+ * These pin the staged rollout as much as the check itself. `'observe'` is the
+ * shipped default and must not change what reaches the user — it only counts —
+ * because containment is a LEXICAL test and a faithful abstractive summary can
+ * score low while being true. Enforcing before that cost is measured would
+ * trade a measured hallucination rate for an unmeasured, invisible recall loss.
+ */
+describe('grounding check (F-4)', () => {
+  const ART_ID = 'art1';
+  const ART2_ID = 'art2';
+  const ALLOWED = new Set([ART_ID]);
+  const SOURCE = 'Priya asked for the migration plan to be approved before Friday.';
+  const grounded = `- Priya asked for the migration plan to be approved [artifact:${ART_ID}]`;
+  const ungrounded = `- The vendor contract was cancelled entirely [artifact:${ART_ID}]`;
+
+  const sourceTextFor = (id: string): string | undefined => (id === ART_ID ? SOURCE : undefined);
+
+  it('accepts a claim its cited source supports, under enforce', () => {
+    const result = gate.accept(grounded, ALLOWED, { sourceTextFor, mode: 'enforce' });
+
+    expect(result.accepted).toBe(true);
+    expect(result.groundingFailed).toBeUndefined();
+  });
+
+  it('drops an unsupported claim under enforce', () => {
+    const result = gate.accept(ungrounded, ALLOWED, { sourceTextFor, mode: 'enforce' });
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe('unsupported');
+    expect(result.text).toBe('');
+  });
+
+  it('under observe, publishes the unsupported claim but flags it', () => {
+    const result = gate.accept(ungrounded, ALLOWED, { sourceTextFor, mode: 'observe' });
+
+    // The whole point of the default mode: the claim still reaches the user,
+    // and the counter tells us what enforcing WOULD have cost.
+    expect(result.accepted).toBe(true);
+    expect(result.groundingFailed).toBe(true);
+    // The leading '- ' is ClaimBuffer's to strip, not the gate's.
+    expect(result.text).toBe('- The vendor contract was cancelled entirely');
+  });
+
+  it('under off, does not even evaluate grounding', () => {
+    const result = gate.accept(ungrounded, ALLOWED, { sourceTextFor, mode: 'off' });
+
+    expect(result.accepted).toBe(true);
+    expect(result.groundingFailed).toBeUndefined();
+  });
+
+  it('omitting the grounding argument reproduces the pre-F-4 gate', () => {
+    const result = gate.accept(ungrounded, ALLOWED);
+
+    expect(result.accepted).toBe(true);
+    expect(result.groundingFailed).toBeUndefined();
+  });
+
+  it('accepts when no cited artifact has source text at all', () => {
+    // Retrieval returns at most topK chunks, so a claim can cite an artifact
+    // whose text was never returned. Dropping on absence of evidence would
+    // trade a hallucination problem for an invisible recall problem.
+    const result = gate.accept(ungrounded, ALLOWED, {
+      sourceTextFor: () => undefined,
+      mode: 'enforce',
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.groundingFailed).toBeUndefined();
+  });
+
+  it('treats a blank source as no source rather than as contradiction', () => {
+    const result = gate.accept(ungrounded, ALLOWED, {
+      sourceTextFor: () => '   ',
+      mode: 'enforce',
+    });
+
+    expect(result.accepted).toBe(true);
+  });
+
+  it('is satisfied by ANY cited artifact, not all of them', () => {
+    const multi = new Set([ART_ID, ART2_ID]);
+    const claim = `- Priya asked for the migration plan to be approved [artifact:${ART_ID}] [artifact:${ART2_ID}]`;
+
+    // One citation carries the substance, the other corroborates a detail.
+    // Requiring every id to independently support the whole sentence would drop
+    // correct multi-source claims.
+    const result = gate.accept(claim, multi, {
+      sourceTextFor: (id) => (id === ART2_ID ? 'unrelated chatter about lunch' : SOURCE),
+      mode: 'enforce',
+    });
+
+    expect(result.accepted).toBe(true);
+  });
+
+  it('passes a claim with no content tokens rather than calling it unsupported', () => {
+    // Stopwords only: it asserts nothing checkable, which is not evidence of
+    // fabrication. The other four checks still governed it.
+    const result = gate.accept(`- it was for them [artifact:${ART_ID}]`, ALLOWED, {
+      sourceTextFor,
+      mode: 'enforce',
+    });
+
+    expect(result.accepted).toBe(true);
+  });
+
+  it('runs AFTER the structural checks, so the more specific reason wins', () => {
+    const result = gate.accept('- no marker at all here', ALLOWED, {
+      sourceTextFor,
+      mode: 'enforce',
+    });
+
+    expect(result.reason).toBe('no_citation');
+  });
+});
