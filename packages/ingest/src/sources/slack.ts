@@ -212,6 +212,25 @@ const FALLBACK_RETRY_MS = 1_000;
 /** Ceiling on a single backoff, so a hostile header cannot wedge a poll forever. */
 const MAX_RETRY_MS = 60_000;
 
+/**
+ * How far back the FIRST fetch of a channel reaches when there is no cursor.
+ *
+ * `SourceClient` promises "everything after `cursor`, or a bounded backfill
+ * when it is absent" (`sources/types.ts`). Gmail keeps that promise with
+ * `newer_than:7d`; this client did not — with no cursor it sent
+ * `conversations.history` with no `oldest` and paginated back to the channel's
+ * creation. On a first connect two ordinary channels produced a thousand
+ * events, most of them weeks old: hours of Layer 1 spent on history no briefing
+ * will ever be asked about, and a source strip reading "92h behind" because the
+ * newest thing fetched was simply the newest thing in a quiet channel.
+ *
+ * Seven days matches Gmail, so the two sources describe the same window, and it
+ * comfortably exceeds the 30-minute hard cap and any briefing window the app
+ * asks for. Steady-state polling is unaffected: once a cursor exists `oldest`
+ * IS the cursor and this constant is never consulted.
+ */
+const DEFAULT_BACKFILL_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface SlackClientOptions {
   /** Bot/user token. Sent as `Authorization: Bearer …`, never in the query string. */
   token: string;
@@ -225,6 +244,13 @@ export interface SlackClientOptions {
   baseUrl?: string;
   /** `limit` sent to paginated endpoints. Default 200. */
   pageSize?: number;
+  /**
+   * Reach of a cursor-less first fetch, in ms before `now`. Default 7 days —
+   * see `DEFAULT_BACKFILL_WINDOW_MS` for why it is bounded at all.
+   */
+  backfillWindowMs?: number;
+  /** Injectable time source for that bound. Defaults to `Date.now`; tests pin it. */
+  now?: () => number;
 }
 
 /** A Slack API call that came back `ok: false`, carrying Slack's error code. */
@@ -256,6 +282,8 @@ export class SlackClient implements SourceClient<string> {
   readonly #maxRetries: number;
   readonly #baseUrl: string;
   readonly #pageSize: number;
+  readonly #backfillWindowMs: number;
+  readonly #now: () => number;
   #channelId: string | undefined;
 
   constructor(options: SlackClientOptions) {
@@ -265,6 +293,8 @@ export class SlackClient implements SourceClient<string> {
     this.#maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.#baseUrl = (options.baseUrl ?? SLACK_API_BASE).replace(/\/+$/, '');
     this.#pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
+    this.#backfillWindowMs = options.backfillWindowMs ?? DEFAULT_BACKFILL_WINDOW_MS;
+    this.#now = options.now ?? (() => Date.now());
   }
 
   /**
@@ -488,11 +518,19 @@ export class SlackClient implements SourceClient<string> {
       throw new Error('SlackClient.fetchSince called before setChannel()');
     }
 
-    const events = await this.fetchChannel(
-      channelId,
-      cursor !== undefined ? { oldest: cursor } : {},
-    );
+    // No cursor means a first fetch — or a channel every poll of which has so
+    // far returned nothing. Either way it must be bounded, or Slack pages back
+    // to the channel's creation (see `DEFAULT_BACKFILL_WINDOW_MS`). Slack's
+    // `oldest` is float seconds, the same encoding the returned cursor uses, so
+    // the two cases hand `fetchChannel` an identical shape.
+    const oldest = cursor ?? ((this.#now() - this.#backfillWindowMs) / 1000).toFixed(6);
 
+    const events = await this.fetchChannel(channelId, { oldest });
+
+    // A fetch that found nothing does not mint a cursor from the window bound:
+    // the next poll simply re-derives the bound from its own `now`, so a quiet
+    // channel keeps a sliding seven-day reach rather than freezing the one it
+    // had when it was first polled.
     const newest = events.reduce((max, e) => (e.occurredAt > max ? e.occurredAt : max), 0);
     return newest > 0
       ? { events, cursor: (newest / 1000).toFixed(6) }

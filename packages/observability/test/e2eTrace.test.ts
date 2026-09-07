@@ -574,10 +574,32 @@ describe('requirement 3 — every Layer 2 trigger logs its condition, event coun
     });
   }
 
+  /**
+   * The `extractions` row Layer 1 writes once it is done with an event. The
+   * quiet-window branch of `WatermarkRepo.due()` keys on its presence: a thread
+   * with an event still lacking one is queued behind Layer 1, not quiet, and
+   * does not fire (see `DUE_SQL`). Every quiet-window trigger in this file
+   * therefore has to model Layer 1 finishing first, exactly as production does.
+   */
+  const extracted = (eventId: string): void =>
+    extractions.insert({
+      eventId,
+      class: 'status_update',
+      confidence: 0.9,
+      participants: [],
+      artifacts: [],
+      model: MODEL,
+      promptVersion: 'layer1-extract.v1',
+      createdAt: clock.now(),
+    });
+
   it("records reason=quiet, the event count, and outcome=ok when a delta is written", async () => {
-    // Three real events on the thread, so the count is a fact, not a fixture.
+    // Three real events on the thread, so the count is a fact, not a fixture —
+    // and each one extracted, so the thread is genuinely quiet rather than
+    // merely waiting on Layer 1.
     for (let i = 0; i < 3; i += 1) {
       events.insertIfAbsent({ ...plantedEvent(), eventId: `e-${i}`, sourceEventId: `s-${i}` });
+      extracted(`e-${i}`);
     }
 
     const synth = makeSynthesizer();
@@ -599,6 +621,46 @@ describe('requirement 3 — every Layer 2 trigger logs its condition, event coun
     expect(annotations['wroteDelta']).toBe(true);
 
     // The in-process hook carries the same three facts on its terminal record.
+    expect(sink.find((t) => t.event === 'success')).toMatchObject({
+      reason: 'quiet',
+      eventCount: 3,
+      outcome: 'ok',
+    });
+  });
+
+  it('does not fire the quiet window while the thread still has unextracted events', async () => {
+    // The scenario that used to lose deltas: events ingested, Layer 1 still
+    // running, and both clocks saying "quiet" — on a backfill the events are
+    // hours old at the source, so this is the state every thread lands in.
+    // Firing here retrieves nothing, synthesizes `no_context`, and the
+    // scheduler then disarms the thread as caught up; nothing re-arms it until
+    // an unrelated later message. The gate holds the thread instead.
+    for (let i = 0; i < 3; i += 1) {
+      events.insertIfAbsent({ ...plantedEvent(), eventId: `e-${i}`, sourceEventId: `s-${i}` });
+    }
+
+    const synth = makeSynthesizer();
+    ollama.pushJson(layer2Response());
+    const sink: SchedulerTrace[] = [];
+    const scheduler = makeScheduler((k, id) => synth.synthesize(k, id), sink);
+
+    watermarks.touch(THREAD, 'slack', clock.now());
+    clock.advance(6 * MIN);
+    await scheduler.tick();
+
+    // Held: no trigger traced, no model call, no delta — and, the part that
+    // matters, the thread is STILL armed rather than marked synthesized.
+    expect(sink).toEqual([]);
+    expect(ollama.jsonCalls).toHaveLength(0);
+    expect(deltas.chainFor(THREAD)).toEqual([]);
+    expect(watermarks.get(THREAD)?.oldestUnsynthAt).not.toBeNull();
+
+    // Layer 1 finishes. The very next tick fires as an ordinary quiet trigger,
+    // with the same three facts on its record as the happy path above.
+    for (let i = 0; i < 3; i += 1) extracted(`e-${i}`);
+    await scheduler.tick();
+
+    expect(deltas.chainFor(THREAD)).toHaveLength(1);
     expect(sink.find((t) => t.event === 'success')).toMatchObject({
       reason: 'quiet',
       eventCount: 3,

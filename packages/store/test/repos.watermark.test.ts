@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Database } from 'better-sqlite3';
-import type { AppConfig } from '@cr/core';
+import type { AppConfig, Event } from '@cr/core';
 import { openDb, migrate } from '../src/index.js';
+import { EventsRepo } from '../src/repos/events.js';
+import { ExtractionsRepo } from '../src/repos/extractions.js';
 import { WatermarkRepo } from '../src/repos/watermark.js';
 
 let db: Database;
@@ -197,6 +199,244 @@ describe('WatermarkRepo.due', () => {
     repo.incrementAttempts(THREAD);
 
     expect(repo.due(now, config)).toEqual([{ threadKey: THREAD, source: 'slack', attempts: 3 }]);
+  });
+});
+
+/**
+ * `due()` must not call a thread due while Layer 1 still owes it an extraction.
+ * Firing early makes retrieval come back empty and Layer 2 answer `no_context`;
+ * the scheduler now leaves such a thread armed and counts an attempt, but on
+ * slow hardware — where one Layer 1 call is minutes — a thread would burn its
+ * whole retry budget in ~90s of ticks and be parked before its extraction ever
+ * lands. Not being due at all until extraction is done is what keeps the retry
+ * budget for threads that genuinely have no context, which is what it is for.
+ *
+ * Both clocks are in source time, so on a backfill a thread is "quiet for
+ * hours" the moment it lands and the hard cap has "elapsed" too. The quiet
+ * branch therefore requires full extraction outright. The hard cap is gated on
+ * wall-clock instead: it holds only while some unextracted event was ingested
+ * less than a cap ago, or while Layer 1 has written any extraction within the
+ * last cap (a queue that is moving is not a stall). Once neither is true the
+ * thread fires anyway, so a backlog cannot starve it.
+ */
+describe('WatermarkRepo.due — the Layer 1 gate', () => {
+  const now = 10_000_000;
+  /** Old enough to be past every quiet window, young enough to be inside every hard cap. */
+  const quietAgo = now - QUIET_MS - 1;
+
+  let events: EventsRepo;
+  let extractions: ExtractionsRepo;
+
+  beforeEach(() => {
+    events = new EventsRepo(db);
+    extractions = new ExtractionsRepo(db);
+  });
+
+  /** Minimal valid event; every field is overridable per-test. */
+  const makeEvent = (over: Partial<Event> = {}): Event => ({
+    eventId: 'e1',
+    source: 'slack',
+    sourceEventId: 's1',
+    threadKey: THREAD,
+    actorId: 'U1',
+    occurredAt: quietAgo,
+    ingestedAt: quietAgo + 50,
+    payload: { text: 'hello' },
+    redactionCount: 0,
+    ...over,
+  });
+
+  /**
+   * The row Layer 1 writes when it is done with an event. `createdAt` matters
+   * to the hard-cap gate: a recent row anywhere is proof Layer 1 is alive.
+   */
+  const extracted = (eventId: string, createdAt = quietAgo + 100): void =>
+    extractions.insert({
+      eventId,
+      class: 'status_update',
+      confidence: 0.9,
+      participants: [],
+      artifacts: [],
+      model: 'm',
+      promptVersion: 'v1',
+      createdAt,
+    });
+
+  const dueKeys = (layer1ActiveSince?: number): string[] =>
+    repo.due(now, config, layer1ActiveSince).map((d) => d.threadKey);
+
+  it('holds a quiet thread back while one of its events is still unextracted', () => {
+    events.insertIfAbsent(makeEvent());
+    repo.touch(THREAD, 'slack', quietAgo);
+
+    // Quiet by the clock — and it would have been due before the gate.
+    expect(now - (repo.get(THREAD)?.lastEventAt ?? 0)).toBeGreaterThan(QUIET_MS);
+    expect(dueKeys()).toEqual([]);
+  });
+
+  it('releases the thread once every event on it has an extraction row', () => {
+    events.insertIfAbsent(makeEvent());
+    repo.touch(THREAD, 'slack', quietAgo);
+    expect(dueKeys()).toEqual([]);
+
+    extracted('e1');
+
+    expect(dueKeys()).toEqual([THREAD]);
+  });
+
+  it('holds the thread while ANY of several events is unextracted, not just the newest', () => {
+    events.insertIfAbsent(makeEvent({ eventId: 'e1', sourceEventId: 's1', occurredAt: quietAgo - 2 }));
+    events.insertIfAbsent(makeEvent({ eventId: 'e2', sourceEventId: 's2', occurredAt: quietAgo - 1 }));
+    events.insertIfAbsent(makeEvent({ eventId: 'e3', sourceEventId: 's3', occurredAt: quietAgo }));
+    repo.touch(THREAD, 'slack', quietAgo);
+
+    extracted('e1');
+    extracted('e3');
+    expect(dueKeys()).toEqual([]);
+
+    extracted('e2');
+    expect(dueKeys()).toEqual([THREAD]);
+  });
+
+  it("gates per thread: one thread's backlog does not hold back another", () => {
+    events.insertIfAbsent(makeEvent({ eventId: 'e-a', sourceEventId: 's-a', threadKey: 'A' }));
+    events.insertIfAbsent(makeEvent({ eventId: 'e-b', sourceEventId: 's-b', threadKey: 'B' }));
+    repo.touch('A', 'slack', quietAgo);
+    repo.touch('B', 'slack', quietAgo);
+
+    extracted('e-b');
+
+    expect(dueKeys()).toEqual(['B']);
+  });
+
+  it('does not hold back a thread that has no events at all', () => {
+    // Every other `due()` test in this file relies on this: a watermark with no
+    // event rows behind it has nothing unextracted, and is due as before.
+    repo.touch(THREAD, 'slack', quietAgo);
+
+    expect(dueKeys()).toEqual([THREAD]);
+  });
+
+  it('holds a backfilled thread past the hard cap while a just-ingested event is unextracted', () => {
+    // The backfill shape: hours old at the source, seconds old on this machine.
+    // Both clocks say "long overdue"; Layer 1 has had one poll cycle on it.
+    const longAgo = now - HARD_CAP_MS - 1;
+    events.insertIfAbsent(makeEvent({ occurredAt: longAgo, ingestedAt: now - 1_000 }));
+    repo.touch(THREAD, 'slack', longAgo);
+
+    expect(now - (repo.get(THREAD)?.oldestUnsynthAt ?? 0)).toBeGreaterThan(HARD_CAP_MS);
+    expect(dueKeys()).toEqual([]);
+
+    extracted('e1');
+    expect(dueKeys()).toEqual([THREAD]);
+  });
+
+  it('holds a thread past the hard cap while Layer 1 is still draining the queue elsewhere', () => {
+    // This thread's event has waited longer than a cap, but Layer 1 wrote a row
+    // on some OTHER thread moments ago. A queue that is moving is not a stall;
+    // on slow hardware a backfill is hours of Layer 1, and firing here would
+    // disarm most of it with no context, just later.
+    const longAgo = now - HARD_CAP_MS - 1;
+    events.insertIfAbsent(makeEvent({ occurredAt: longAgo, ingestedAt: longAgo }));
+    repo.touch(THREAD, 'slack', longAgo);
+    repo.touch(THREAD, 'slack', now - 60_000); // chattering: quiet branch cannot fire
+
+    events.insertIfAbsent(makeEvent({ eventId: 'e-other', sourceEventId: 's-other', threadKey: 'other' }));
+    extracted('e-other', now - 1_000);
+
+    expect(dueKeys()).toEqual([]);
+
+    // Once THIS thread is extracted it fires on the hard cap like any other.
+    extracted('e1', now - 500);
+    expect(dueKeys()).toEqual([THREAD]);
+  });
+
+  it('treats Layer 1 as wedged only when it has written nothing for a whole cap', () => {
+    const longAgo = now - HARD_CAP_MS - 1;
+    events.insertIfAbsent(makeEvent({ occurredAt: longAgo, ingestedAt: longAgo }));
+    repo.touch(THREAD, 'slack', longAgo);
+    repo.touch(THREAD, 'slack', now - 60_000);
+    events.insertIfAbsent(makeEvent({ eventId: 'e-other', sourceEventId: 's-other', threadKey: 'other' }));
+
+    // The last row Layer 1 ever wrote is older than the cap: nothing has moved
+    // for thirty minutes while work is outstanding. That is a stall, and the
+    // thread fires with what it has rather than never.
+    extracted('e-other', now - HARD_CAP_MS - 1);
+    expect(dueKeys()).toEqual([THREAD]);
+  });
+
+  it('applies the hard-cap gate per source threshold', () => {
+    // Gmail's cap is 3_600_000 here. Both events were ingested 2_000_000 ago and
+    // Layer 1 last wrote a row 2_500_000 ago. For Slack (cap 1_800_000) that is
+    // a thread that has waited a cap with Layer 1 silent for a cap: a stall.
+    // For Gmail (cap 3_600_000) the event is still freshly queued AND Layer 1
+    // was active within the cap: a queue.
+    const longAgo = now - 3_600_000 - 1;
+    const midAgo = now - 2_000_000;
+    events.insertIfAbsent(makeEvent({ eventId: 'e-s', sourceEventId: 's-s', threadKey: 'S', occurredAt: longAgo, ingestedAt: midAgo }));
+    events.insertIfAbsent(makeEvent({ eventId: 'e-g', sourceEventId: 's-g', threadKey: 'G', source: 'gmail', occurredAt: longAgo, ingestedAt: midAgo }));
+    events.insertIfAbsent(makeEvent({ eventId: 'e-other', sourceEventId: 's-other', threadKey: 'other' }));
+    extracted('e-other', now - 2_500_000);
+    repo.touch('S', 'slack', longAgo);
+    repo.touch('S', 'slack', now - 60_000);
+    repo.touch('G', 'gmail', longAgo);
+    repo.touch('G', 'gmail', now - 60_000);
+
+    expect(dueKeys()).toEqual(['S']);
+  });
+
+  /**
+   * The cold-start guard (condition (3) in `DUE_SQL`). On the first ticks after
+   * the app is reopened, nothing has been extracted "lately" — because nothing
+   * was running. Without `layer1ActiveSince`, the hard-cap branch reads that as
+   * a stalled Layer 1 and fires every backlogged thread at once; each retrieves
+   * nothing and the scheduler parks the lot. The guard holds those threads
+   * until Layer 1 has actually had a cap of wall-clock time to work.
+   */
+  describe('the cold-start guard', () => {
+    /** A backfilled thread: long overdue on both clocks, its event never extracted. */
+    const backlogThread = (): void => {
+      const longAgo = now - HARD_CAP_MS - 1;
+      events.insertIfAbsent(makeEvent({ occurredAt: longAgo, ingestedAt: longAgo }));
+      repo.touch(THREAD, 'slack', longAgo);
+      repo.touch(THREAD, 'slack', now - 60_000); // chattering: quiet branch cannot fire
+    };
+
+    it('fires (old behaviour) when layer1ActiveSince is omitted', () => {
+      backlogThread();
+      expect(dueKeys()).toEqual([THREAD]);
+    });
+
+    it('holds the thread back while Layer 1 has been running less than a cap', () => {
+      backlogThread();
+      // App relaunched a minute ago; the catch-up sweep has barely started.
+      expect(dueKeys(now - 60_000)).toEqual([]);
+    });
+
+    it('releases the thread once Layer 1 has run a full cap with nothing to show', () => {
+      backlogThread();
+      expect(dueKeys(now - HARD_CAP_MS + 1)).toEqual([]); // just short of a cap
+      expect(dueKeys(now - HARD_CAP_MS)).toEqual([THREAD]); // a full cap: a real stall
+    });
+
+    it('does not delay a thread whose backlog Layer 1 has since cleared', () => {
+      backlogThread();
+      extracted('e1', now - 1_000);
+      // Fully extracted — the stall test is not even reached.
+      expect(dueKeys(now - 60_000)).toEqual([THREAD]);
+    });
+
+    it('is irrelevant while Layer 1 is demonstrably alive elsewhere', () => {
+      backlogThread();
+      events.insertIfAbsent(
+        makeEvent({ eventId: 'e-other', sourceEventId: 's-other', threadKey: 'other' }),
+      );
+      extracted('e-other', now - 1_000); // a fresh row on another thread
+      // A moving queue, not a stall: this thread stays held whatever the uptime,
+      // and a long uptime does not release it either.
+      expect(dueKeys(now - 60_000)).toEqual([]);
+      expect(dueKeys(now - HARD_CAP_MS - 1)).toEqual([]);
+    });
   });
 });
 

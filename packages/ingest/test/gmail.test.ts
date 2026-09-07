@@ -108,6 +108,39 @@ describe('GmailClient.sync — cursor handling', () => {
     expect(maxResults).toBeLessThanOrEqual(100);
   });
 
+  it('resumes a cursor-less backfill from backfillSince instead of newer_than:7d', async () => {
+    const fetchMock = createFetch();
+    // The newest message we already stored, ~30 days ago.
+    const sinceMs = Date.UTC(2026, 0, 15);
+    const gmail = new GmailClient({
+      accessToken: 'ya29.test',
+      fetchImpl: fetchMock,
+      backfillSince: () => sinceMs,
+    });
+
+    await gmail.sync();
+
+    const listUrl = urlsOf(fetchMock).find((url) => /\/users\/me\/messages\?/.test(url)) ?? '';
+    const q = new URL(listUrl).searchParams.get('q') ?? '';
+    expect(q).not.toContain('newer_than');
+    // `after:<seconds>`, one day of margin subtracted for Gmail's date-granular filter.
+    expect(q).toBe(`after:${Math.floor(sinceMs / 1000) - 86_400}`);
+  });
+
+  it('falls back to newer_than:7d when backfillSince has no resume point', async () => {
+    const fetchMock = createFetch();
+    const gmail = new GmailClient({
+      accessToken: 'ya29.test',
+      fetchImpl: fetchMock,
+      backfillSince: () => undefined,
+    });
+
+    await gmail.sync();
+
+    const listUrl = urlsOf(fetchMock).find((url) => /\/users\/me\/messages\?/.test(url)) ?? '';
+    expect(new URL(listUrl).searchParams.get('q')).toContain('newer_than');
+  });
+
   it('sends the stored historyId to users.history.list and returns the new one to persist', async () => {
     const fetchMock = createFetch();
 

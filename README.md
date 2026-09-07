@@ -90,10 +90,11 @@ setup per provider; do them once, then every install (source or packaged
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**.
    Give it any name (e.g. "Context Restorer") and pick your workspace.
 2. Left sidebar → **OAuth & Permissions**.
-3. Under **Redirect URLs**, add exactly `http://127.0.0.1:53682/callback` and
+3. Under **Redirect URLs**, add exactly `http://127.0.0.1:17532/callback` and
    save. This must match byte-for-byte — Slack matches redirect URIs exactly,
    including the port (`SLACK_REDIRECT_PORT` in
-   `apps/desktop/src/ipc/oauth.ts`), unlike Google's installed-app flow.
+   `apps/desktop/src/ipc/oauth.ts` — if you change it there, change it here
+   too), unlike Google's installed-app flow.
 4. Under **Scopes → User Token Scopes** (not Bot Token Scopes — this app reads
    *your* channel/DM history, not a bot's), add exactly these four:
    `channels:history`, `channels:read`, `im:history`, `users:read`. These come

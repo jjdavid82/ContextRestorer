@@ -34,6 +34,7 @@ import {
   DeltasRepo,
   EventsRepo,
   ExtractionsRepo,
+  ExtractionFailuresRepo,
   FeedbackRepo,
   GraphRepo,
   PendingItemsRepo,
@@ -338,6 +339,18 @@ function notConnectedError(source: PollSourceKind): Error {
  * along with it, which is correct — re-selecting it later should not resume
  * from a cursor the user never saw polled.
  *
+ * `Poller` holds the cursor only in memory, so on the first cycle after a
+ * relaunch every channel is cursor-less and `SlackClient` would fall back to
+ * its fixed 7-day backfill — losing anything posted between "app closed" and
+ * "7 days ago" for a user who was away longer than that. Before that window
+ * existed a cursor-less fetch paged back to the channel's creation and the
+ * store deduped it, so nothing was lost. `resumeFloorFor` restores that
+ * guarantee without the unbounded read: it returns the newest event already
+ * stored for the channel, encoded as a Slack `ts`, so the first post-restart
+ * fetch resumes exactly where ingestion left off. It is consulted only when
+ * the in-memory cursor is absent; once the cycle completes the cursor is set
+ * for the rest of the session.
+ *
  * No channels selected is a normal, healthy idle state (closes Task 1.7's
  * gap) — `{ events: [] }`, not a thrown error. A connected-but-unconfigured
  * Slack account is not the same failure as a revoked token, and conflating
@@ -361,6 +374,15 @@ class VaultBackedSlackClient implements SourceClient<string> {
   constructor(
     private readonly tokens: TokenVault,
     private readonly channels: SlackChannelsRepo,
+    /**
+     * Resume point for a channel whose in-memory cursor is gone (a relaunch, or
+     * a cursor that failed to parse). The newest `occurred_at` already stored
+     * for the channel, encoded as a Slack `ts` string, or `undefined` when the
+     * channel has no stored events yet (a fresh install, or a channel selected
+     * for the first time) — in which case `SlackClient`'s bounded backfill is
+     * the right behaviour.
+     */
+    private readonly resumeFloorFor: (channelId: string) => string | undefined,
   ) {}
 
   async fetchSince(cursor?: string): Promise<SourceFetchResult<string>> {
@@ -379,25 +401,25 @@ class VaultBackedSlackClient implements SourceClient<string> {
     let lastError: unknown;
 
     for (const channel of selected) {
+      // The in-memory cursor wins; the stored-event floor is only the fallback
+      // for its absence. Neither = `SlackClient`'s own bounded backfill.
+      const resumeFrom = cursors[channel.channelId] ?? this.resumeFloorFor(channel.channelId);
       try {
         client.setChannel(channel.channelId);
-        const result = await client.fetchSince(cursors[channel.channelId]);
+        const result = await client.fetchSince(resumeFrom);
         events.push(...result.events);
-        if (result.cursor !== undefined) {
-          nextCursors[channel.channelId] = result.cursor;
-        } else if (cursors[channel.channelId] !== undefined) {
-          nextCursors[channel.channelId] = cursors[channel.channelId] as string;
-        }
+        // Carry forward the fetch's new cursor, or — if it found nothing new and
+        // minted none — whatever we resumed from, so the point is not lost.
+        const carried = result.cursor ?? resumeFrom;
+        if (carried !== undefined) nextCursors[channel.channelId] = carried;
       } catch (error) {
         failures += 1;
         lastError = error;
         console.error(`[poll] slack channel ${channel.channelId} failed`, error);
-        // Keep whatever watermark this channel already had rather than losing
-        // it — a transient failure should not force a re-fetch from scratch
-        // once the channel recovers.
-        if (cursors[channel.channelId] !== undefined) {
-          nextCursors[channel.channelId] = cursors[channel.channelId] as string;
-        }
+        // Keep whatever resume point this channel had rather than losing it — a
+        // transient failure should not force a re-fetch from scratch once the
+        // channel recovers.
+        if (resumeFrom !== undefined) nextCursors[channel.channelId] = resumeFrom;
       }
     }
 
@@ -445,7 +467,21 @@ function createSourceClients(
   tokens: TokenVault,
   channels: SlackChannelsRepo,
   appConfig: AppConfig,
+  events: EventsRepo,
 ): Record<PollSourceKind, SourceClient<unknown>> {
+  // Resume a cursor-less Slack fetch from the newest event already stored for
+  // the channel rather than from a fixed backfill window — see
+  // `VaultBackedSlackClient`. `null` (no stored events) falls through to the
+  // client's own bounded backfill.
+  const slackResumeFloor = (channelId: string): string | undefined => {
+    const newestMs = events.newestOccurredAtByThreadPrefix(`${channelId}:`);
+    if (newestMs === null) return undefined;
+    // Encode as a Slack `ts` (float seconds), nudged back 1ms so the half-up
+    // rounding in `slackTsToMs` can at worst re-fetch the boundary message
+    // (deduped on insert), never step past one.
+    return ((newestMs - 1) / 1000).toFixed(6);
+  };
+
   const gmail = new GmailClient({
     // A supplier, not a captured string: the token is read at call time, so a
     // connect or revoke takes effect on the very next cycle without a restart.
@@ -459,10 +495,15 @@ function createSourceClients(
       if (stored === undefined) throw notConnectedError('gmail');
       return stored.accessToken;
     },
+    // Same restart concern as `slackResumeFloor`: the poller's cursor is
+    // memory-only, so every relaunch is a cursor-less sync that would otherwise
+    // re-base on `newer_than:7d` and drop anything older for a user away longer
+    // than that. Resume from the newest Gmail event already stored.
+    backfillSince: () => events.newestOccurredAtBySource('gmail') ?? undefined,
   });
 
   return {
-    slack: new VaultBackedSlackClient(tokens, channels) as SourceClient<unknown>,
+    slack: new VaultBackedSlackClient(tokens, channels, slackResumeFloor) as SourceClient<unknown>,
     gmail: gmail as SourceClient<unknown>,
   };
 }
@@ -476,10 +517,24 @@ function createSourceClients(
  * prepares its whole statement set in its constructor — a second instance
  * over the same table would just redo that work for no benefit.
  *
- * `enqueueExtraction` used to be a PLACEHOLDER that only logged (Phase 2 was
- * not built yet). It is now real — see `createExtractionSweep` — but the
- * pipeline's contract is unchanged: called exactly once per genuinely new
- * event, hand-off only, no return value the pipeline waits on beyond the promise.
+ * `enqueueExtraction` is wired to `createLayer12`'s `runExtractionSweep`, and
+ * the callback passed below deliberately drops the sweep's promise instead of
+ * returning it. `IngestionPipeline.ingest` awaits whatever this returns, and
+ * `Poller.#runCycle` awaits `ingest` before it records a successful cycle — so
+ * returning the promise made every poll cycle block on Layer 1 for EVERY new
+ * event, one full model call at a time. On CPU-only hardware that was minutes
+ * per event: a first backfill never finished its cycle, `lastSyncAt` never
+ * moved, and the source strip read "Not connected" for a source whose OAuth
+ * and API calls were both healthy. Source health must describe ingestion, not
+ * inference.
+ *
+ * Returning `void` is inside the pipeline's contract (`EnqueueExtraction`
+ * allows it; the pipeline's only obligation is to call it once per new event).
+ * The Layer 2 race this used to guard against — the scheduler synthesizing a
+ * thread before Layer 1 has embedded it — is closed where it belongs, in
+ * `WatermarkRepo`'s `DUE_SQL`, which will not call a thread due while it has
+ * unextracted events. That guard also covers the backfill case the awaiting
+ * version never did.
  */
 function createPipeline(
   events: EventsRepo,
@@ -510,10 +565,11 @@ function startPolling(
   tokens: TokenVault,
   channels: SlackChannelsRepo,
   pipeline: IngestionPipeline,
+  eventsRepo: EventsRepo,
 ): Poller {
   const scheduler = new Poller({
     clock: systemClock,
-    sources: createSourceClients(tokens, channels, appConfig),
+    sources: createSourceClients(tokens, channels, appConfig, eventsRepo),
     config: appConfig,
     // The real sink: normalize → redact → persist → enqueue (Task 1.6).
     //
@@ -767,6 +823,7 @@ function createLayer12(
   logsDir: string,
 ): Layer12 {
   const extractions = new ExtractionsRepo(handle);
+  const extractionFailures = new ExtractionFailuresRepo(handle);
 
   const extractor = new Layer1Extractor(
     shared.ollama,
@@ -780,9 +837,17 @@ function createLayer12(
     // disagree on this and each is followed on its own terms here.
     appConfig.promptVersions.layer1,
     systemClock,
+    // `skipNoise` default; passed explicitly so the write-off repo lands in the
+    // right positional slot.
+    true,
+    // Recovery-sweep termination: an event the model cannot classify after
+    // `MAX_EXTRACTION_ATTEMPTS` responses is written off rather than blocking
+    // its thread's synthesis forever.
+    extractionFailures,
   );
 
-  const runExtractionSweep = async (): Promise<void> => {
+  /** One pass over `listUnextracted()`. Only ever called through `runExtractionSweep`. */
+  const sweepOnce = async (): Promise<void> => {
     // P3 part 2: grouped by thread, one model call per group rather than one
     // per event. Layer 1 was measured at ~29s per call on 7b and ~85s on 14b,
     // which is why every quality number this project has reported was measured
@@ -802,7 +867,16 @@ function createLayer12(
 
     for (const [threadKey, batch] of byThread) {
       try {
-        await extractor.extractThread(batch, newId());
+        const outcome = await extractor.extractThread(batch, newId());
+        if (outcome.abandoned > 0) {
+          // `failure must stay visible` (WatermarkRepo's DUE_SQL comment): the
+          // model has failed these events MAX_EXTRACTION_ATTEMPTS times, so they
+          // are written off as unextractable rather than blocking this thread.
+          console.warn(
+            `[layer1] ${threadKey}: wrote off ${outcome.abandoned} event(s) the model ` +
+              `could not classify after repeated attempts`,
+          );
+        }
       } catch (error) {
         // Never let one bad thread stop the sweep: every event in it stays
         // unextracted, so `listUnextracted()` offers them again next time.
@@ -811,6 +885,49 @@ function createLayer12(
         console.error('[layer1] thread extraction failed', threadKey, error);
       }
     }
+  };
+
+  // Re-entrancy guard with coalescing.
+  //
+  // Two callers share this sweep — the startup catch-up and the per-event
+  // ingestion hand-off — and they used to overlap freely. `listUnextracted()`
+  // is a snapshot, so two concurrent passes were handed the SAME events and
+  // each ran Layer 1 on them: on a real backfill that produced events with two
+  // `extractions` rows and burned minutes of local inference on work already
+  // done. A `Set` of in-flight event ids would not fix it either, because the
+  // duplicate is claimed before the first pass has written its row.
+  //
+  // So there is exactly one pass at a time. A call that arrives while one is
+  // running does not start another; it flags "there is newer work" and returns
+  // the running pass's promise, and the loop below runs ONE more pass after the
+  // current one settles. A burst of N hand-offs therefore costs at most two
+  // passes, and no event is ever offered to two model calls at once.
+  //
+  // The catch-all is load-bearing, not defensive noise: the ingestion hand-off
+  // deliberately does not await this (see `createPipeline`), so a rejection
+  // here would be an unhandled rejection in the main process. `sweepOnce`
+  // already isolates each thread; this covers `listUnextracted()` itself.
+  let inFlight: Promise<void> | null = null;
+  let rerunRequested = false;
+
+  const runExtractionSweep = (): Promise<void> => {
+    if (inFlight !== null) {
+      rerunRequested = true;
+      return inFlight;
+    }
+    inFlight = (async () => {
+      try {
+        do {
+          rerunRequested = false;
+          await sweepOnce();
+        } while (rerunRequested);
+      } catch (error) {
+        console.error('[layer1] extraction sweep failed', error);
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
   };
 
   const synthesizer = new Layer2Synthesizer(
@@ -829,6 +946,12 @@ function createLayer12(
     clock: systemClock,
     config: appConfig.debounce,
     watermarks,
+    // Wall-clock start of Layer 1 for this process. `createLayer12` runs once,
+    // during startup, moments before `runExtractionSweep()` is first called, so
+    // this is effectively "when catch-up extraction began". `WatermarkRepo.due`
+    // uses it to not mistake a fresh relaunch for a stalled Layer 1 on the first
+    // tick — see its `layer1ActiveSince` parameter.
+    layer1ActiveSince: systemClock.now(),
     onSynthesize: (threadKey, traceId) => synthesizer.synthesize(threadKey, traceId),
     countThreadEvents: (threadKey) => events.listByThread(threadKey).length,
     logsDir,
@@ -1194,20 +1317,26 @@ if (!app.requestSingleInstanceLock()) {
         logsDir,
       );
 
-      // Catch up on anything ingested before this wiring existed (or before
-      // this launch). Fire-and-forget, not awaited: real model inference per
-      // backlogged event can take well over a minute on this hardware, and
-      // startup (window, IPC, tray) must not hang on it.
+      // Catch up on anything ingested before this launch. Fire-and-forget, not
+      // awaited: real model inference per backlogged event can take well over a
+      // minute on this hardware, and startup (window, IPC, tray) must not hang
+      // on it. The ingestion hand-off shares this sweep's re-entrancy guard, so
+      // events landing during the catch-up coalesce into it rather than
+      // starting a second, overlapping pass.
       //
-      // The debounce scheduler is armed only once the sweep resolves, not
-      // alongside it — a `tick()` racing ahead of extraction could see a
-      // thread as "due" (quiet window already passed, which is exactly the
-      // backlog case) and synthesize it with no context yet written, which
-      // `markSynthesized` would then mark caught-up until the NEXT new event
-      // arrives on that thread. After this first catch-up, steady-state
-      // ingestion extracts synchronously per event (see `createPipeline`
-      // below), well inside any thread's quiet window, so no such race
-      // recurs on later ticks.
+      // The debounce scheduler is started right away rather than chained onto
+      // this sweep's promise, as it used to be. The chaining existed to stop a
+      // `tick()` racing ahead of extraction and synthesizing a thread with no
+      // context yet written; that guard now lives in `WatermarkRepo`'s
+      // `DUE_SQL`, which holds a thread back on the quiet window while it has
+      // unextracted events and, on the hard cap, only releases it once Layer 1
+      // has been running a full cap (`layer1ActiveSince` above) — so the first
+      // tick after a relaunch does not read the app's own downtime as a stalled
+      // Layer 1. It covers ticks at every point in the process's life, not just
+      // the first one. Chaining would also now be actively harmful: with the
+      // coalescing guard, this promise can outlive an entire backfill while
+      // ingestion keeps feeding it, and Layer 2 would sit idle for as long as
+      // Layer 1 stayed busy.
       // P0: background prose pre-computation. Shares the debounce tick rather
       // than owning a timer, because it wants to run just AFTER Layer 2 settles
       // a thread — that is the moment a delta exists with no prose for it.
@@ -1231,30 +1360,30 @@ if (!app.requestSingleInstanceLock()) {
           config!.precompute.pauseOnBattery === false || !powerMonitor.onBatteryPower,
       });
 
-      void layer12.runExtractionSweep().then(() => {
-        void layer12.scheduler.tick();
-        debounceTimer = setInterval(() => {
-          void layer12.scheduler
-            .tick()
-            .then(() => precomputer.runCycle())
-            .then((result) => {
-              if (result.claimsWritten > 0) {
-                console.info(
-                  `[precompute] wrote ${result.claimsWritten} claim(s) for ` +
-                    `${result.candidates} delta(s) with no prose`,
-                );
-              }
-            })
-            // `runCycle` never rejects, but `scheduler.tick()` might, and an
-            // unhandled rejection inside an interval crashes the main process.
-            .catch((error: unknown) => {
-              console.error('[precompute] background cycle failed', error);
-            });
-        }, 30_000);
-        // Never keep the process alive solely to fire this — same reasoning
-        // as the scheduler's own timeout timers.
-        debounceTimer.unref();
-      });
+      void layer12.runExtractionSweep();
+
+      void layer12.scheduler.tick();
+      debounceTimer = setInterval(() => {
+        void layer12.scheduler
+          .tick()
+          .then(() => precomputer.runCycle())
+          .then((result) => {
+            if (result.claimsWritten > 0) {
+              console.info(
+                `[precompute] wrote ${result.claimsWritten} claim(s) for ` +
+                  `${result.candidates} delta(s) with no prose`,
+              );
+            }
+          })
+          // `runCycle` never rejects, but `scheduler.tick()` might, and an
+          // unhandled rejection inside an interval crashes the main process.
+          .catch((error: unknown) => {
+            console.error('[precompute] background cycle failed', error);
+          });
+      }, 30_000);
+      // Never keep the process alive solely to fire this — same reasoning
+      // as the scheduler's own timeout timers.
+      debounceTimer.unref();
 
       // A-2 (FR-5/FR-8): the live channel → project map the ingestion pipeline
       // consults for each new thread. Held in a `let` and replaced wholesale by
@@ -1267,7 +1396,14 @@ if (!app.requestSingleInstanceLock()) {
         events,
         graph,
         watermarks,
-        () => layer12.runExtractionSweep(),
+        // Hand-off only: the promise is dropped, not returned, so `ingest()`
+        // resolves as soon as the event is durable and the poll cycle that
+        // called it can record its success. `runExtractionSweep` never rejects
+        // (it has its own catch-all), which is what makes `void` safe here.
+        // See the `createPipeline` comment for why this is not awaited.
+        () => {
+          void layer12.runExtractionSweep();
+        },
         (source, threadKey) => projectResolver.projectFor(source, threadKey),
       );
       // Read by the poller every Slack cycle and by `slack:*` IPC — one
@@ -1297,7 +1433,7 @@ if (!app.requestSingleInstanceLock()) {
       };
       relinkProjects(slackChannels.list());
 
-      poller = startPolling(config!, vault, slackChannels, pipeline);
+      poller = startPolling(config!, vault, slackChannels, pipeline, events);
 
       registerIpcHandlers({
         vault,

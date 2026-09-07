@@ -69,7 +69,12 @@ const scriptedFetch = (script: Record<string, Array<() => Response>>) => {
 
 const makeClient = (
   script: Record<string, Array<() => Response>>,
-  overrides: { sleep?: SleepFn; maxRetries?: number } = {},
+  overrides: {
+    sleep?: SleepFn;
+    maxRetries?: number;
+    now?: () => number;
+    backfillWindowMs?: number;
+  } = {},
 ) => {
   const { fetchImpl, urls } = scriptedFetch(script);
   const client = new SlackClient({
@@ -77,6 +82,10 @@ const makeClient = (
     fetchImpl,
     ...(overrides.sleep !== undefined ? { sleep: overrides.sleep } : {}),
     ...(overrides.maxRetries !== undefined ? { maxRetries: overrides.maxRetries } : {}),
+    ...(overrides.now !== undefined ? { now: overrides.now } : {}),
+    ...(overrides.backfillWindowMs !== undefined
+      ? { backfillWindowMs: overrides.backfillWindowMs }
+      : {}),
   });
   return { client, fetchImpl, urls };
 };
@@ -542,10 +551,15 @@ describe('rate limiting (429 / Retry-After)', () => {
 });
 
 describe('fetchSince (SourceClient contract)', () => {
+  /** A pinned "now", so the backfill bound is a number the tests can name. */
+  const NOW_MS = 1_700_000_200_000;
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
   it('returns events plus a ts watermark cursor', async () => {
-    const { client } = makeClient({
-      'conversations.history': [() => json(fixture('history-page2'))],
-    });
+    const { client } = makeClient(
+      { 'conversations.history': [() => json(fixture('history-page2'))] },
+      { now: () => NOW_MS },
+    );
 
     client.setChannel(CHANNEL);
     const result = await client.fetchSince();
@@ -556,10 +570,45 @@ describe('fetchSince (SourceClient contract)', () => {
     expect(result.cursor).toBe('1700000150.000000');
   });
 
-  it('passes a stored cursor through as `oldest`', async () => {
-    const { client, urls } = makeClient({
-      'conversations.history': [() => json(fixture('history-page2'))],
-    });
+  it('bounds a cursor-less first fetch to the backfill window instead of paging to channel creation', async () => {
+    // The contract is "a bounded backfill when the cursor is absent"
+    // (`sources/types.ts`). Gmail honours it with `newer_than:7d`; an unbounded
+    // history read here produced a thousand weeks-old events on a first
+    // connect. The bound is Slack float seconds — the cursor's own encoding.
+    const { client, urls } = makeClient(
+      { 'conversations.history': [() => json(fixture('history-page2'))] },
+      { now: () => NOW_MS },
+    );
+
+    client.setChannel(CHANNEL);
+    await client.fetchSince();
+
+    expect(new URL(urls[0]!).searchParams.get('oldest')).toBe(
+      ((NOW_MS - SEVEN_DAYS_MS) / 1000).toFixed(6),
+    );
+  });
+
+  it('honours an injected backfill window', async () => {
+    const { client, urls } = makeClient(
+      { 'conversations.history': [() => json(fixture('history-page2'))] },
+      { now: () => NOW_MS, backfillWindowMs: 60_000 },
+    );
+
+    client.setChannel(CHANNEL);
+    await client.fetchSince();
+
+    expect(new URL(urls[0]!).searchParams.get('oldest')).toBe(
+      ((NOW_MS - 60_000) / 1000).toFixed(6),
+    );
+  });
+
+  it('passes a stored cursor through as `oldest`, and the window plays no part', async () => {
+    const { client, urls } = makeClient(
+      { 'conversations.history': [() => json(fixture('history-page2'))] },
+      // A window that would land far LATER than the cursor: if it were consulted
+      // at all, `oldest` would move and events between the two would be lost.
+      { now: () => NOW_MS, backfillWindowMs: 1_000 },
+    );
 
     client.setChannel(CHANNEL);
     await client.fetchSince('1700000000.000000');

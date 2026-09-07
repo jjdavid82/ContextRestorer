@@ -10,7 +10,8 @@
     "@cr/core": "*",
     "@cr/observability": "*",
     "@cr/redact": "*",
-    "@cr/store": "*"
+    "@cr/store": "*",
+    "undici": "^7.29.0"
   },
   "devDependencies": {
     "@cr/ingest": "*"

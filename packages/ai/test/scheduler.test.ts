@@ -13,7 +13,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
 import { FakeClock } from '@cr/core';
-import { openDb, migrate, WatermarkRepo } from '@cr/store';
+import { openDb, migrate, WatermarkRepo, EventsRepo, ExtractionsRepo } from '@cr/store';
+import type { Event } from '@cr/core';
 import {
   DebounceScheduler,
   type DebounceSchedulerDeps,
@@ -149,6 +150,75 @@ describe('DebounceScheduler — Property 2: the hard cap fires on a never-quiet 
     // The scheduler must not call touch(): pushing last_event_at forward would
     // silently restart the quiet window on every tick.
     expect(after?.lastEventAt).toBe(0);
+  });
+});
+
+describe('DebounceScheduler — the cold-start guard is wired to WatermarkRepo.due', () => {
+  // The failure this prevents: reopen the app after a long absence, and on the
+  // first tick every backlogged thread looks "quiet for hours" AND "past the
+  // hard cap" AND (because Layer 1 has not run yet) behind a silent extractor.
+  // Firing them all retrieves nothing and the scheduler parks the backlog.
+  const staleEvent = (): Event => ({
+    eventId: 'e1',
+    source: 'slack',
+    sourceEventId: 's1',
+    threadKey: K,
+    actorId: 'U1',
+    occurredAt: 0,
+    ingestedAt: 0,
+    payload: { text: 'hi' },
+    redactionCount: 0,
+  });
+
+  it('does not fire a still-unextracted backlog thread on the first tick after launch', async () => {
+    new EventsRepo(db).insertIfAbsent(staleEvent());
+    watermarks.touch(K, 'slack', 0);
+    clock.set(40 * MIN); // well past both the quiet window and the hard cap
+
+    const justLaunched = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      layer1ActiveSince: clock.now(), // Layer 1 started ~now; it has done nothing yet
+      onSynthesize: async (k) => {
+        synthesized.push(k);
+      },
+    });
+    await justLaunched.tick();
+    expect(synthesized).toEqual([]);
+
+    // Same state, but a scheduler that has been up a full cap: a genuine stall.
+    clock.advance(30 * MIN);
+    await justLaunched.tick();
+    expect(synthesized).toEqual([K]);
+  });
+
+  it('fires immediately once extraction for the thread lands', async () => {
+    new EventsRepo(db).insertIfAbsent(staleEvent());
+    new ExtractionsRepo(db).insert({
+      eventId: 'e1',
+      class: 'status_update',
+      confidence: 0.9,
+      participants: [],
+      artifacts: [],
+      model: 'm',
+      promptVersion: 'v1',
+      createdAt: 1,
+    });
+    watermarks.touch(K, 'slack', 0);
+    clock.set(40 * MIN);
+
+    const justLaunched = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      layer1ActiveSince: clock.now(),
+      onSynthesize: async (k) => {
+        synthesized.push(k);
+      },
+    });
+    await justLaunched.tick();
+    expect(synthesized).toEqual([K]);
   });
 });
 

@@ -25,6 +25,18 @@ vi.mock('electron', () => ({
   clipboard: { writeText },
 }));
 
+// `connect()`'s success path binds a loopback socket and exchanges the code
+// over the network. Both are `@cr/ingest` primitives with their own tests, so
+// for the hook tests below the catcher is replaced by a scripted one and
+// `fetch` is stubbed per test; everything else in `@cr/ingest` stays real.
+// `vi.hoisted` because this file also imports `@cr/ingest` statically, and the
+// mock factory must not touch a `const` that has not been initialised yet.
+const ingestMocks = vi.hoisted(() => ({ startLoopbackServer: vi.fn() }));
+vi.mock('@cr/ingest', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@cr/ingest')>()),
+  startLoopbackServer: ingestMocks.startLoopbackServer,
+}));
+
 const { PROVIDERS, authorizeUrl, connect, ensureFreshTokens, parseSource, reasonFor, toTokens } =
   await import('../src/ipc/oauth.js');
 
@@ -249,6 +261,94 @@ describe('connect: the not_configured gate', () => {
     await connect('slack', { vault: unreachableVault, config: configWith({ gmail: {} }) });
     expect(openExternal).not.toHaveBeenCalled();
     expect(unreachableVault.store).not.toHaveBeenCalled();
+  });
+
+  it('never reaches the onConnected hook', async () => {
+    const onConnected = vi.fn();
+    await connect('slack', {
+      vault: unreachableVault,
+      config: configWith(undefined),
+      onConnected,
+    });
+    expect(onConnected).not.toHaveBeenCalled();
+  });
+});
+
+describe('connect: the onConnected hook', () => {
+  /** A fresh `Response` per call — a body can only be read once. */
+  const tokenResponse = (): Response =>
+    jsonResponse({ access_token: 'ya29.test', refresh_token: 'r-1', expires_in: 3600 });
+
+  /** A catcher that "receives" the redirect at once, echoing the state it was given. */
+  const scriptedCatcher = (): void => {
+    ingestMocks.startLoopbackServer.mockImplementation(async (state: string) => ({
+      host: '127.0.0.1',
+      port: 4242,
+      result: Promise.resolve({ code: 'auth-code', state }),
+    }));
+  };
+
+  const storingVault = () => {
+    const store = vi.fn(async () => undefined);
+    return { vault: { store } as unknown as TokenVault, store };
+  };
+
+  it('fires once, with the source, and only after the tokens are stored', async () => {
+    scriptedCatcher();
+    vi.stubGlobal('fetch', vi.fn(async () => tokenResponse()));
+    const { vault, store } = storingVault();
+    const onConnected = vi.fn();
+
+    const result = await connect('gmail', {
+      vault,
+      config: configWith({ gmail: { clientId: 'cid', clientSecret: 'sec' } }),
+      onConnected,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(onConnected).toHaveBeenCalledTimes(1);
+    expect(onConnected).toHaveBeenCalledWith('gmail');
+    // Ordering is the whole point: the poll the hook triggers must find tokens.
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(store.mock.invocationCallOrder[0]!).toBeLessThan(
+      onConnected.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('is not called when the token exchange fails', async () => {
+    scriptedCatcher();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'invalid_grant' })));
+    const { vault, store } = storingVault();
+    const onConnected = vi.fn();
+
+    const result = await connect('gmail', {
+      vault,
+      config: configWith({ gmail: { clientId: 'cid' } }),
+      onConnected,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(store).not.toHaveBeenCalled();
+    expect(onConnected).not.toHaveBeenCalled();
+  });
+
+  it('a throwing hook is logged, and does not turn a completed connect into a failure', async () => {
+    scriptedCatcher();
+    vi.stubGlobal('fetch', vi.fn(async () => tokenResponse()));
+    const { vault, store } = storingVault();
+    const onConnected = vi.fn(() => {
+      throw new Error('poller is gone');
+    });
+
+    const result = await connect('gmail', {
+      vault,
+      config: configWith({ gmail: { clientId: 'cid' } }),
+      onConnected,
+    });
+
+    // The tokens ARE stored; that is the fact the renderer is told about.
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: true });
   });
 });
 
