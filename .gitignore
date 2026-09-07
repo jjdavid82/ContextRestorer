@@ -36,6 +36,7 @@ Thumbs.db
 # add an explicit `!.vscode/extensions.json` later if the team wants to share
 # recommended extensions).
 .vscode/
+.vs/
 .idea/
 
 # Local env overrides, if any are ever introduced — none exist today, but a

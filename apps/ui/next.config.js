@@ -7,8 +7,17 @@
  * NOTE: `@cr/ui` is `"type": "module"`, so this `.js` file is ESM and must use
  * `export default` rather than `module.exports`.
  *
+ * `withPigment` compiles MUI's `styled()` calls and our `sx` usage to a static
+ * CSS file at build time (zero runtime `<style>` injection), which is what lets
+ * a component library run under the shell's strict CSP. The theme in
+ * `mui-theme.mjs` is resolved here, at build time. See
+ * `specs/2026-09-07-ui-redesign/mui-redesign-plan.md`.
+ *
  * @type {import('next').NextConfig}
  */
+import { withPigment } from '@pigment-css/nextjs-plugin';
+import { theme } from './mui-theme.mjs';
+
 const nextConfig = {
   // Emit a static site into `out/` instead of a server bundle.
   output: 'export',
@@ -30,4 +39,9 @@ const nextConfig = {
   trailingSlash: true,
 };
 
-export default nextConfig;
+const pigmentConfig = {
+  transformLibraries: ['@mui/material'],
+  theme,
+};
+
+export default withPigment(nextConfig, pigmentConfig);

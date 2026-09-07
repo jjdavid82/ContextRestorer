@@ -1,5 +1,9 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
 import { useState, type ReactNode } from 'react';
 
 import {
@@ -7,21 +11,19 @@ import {
   readSavedBriefingWindowStart,
   writeBriefingWindowStart,
 } from '../../lib/briefingWindow';
+import { PanelHeading } from './PanelHeading';
 
 /**
- * The "Brief me on what I missed" lookback start — now an OVERRIDE, not the
- * primary mechanism (F-2).
+ * The briefing lookback start — an OVERRIDE, not the primary mechanism (F-2).
  *
- * This control used to be the only thing that decided how far back a briefing
- * looked, defaulting to 30 days ago and never moving unless edited by hand, so
- * the button re-briefed the same month on every press. The default is now the
- * resume point — where the user last tapped "I'm caught up" — and this field
- * exists for the genuine case of wanting to look further back than that.
+ * The default is the resume point (where the user last tapped "I'm caught up");
+ * this field exists for the genuine case of wanting to look further back.
+ * "Unset" is a real, reachable state — the empty string means it, and
+ * `clearBriefingWindowStart` removes the key rather than writing a date, so Home
+ * can tell "the user asked for a fixed start" apart from "never touched this."
+ * Saved on every change — there is no separate Save.
  *
- * Consequently "unset" is a real, reachable state and the empty string means
- * it: `clearBriefingWindowStart` removes the key rather than writing a date, so
- * the Home page can tell "the user asked for 30 days" apart from "the user has
- * never touched this." Saved on every change — there is no separate "Save".
+ * No bridge here: the value lives in `localStorage` via `lib/briefingWindow`.
  */
 export default function BriefingWindowSettings(): ReactNode {
   const [windowStartInput, setWindowStartInput] = useState<string>(
@@ -35,47 +37,43 @@ export default function BriefingWindowSettings(): ReactNode {
     else writeBriefingWindowStart(value);
   };
 
-  const clear = (): void => update('');
-
   return (
-    <section className="card">
-      <h2>Briefing range</h2>
-      <p>
-        <small>
-          By default, &ldquo;Brief me on what I missed&rdquo; starts where you last tapped
-          &ldquo;I&rsquo;m caught up&rdquo; and runs through now. Set a date here only to look
-          further back than that. &ldquo;Waiting on you&rdquo; ignores this either way — it
-          always shows every open obligation, regardless of age.
-        </small>
-      </p>
-      <div className="form-field">
-        <label className="form-field__label" htmlFor="briefing-window-start">
-          Start from (optional)
-        </label>
-        <input
+    <Box>
+      <PanelHeading
+        title="Briefing window"
+        lead={
+          'By default, a briefing starts where you last tapped "I’m caught up" and runs through ' +
+          'now. Set a date here only to look further back. "Waiting on you" ignores this either ' +
+          'way — it always shows every open obligation, regardless of age.'
+        }
+      />
+
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 360 }}>
+        <TextField
           id="briefing-window-start"
           type="datetime-local"
+          size="small"
+          label="Start from (optional)"
           value={windowStartInput}
           onChange={(e) => update(e.target.value)}
+          slotProps={{ inputLabel: { shrink: true } }}
         />
-      </div>
-      <p aria-live="polite">
-        <small>
+        <Typography aria-live="polite" sx={{ fontSize: '0.8rem', color: 'text.secondary' }}>
           {windowStartInput === ''
             ? 'No override — using where you last caught up.'
             : 'Override active — every briefing will start from this date until you clear it.'}
-        </small>
-      </p>
-      <p>
-        <button
-          type="button"
-          className="btn btn--secondary"
-          onClick={clear}
-          disabled={windowStartInput === ''}
-        >
-          Clear override
-        </button>
-      </p>
-    </section>
+        </Typography>
+        <Box>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => update('')}
+            disabled={windowStartInput === ''}
+          >
+            Clear override
+          </Button>
+        </Box>
+      </Box>
+    </Box>
   );
 }

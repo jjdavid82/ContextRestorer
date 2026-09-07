@@ -1,94 +1,78 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
 
 /**
  * One briefing bullet: the claim sentence, its citation chip, and — when the
  * model was unsure — a visible low-confidence flag (Task 3.6, FR-6).
  *
- * The citation chip is a real `<button>`, never a `<span onClick>`: it is the
- * entry point to drill-down provenance, and provenance that only mouse users
- * can reach is provenance half the point of the feature has lost (NFR-9). The
- * button carries `.cr-interactive`, whose `:focus-visible` outline is defined
- * in `globals.css`.
+ * The citation chip is a real `<button>` (MUI `Chip clickable` with
+ * `component="button"`), never a `<span onClick>`: it is the entry point to
+ * drill-down provenance, and provenance only mouse users can reach is half the
+ * point of the feature lost (NFR-9).
+ *
+ * Kept as an `<li>` with the same accessible tree as before the MUI restyle —
+ * the citation chip's accessible name is still {@link CITATION_CHIP_LABEL}, the
+ * low-confidence flag still carries `role="note"` + the words "low confidence"
+ * and `data-testid="low-confidence-flag"` — so `briefingView.test.tsx` reads it
+ * unchanged. Only the visual chrome is MUI now.
  */
 
-/**
- * The chip label every citation shares, regardless of source or which claim
- * it is attached to.
- *
- * The chip's job is "open provenance", not "identify the artifact" — an
- * artifact id or a source name read as a label add nothing a user acts on,
- * only inconsistency between callers that happened to format it differently
- * (`PendingSection` vs `BriefingView` used to disagree on this before both
- * were pointed at this constant).
- */
 export const CITATION_CHIP_LABEL = 'sources';
 
 /**
  * Claims at or below this confidence get a visible "verify this" flag.
  *
- * DUPLICATED ON PURPOSE from `LOW_CONFIDENCE_FLAG_THRESHOLD` in
- * `@cr/ai`'s `src/layer2/pending.ts` (`confidence < 0.5` is flagged). The
- * renderer deliberately does not depend on `@cr/ai`: that package pulls in
- * `@cr/store`, and therefore `better-sqlite3`, a native module the statically
- * exported UI bundle must never touch. Dragging a native-module dependency
- * chain into the browser bundle to share one float would be a bad trade.
- *
- * If the AI threshold moves, move this with it.
+ * DUPLICATED ON PURPOSE from `LOW_CONFIDENCE_FLAG_THRESHOLD` in `@cr/ai`'s
+ * `src/layer2/pending.ts` (`confidence < 0.5` is flagged). The renderer
+ * deliberately does not depend on `@cr/ai`: that package pulls in `@cr/store`,
+ * and therefore `better-sqlite3`, a native module the statically exported UI
+ * bundle must never touch. If the AI threshold moves, move this with it.
  */
 export const LOW_CONFIDENCE_FLAG_THRESHOLD = 0.5;
 
-/**
- * Leading words of every low-confidence flag.
- *
- * Kept as a separate constant from the advisory that follows it so both the
- * claim-level and the pending-level flag (see `PENDING_LOW_CONFIDENCE_NOTE` in
- * `PendingSection.tsx`) open with the same three words: the *state* is always
- * named in words, and only the *advice* varies by context.
- */
+/** Leading words of every low-confidence flag (claim-level and pending-level). */
 export const LOW_CONFIDENCE_PREFIX = 'low confidence';
 
-/**
- * Default advisory for a claim the model was unsure about.
- *
- * Pending items override this with the design's §7.6 wording, which is written
- * for the "Waiting on you" case specifically.
- */
+/** Default advisory for a claim the model was unsure about. */
 export const DEFAULT_LOW_CONFIDENCE_NOTE = 'verify before acting';
 
 export interface ClaimBulletProps {
   /** The rendered claim sentence. */
   text: string;
   /**
-   * Identifier handed to `claim.drilldown` when the chip is clicked.
-   *
-   * Null when the caller has nothing to cite (template-mode connective text) —
-   * in that case no chip is rendered at all, because a chip that drills into
-   * nothing is a broken promise.
-   *
-   * A *factual* uncited claim never gets this far: the citation gate drops it
-   * before persistence (Task 3.3/3.4, §7.6 + T-4), and `PendingSection` drops
-   * uncited pending items as a second line of defence.
+   * Identifier handed to `claim.drilldown` when the chip is clicked. Null when
+   * the caller has nothing to cite (template-mode connective text) — no chip is
+   * rendered then, because a chip that drills into nothing is a broken promise.
    */
   claimId?: string | null;
   /** Chip label — every caller passes {@link CITATION_CHIP_LABEL}. Null hides the chip. */
   citationLabel?: string | null;
   /** Model confidence in [0, 1]. Omitted for claims that carry no score. */
   confidence?: number;
-  /**
-   * Advisory shown after `LOW_CONFIDENCE_PREFIX` when the flag fires (Task 4.5).
-   *
-   * Defaults to the claim-level phrasing; `PendingSection` passes the §7.6
-   * pending-item wording instead. Low confidence is *always* shown, never
-   * suppressed — suppression is reserved for uncited content (§7.6, T-4).
-   */
+  /** Advisory shown after `LOW_CONFIDENCE_PREFIX` when the flag fires (Task 4.5). */
   lowConfidenceNote?: string;
   /** Invoked with `claimId` when the citation chip is activated. */
   onCitationClick?: (claimId: string) => void;
   /** Slot for the drill-down panel and feedback controls belonging to this claim. */
   children?: ReactNode;
 }
+
+// The `<li>` carries no borders/spacing of its own — the containing list
+// (`PendingSection`, `BriefingView`'s changed list) styles `& > li` so pending
+// items can read as accent cards while changed items are a hairline-ruled list.
+const LI_SX = { listStyle: 'none' } as const;
+
+const META_SX = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 0.75,
+  mt: 0.75,
+} as const;
 
 export function ClaimBullet({
   text,
@@ -101,53 +85,54 @@ export function ClaimBullet({
 }: ClaimBulletProps): ReactNode {
   const lowConfidence = confidence !== undefined && confidence < LOW_CONFIDENCE_FLAG_THRESHOLD;
   const chipVisible = claimId !== null && citationLabel !== null;
-
   const hasMeta = chipVisible || lowConfidence;
 
   return (
-    <li className="claim-bullet">
-      {/* #1a1a1a on #ffffff — 16.1:1, comfortably past the 4.5:1 floor (NFR-9). */}
-      <span className="claim-bullet__text">{text}</span>
-      {/* The citation chip, deep link and low-confidence flag are metadata
-          ABOUT the claim, not part of its sentence — given their own row so a
-          short claim does not leave them sitting inline right after the text
-          (where a long claim would have wrapped them below anyway, making the
-          layout inconsistent from one bullet to the next). */}
+    <Box component="li" sx={LI_SX}>
+      <Typography sx={{ color: 'text.primary', lineHeight: 1.55 }}>{text}</Typography>
+
       {hasMeta ? (
-        <div className="claim-bullet__meta">
+        <Box sx={META_SX}>
           {chipVisible ? (
-            <button
+            <Chip
+              component="button"
               type="button"
-              // #0b5fff on #eef3ff — 4.8:1. Chips read as links without being links:
-              // they open in-app provenance, they do not navigate.
-              className="cr-interactive cr-chip claim-bullet__chip"
+              clickable
+              size="small"
+              variant="outlined"
+              color="primary"
+              label={citationLabel}
               onClick={() => onCitationClick?.(claimId)}
-            >
-              {citationLabel}
-            </button>
+            />
           ) : null}
           {lowConfidence ? (
-            // NFR-9: not a colour-only signal. The words "low confidence" plus the
-            // advisory carry the whole meaning, so the flag survives greyscale,
-            // colour blindness, a 200% zoom and a screen reader; the tint and the
-            // border are redundant reinforcement, never the message. `aria-label`
-            // restates it for assistive tech minus the decorative glyph.
-            // #7a3e00 on #ffffff — 8.4:1, past the 4.5:1 floor.
-            <span
+            // NFR-9: not a colour-only signal. The words "low confidence" plus
+            // the advisory carry the whole meaning; the tint and the ⚠ are
+            // redundant reinforcement. The glyph is `aria-hidden` — "warning
+            // sign" read aloud adds nothing — and `aria-label` restates the
+            // whole flag for assistive tech.
+            <Chip
+              size="small"
+              variant="outlined"
+              color="warning"
               role="note"
               aria-label={`Low confidence: ${lowConfidenceNote}`}
               data-testid="low-confidence-flag"
-              className="claim-bullet__low-confidence"
-            >
-              {/* Decorative only — "warning sign" read aloud adds nothing to the text. */}
-              <span aria-hidden="true">⚠ </span>
-              {LOW_CONFIDENCE_PREFIX}: {lowConfidenceNote}
-            </span>
+              label={
+                <>
+                  <Box component="span" aria-hidden="true">
+                    {'⚠ '}
+                  </Box>
+                  {`${LOW_CONFIDENCE_PREFIX}: ${lowConfidenceNote}`}
+                </>
+              }
+            />
           ) : null}
-        </div>
+        </Box>
       ) : null}
+
       {children}
-    </li>
+    </Box>
   );
 }
 

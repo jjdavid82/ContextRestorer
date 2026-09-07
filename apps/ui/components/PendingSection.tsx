@@ -1,5 +1,8 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
 
 import type { PendingItemView } from '../types/bridge';
@@ -9,49 +12,40 @@ import { SectionInfoIcon } from './SectionInfoIcon';
 /**
  * The "Waiting on you" section (Task 3.6).
  *
- * Painted straight from `briefing:pending` — i.e. from `pending_items` rows the
+ * Painted straight from `briefing:pending` — from `pending_items` rows the
  * extraction layer already produced — *before* the narrative starts streaming.
- * That ordering is the whole reason this section is a separate component: it is
- * the app's answer to "first token under 5s is gated on retrieval" (NFR-2). The
- * user sees the thing they owe someone within a few hundred milliseconds, while
- * the LLM is still warming up.
+ * That ordering is the whole reason this is a separate component: it is the
+ * app's answer to "first token under 5s is gated on retrieval" (NFR-2).
  *
- * Streamed claims that the model also filed under "Waiting on you" are appended
- * beneath the pending list via `children`, so the section stays one coherent
- * block instead of appearing twice under the same heading.
+ * In the Option 3 redesign this section is *pinned and lifted*: each obligation
+ * is its own accent-left-bordered card at the top of the briefing, visually
+ * ahead of the streamed "what changed" list, with the "Mark resolved" action
+ * inline. Streamed claims the model also filed here are appended via `children`.
  *
- * Task 4.5 adds the §7.6 confidence contract to this section: a low-confidence
- * item is shown *with a flag* (`PENDING_LOW_CONFIDENCE_NOTE`), never hidden,
- * while an item with no citation is hidden and never flagged.
+ * §7.6 confidence contract (Task 4.5): a low-confidence item is shown *with a
+ * flag*, never hidden; an item with no citation is hidden and never flagged.
  */
 
 /**
  * The §7.6 advisory shown on a low-confidence pending item (Task 4.5).
  *
- * VERBATIM from the design doc's §7.6 "Confidence flagging" bullet: "Low-confidence
- * items are still shown to the user but with a visible flag (e.g. 'this might be
- * waiting on you — verify in the source'). User decides whether to act."
- *
- * The wording is deliberate and worth preserving: it hedges ("might"), names the
- * remedy ("verify in the source") and leaves the decision with the user. Do not
- * soften it into "possibly relevant" or harden it into "you owe someone a reply".
+ * VERBATIM from the design doc's §7.6: "Low-confidence items are still shown to
+ * the user but with a visible flag (e.g. 'this might be waiting on you — verify
+ * in the source'). User decides whether to act." The wording hedges ("might"),
+ * names the remedy ("verify in the source") and leaves the decision with the
+ * user — do not soften or harden it.
  */
 export const PENDING_LOW_CONFIDENCE_NOTE = 'this might be waiting on you — verify in the source';
 
 /**
  * True when a pending item has an artifact to point at.
  *
- * Defence in depth, not routine filtering (§7.6, T-4): "items without source
- * references are suppressed". `pending_items.citation_artifact_id` is nullable in
- * the store, so `PendingItemView.citationArtifactId` is nullable here, and an
- * uncited row would otherwise reach the user as an unverifiable assertion. Note
- * the asymmetry that §7.6 draws and this component implements:
- *
+ * Defence in depth (§7.6, T-4): "items without source references are
+ * suppressed". The asymmetry §7.6 draws and this implements:
  *   - LOW CONFIDENCE  → shown, with a flag. Never hidden.
  *   - NO CITATION     → hidden. Never shown with a flag.
- *
- * The empty-string check is not paranoia about types but about serialisation: a
- * value that crossed the context bridge as `''` is as uncitable as `null`.
+ * The empty-string check is about serialisation: a value that crossed the
+ * bridge as `''` is as uncitable as `null`.
  */
 function hasCitation(citationArtifactId: string | null): citationArtifactId is string {
   return citationArtifactId !== null && citationArtifactId.trim() !== '';
@@ -71,20 +65,48 @@ export interface PendingSectionProps {
   /**
    * Per-item slot (drill-down panel, feedback); receives the item's claim id
    * and, when {@link PendingSectionProps.onResolve} is wired, the "Mark
-   * resolved" button as a second argument — passed through rather than
-   * rendered here so it lands INSIDE `FeedbackControls`' row (same line as
-   * Relevant/Not relevant/Wrong) instead of on a line of its own.
+   * resolved" button as a second argument — passed through rather than rendered
+   * here so it lands INSIDE `FeedbackControls`' row.
    */
   renderDetail?: (claimId: string, resolveAction?: ReactNode) => ReactNode;
-  /**
-   * Invoked with the pending item's own `pendingId` — NOT its citation artifact
-   * id — when the user marks it dealt with. Omitted entirely hides the control,
-   * matching every other optional callback in this component.
-   */
+  /** Invoked with the pending item's own `pendingId` when the user marks it dealt with. */
   onResolve?: (pendingId: string) => void;
   /** Streamed "Waiting on you" claims, rendered beneath the pending items. */
   children?: ReactNode;
 }
+
+const HEADING_SX = { display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '1.05rem', mb: 1.5 } as const;
+
+// Each obligation is an accent-left card. Styled on the list so `ClaimBullet`
+// stays a dumb `<li>` (a per-variant `sx` on the child can't be statically
+// extracted by Pigment).
+const PENDING_LIST_SX = {
+  listStyle: 'none',
+  p: 0,
+  m: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1.25,
+  '& > li': {
+    border: 1,
+    borderColor: 'divider',
+    borderLeft: 3,
+    borderLeftColor: 'primary.main',
+    borderRadius: 1,
+    bgcolor: 'background.paper',
+    p: 1.75,
+  },
+} as const;
+
+const QUOTE_SX = {
+  m: 0,
+  mt: 1,
+  pl: 1.25,
+  borderLeft: 2,
+  borderColor: 'divider',
+  color: 'text.primary',
+  fontStyle: 'normal',
+} as const;
 
 export function PendingSection({
   items,
@@ -95,9 +117,8 @@ export function PendingSection({
   children,
 }: PendingSectionProps): ReactNode {
   // Filtered before the empty check, so a page of uncited items reads as
-  // "nothing is waiting on you" rather than as an empty bulleted list.
-  // `flatMap` rather than `filter` so the survivors are typed with a non-null
-  // `citationArtifactId` — a field-level type guard cannot narrow the object.
+  // "nothing is waiting on you" rather than an empty list. `flatMap` so the
+  // survivors are typed with a non-null `citationArtifactId`.
   const citedItems: CitedPendingItem[] = items.flatMap((item) =>
     hasCitation(item.citationArtifactId)
       ? [{ ...item, citationArtifactId: item.citationArtifactId }]
@@ -105,18 +126,14 @@ export function PendingSection({
   );
 
   return (
-    <section aria-labelledby="cr-section-waiting-on-you">
+    <Box component="section" aria-labelledby="cr-section-waiting-on-you">
       {/*
         P2: the heading is a COUNT, so the reader learns the size of the job
-        before reading any of it. Counted over CITED items only — the same set
-        that actually renders — so the number can never promise a row that §7.6
-        then suppresses.
-
-        A-4: this list is deliberately UNCAPPED. AC-3 targets >= 90% recall, and
-        an obligation hidden behind a display cap is a recall miss the user
-        cannot see; only the changed list is capped.
+        before reading any of it. Counted over CITED items only. A-4: this list
+        is deliberately UNCAPPED — an obligation hidden behind a display cap is
+        a recall miss the user cannot see.
       */}
-      <h3 id="cr-section-waiting-on-you" className="section-heading">
+      <Typography component="h3" id="cr-section-waiting-on-you" sx={HEADING_SX}>
         {loading
           ? 'Waiting on you'
           : citedItems.length === 0
@@ -125,26 +142,21 @@ export function PendingSection({
                 citedItems.length === 1 ? 's' : ''
               } you`}
         <SectionInfoIcon meaning="Outstanding obligations that are on this person right now" />
-      </h3>
+      </Typography>
 
       {loading ? (
-        // #595959 on #ffffff — 7.0:1.
-        <p className="muted-note">Checking what needs your reply…</p>
+        <Typography sx={{ color: 'text.secondary' }}>Checking what needs your reply…</Typography>
       ) : citedItems.length === 0 ? (
-        <p className="muted-note">Nothing is waiting on you right now.</p>
+        <Typography sx={{ color: 'text.secondary' }}>Nothing is waiting on you right now.</Typography>
       ) : (
-        <ul className="bullet-list">
+        <Box component="ul" sx={PENDING_LIST_SX}>
           {citedItems.map((item) => {
             const claimId = item.citationArtifactId;
             const resolveAction =
               onResolve === undefined ? undefined : (
-                <button
-                  type="button"
-                  className="cr-interactive feedback-button"
-                  onClick={() => onResolve(item.pendingId)}
-                >
+                <Button size="small" variant="outlined" onClick={() => onResolve(item.pendingId)}>
                   Mark resolved
-                </button>
+                </Button>
               );
             return (
               <ClaimBullet
@@ -157,28 +169,25 @@ export function PendingSection({
                 {...(onCitationClick === undefined ? {} : { onCitationClick })}
               >
                 {/*
-                  P4: verbatim evidence, inline, for obligations only.
-
-                  This is the artifact's OWN text (`sourceQuote`, resolved in
-                  `ipc/briefing.ts`), never model output — which is the whole
-                  point. An item asserting that someone is waiting on the user is
-                  the claim they most need to check, and AC-4 precision measured
-                  48%; making them click through to find that out is the wrong
-                  default. The changed list paraphrases instead, because being
-                  wrong there is cheap.
+                  P4: verbatim evidence, inline, for obligations only. This is
+                  the artifact's OWN text (`sourceQuote`, resolved in
+                  `ipc/briefing.ts`), never model output — the claim they most
+                  need to check should not require a click to see.
                 */}
                 {item.sourceQuote !== null ? (
-                  <blockquote className="pending-quote">{item.sourceQuote}</blockquote>
+                  <Typography component="blockquote" sx={QUOTE_SX}>
+                    {item.sourceQuote}
+                  </Typography>
                 ) : null}
                 {renderDetail !== undefined ? renderDetail(claimId, resolveAction) : resolveAction}
               </ClaimBullet>
             );
           })}
-        </ul>
+        </Box>
       )}
 
       {children}
-    </section>
+    </Box>
   );
 }
 

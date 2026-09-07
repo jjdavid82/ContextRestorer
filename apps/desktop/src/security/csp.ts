@@ -40,12 +40,30 @@ import { APP_SCHEME, SCRIPT_NONCE_HEADER } from '../protocol.js';
  * `script-src` allow-lists here. A response with no nonce (any non-HTML
  * resource) gets the bare `'self'` form.
  *
- * There is deliberately no `'unsafe-inline'` anywhere and no host in
- * `connect-src`.
+ * `connect-src 'none'` has no host and `script-src` has no `'unsafe-inline'` —
+ * both non-negotiable. The one `'unsafe-inline'` in the policy is scoped to
+ * `style-src-attr` (inline `style` ATTRIBUTES) and is a deliberate exception
+ * for the MUI component library — see
+ * `specs/2026-09-07-ui-redesign/mui-redesign-plan.md` (D-1):
+ *
+ *   - `style-src-attr 'unsafe-inline'` — MUI writes per-instance CSS variables
+ *     (`--Paper-shadow`, variant colours) and overlay positioning (Popper
+ *     transforms) as inline `style` attributes at render time. A style
+ *     attribute cannot carry a nonce, so admitting them is all-or-nothing.
+ *   - `style-src-elem 'self'` — runtime `<style>` ELEMENT injection stays
+ *     blocked. This is the half that matters: untrusted ingested content
+ *     (Slack/email/model output rendered in the briefing) still cannot inject
+ *     a stylesheet. Pigment CSS extracts every real stylesheet at build time,
+ *     so the app itself never needs a runtime `<style>`.
+ *
+ * `connect-src 'none'` + `img-src 'self' data:` already remove the CSS-based
+ * exfiltration vectors (`background: url(https://attacker/?…)` cannot load),
+ * so the residual risk of an inline style attribute here is cosmetic.
  */
 export function buildContentSecurityPolicy(nonce: string | undefined): string {
   const scriptSrc = nonce === undefined ? "script-src 'self'" : `script-src 'self' 'nonce-${nonce}'`;
-  return `default-src 'self'; connect-src 'none'; img-src 'self' data:; ${scriptSrc}`;
+  const styleSrc = "style-src-elem 'self'; style-src-attr 'unsafe-inline'";
+  return `default-src 'self'; connect-src 'none'; img-src 'self' data:; ${scriptSrc}; ${styleSrc}`;
 }
 
 /** The response header name, spelled canonically. */

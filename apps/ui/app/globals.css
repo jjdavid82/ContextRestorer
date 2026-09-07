@@ -1,21 +1,106 @@
 /*
- * Global stylesheet for the renderer.
+ * App-shell stylesheet for the renderer.
  *
- * Exists because the Electron shell's CSP has no `style-src` directive, so it
- * falls back to `default-src 'self'`, which blocks every inline `style="..."`
- * attribute (see `apps/desktop/src/security/csp.ts`). A `<link>`/`@import`ed
- * stylesheet is a normal same-origin resource and is not affected.
+ * Post-redesign, styling is MUI + Pigment CSS (build-time extraction — see
+ * `mui-theme.mjs` and `next.config.js`). What remains here is the narrow set of
+ * rules MUI does not own: a couple of nav-rail overrides that can't be a
+ * statically-analyzable `sx` value, plus the design tokens still consumed by
+ * screens not yet migrated to MUI (home/settings/onboarding — being converted
+ * per specs/2026-09-07-ui-redesign/mui-redesign-plan.md). Everything under
+ * "Design tokens" and below is legacy and shrinks as each screen migrates.
  *
- * Design tokens live at the top as CSS custom properties (`--cr-*`), redefined
- * under `prefers-color-scheme: dark` for automatic dark mode — no manual
- * toggle, no JS. Every rule below should reference a token rather than a
- * literal color/spacing value where one exists for that value; one-off values
- * with no reused meaning are left as plain literals rather than forced onto
- * the scale.
+ * Inline `style="..."` attributes are now allowed by the shell CSP
+ * (`style-src-attr 'unsafe-inline'`, for MUI); runtime `<style>` elements are
+ * still blocked (`style-src-elem 'self'`).
  */
 
 /* -------------------------------------------------------------------------- */
-/* Design tokens                                                              */
+/* Minimal reset                                                              */
+/* -------------------------------------------------------------------------- */
+
+/* MUI's `<CssBaseline>` would give us these, but it is a runtime `<GlobalStyles>`
+   `<style>` element the shell CSP blocks — so the two rules the layout actually
+   depends on are here instead. `box-sizing` in particular: without it every
+   `maxWidth` in an `sx` is content-box and panels render 48px wide of intent. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  /* The Electron window paints its own ground behind the page; without an
+     explicit background here the main content area shows through as the OS
+     default (white) — wrong in dark mode, and not the intended canvas tint in
+     light. The `--mui-*` vars come from the Pigment-extracted stylesheet and
+     already switch on `prefers-color-scheme`. */
+  background: var(--mui-palette-background-default);
+  color: var(--mui-palette-text-primary);
+  font-family: var(--mui-typography-fontFamily, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Focus visibility (NFR-9)                                                    */
+/* -------------------------------------------------------------------------- */
+
+/* MUI components carry their own `.Mui-focusVisible` treatment, but bare
+   elements the app renders directly — the source deep links (`ExternalLink`),
+   the inline `<a>` in copy, the `SectionInfoIcon` badge, `<summary>` in the
+   diagnostics detail sections — need an explicit ring past the 3:1 non-text
+   contrast floor. Keyboard users only; mouse users are not sprayed with it. */
+a:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--mui-palette-primary-main);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* MUI's default focus-visible on flat (rippleless) buttons is a faint tint;
+   make it a real ring so it survives greyscale and a 200% zoom. */
+.MuiButtonBase-root.Mui-focusVisible {
+  outline: 3px solid var(--mui-palette-primary-main);
+  outline-offset: 2px;
+}
+
+/* Reduced motion: MUI does not disable its own transitions for this preference
+   by default. Collapse/Fade/Grow become instant; the loading spinner keeps
+   turning (it conveys "still working") but everything decorative stops. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .MuiCircularProgress-svg,
+  .MuiCircularProgress-circle {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* MUI app-shell overrides (components/AppShell.tsx)                          */
+/* -------------------------------------------------------------------------- */
+
+/* Active nav item — accent tint + bold label. Done here rather than in `sx`
+   because the value is conditional on the current route and Pigment can only
+   extract static `sx`. */
+.MuiListItemButton-root.Mui-selected {
+  background: var(--mui-palette-primary-main);
+  color: var(--mui-palette-primary-contrastText);
+}
+.MuiListItemButton-root.Mui-selected:hover {
+  background: var(--mui-palette-primary-main);
+}
+.MuiListItemButton-root.Mui-selected .MuiListItemText-primary {
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Design tokens (legacy — consumed by not-yet-migrated screens)             */
 /* -------------------------------------------------------------------------- */
 
 :root {

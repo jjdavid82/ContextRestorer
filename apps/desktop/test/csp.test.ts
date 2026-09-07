@@ -68,15 +68,17 @@ beforeEach(() => {
 /* -------------------------------------------------------------------------- */
 
 describe('buildContentSecurityPolicy', () => {
-  it('is exactly the four required directives with no nonce', () => {
+  it('is exactly the required directives with no nonce', () => {
     expect(buildContentSecurityPolicy(undefined)).toBe(
-      "default-src 'self'; connect-src 'none'; img-src 'self' data:; script-src 'self'",
+      "default-src 'self'; connect-src 'none'; img-src 'self' data:; script-src 'self'; " +
+        "style-src-elem 'self'; style-src-attr 'unsafe-inline'",
     );
   });
 
   it('allow-lists exactly one nonce in script-src, alongside self', () => {
     expect(buildContentSecurityPolicy('abc123')).toBe(
-      "default-src 'self'; connect-src 'none'; img-src 'self' data:; script-src 'self' 'nonce-abc123'",
+      "default-src 'self'; connect-src 'none'; img-src 'self' data:; " +
+        "script-src 'self' 'nonce-abc123'; style-src-elem 'self'; style-src-attr 'unsafe-inline'",
     );
   });
 
@@ -89,11 +91,27 @@ describe('buildContentSecurityPolicy', () => {
     expect(policy).not.toMatch(/connect-src[^;]*(\*|https?:|'self'|data:|ws)/);
   });
 
-  it('allows no unsafe-inline/unsafe-eval script, and no remote images, with or without a nonce', () => {
+  it('keeps script and style-ELEMENT injection locked; only style ATTRIBUTES are unsafe-inline', () => {
     for (const policy of [buildContentSecurityPolicy(undefined), buildContentSecurityPolicy('n')]) {
-      expect(policy).not.toContain('unsafe-inline');
+      // Script: never inline, never eval.
+      expect(policy).toMatch(/script-src 'self'( 'nonce-[^']+')?; style-src-elem/);
+      expect(policy).not.toMatch(/script-src[^;]*unsafe-inline/);
       expect(policy).not.toContain('unsafe-eval');
-      expect(policy).toContain("script-src 'self'");
+
+      // Style ELEMENTS — runtime `<style>` / `<link>`: same-origin only, NOT
+      // unsafe-inline. This is the half that still stops untrusted briefing
+      // content from injecting a stylesheet; Pigment CSS extracts every real
+      // stylesheet at build time so the app needs no runtime `<style>`.
+      expect(policy).toContain("style-src-elem 'self'");
+      expect(policy).not.toMatch(/style-src-elem[^;]*unsafe-inline/);
+
+      // Style ATTRIBUTES — deliberately unsafe-inline. The MUI component library
+      // writes per-instance CSS vars and overlay positioning as inline `style`
+      // attributes, and a style attribute cannot be nonced. See
+      // specs/2026-09-07-ui-redesign/mui-redesign-plan.md (D-1). `connect-src
+      // 'none'` + the `img-src` restriction still remove CSS-based exfiltration.
+      expect(policy).toContain("style-src-attr 'unsafe-inline'");
+
       // `data:` images only (inline SVG/PNG); an `https://attacker/pixel` cannot load.
       expect(policy).toContain("img-src 'self' data:");
       expect(policy).not.toMatch(/img-src[^;]*https?:/);

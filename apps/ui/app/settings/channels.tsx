@@ -1,32 +1,39 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Checkbox from '@mui/material/Checkbox';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import MenuItem from '@mui/material/MenuItem';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
-import { getBridge } from '../../lib/bridge';
+import { getBridge, hasBridge } from '../../lib/bridge';
 import type { DeclaredProject, SelectedSlackChannel, SlackChannel } from '../../types/bridge';
+import { PanelHeading } from './PanelHeading';
 
 /**
  * Slack channel selector (closes Task 1.7's gap).
  *
- * Without a selection, `VaultBackedSlackClient` has no channel to poll and
- * every Slack cycle fails loudly by design — connecting Slack via OAuth is not
- * by itself enough to start ingesting anything. This panel is where that
- * selection is made.
+ * Without a selection, `VaultBackedSlackClient` has no channel to poll and every
+ * Slack cycle fails loudly by design — connecting Slack via OAuth is not by
+ * itself enough to start ingesting. This panel is where that selection is made.
  *
- * The available list is fetched LIVE from Slack (`slack:listAvailable`) every
- * time the panel loads, never cached: channel membership changes on Slack's
- * side, and a stale list would let the user "select" a channel the connected
- * token can no longer see. `not_connected` is rendered as its own message
- * rather than an empty list, since those mean different things — one is "you
- * haven't connected Slack", the other is "there is genuinely nothing to poll".
+ * The available list is fetched LIVE from Slack every time the panel loads,
+ * never cached: channel membership changes on Slack's side, and a stale list
+ * would let the user "select" a channel the connected token can no longer see.
+ * `not_connected` is its own message, not an empty list — "you haven't connected
+ * Slack" and "there is genuinely nothing to poll" are different states.
  *
- * Styled via the shared tokens/control classes in `globals.css`
- * (`.card`, `.field-row`, `.btn`), matching the rest of this settings screen.
+ * Tagging a channel with a project (FR-8 / A-2) gives its threads stakes weight
+ * in the ranker and rebuilds `belongs_to` edges for threads already ingested.
+ * Nothing is inferred — an untagged channel earns no stakes, exactly as every
+ * channel behaved before this control (X-2).
  */
 export default function SlackChannelSettings(): ReactNode {
   const [available, setAvailable] = useState<SlackChannel[]>([]);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
-  /** Declared projects offered by the per-channel tag control (A-2, FR-8). */
   const [projects, setProjects] = useState<DeclaredProject[]>([]);
   /** `channelId -> projectId`; a channel absent from the map is untagged. */
   const [tags, setTags] = useState<ReadonlyMap<string, string>>(new Map());
@@ -58,11 +65,8 @@ export default function SlackChannelSettings(): ReactNode {
       );
 
       if (!listResult.ok) {
-        if (listResult.reason === 'not_connected') {
-          setNotConnected(true);
-        } else {
-          setLoadError(listResult.reason ?? 'could not load Slack channels');
-        }
+        if (listResult.reason === 'not_connected') setNotConnected(true);
+        else setLoadError(listResult.reason ?? 'could not load Slack channels');
         setAvailable([]);
         return;
       }
@@ -73,6 +77,10 @@ export default function SlackChannelSettings(): ReactNode {
   }, []);
 
   useEffect(() => {
+    if (!hasBridge()) {
+      setLoadError('Channel selection is only available inside the Context Restorer desktop app.');
+      return;
+    }
     void refresh();
   }, [refresh]);
 
@@ -99,10 +107,9 @@ export default function SlackChannelSettings(): ReactNode {
     setSaveError(null);
     try {
       // `projectId` is sent EXPLICITLY (never omitted) because this control is
-      // the thing that edits it: omitting it means "leave the tag alone", which
+      // the thing that edits it — omitting means "leave the tag alone", which
       // would make clearing a tag impossible from here. `null` is the cleared
-      // state. Saving also rebuilds `belongs_to` edges for threads already
-      // ingested — see `rebuildProjectLinks`.
+      // state.
       const channels = available
         .filter((c) => selectedIds.has(c.id))
         .map((c) => ({ channelId: c.id, name: c.name, projectId: tags.get(c.id) ?? null }));
@@ -116,90 +123,106 @@ export default function SlackChannelSettings(): ReactNode {
   }, [available, selectedIds, tags]);
 
   return (
-    <section className="card">
-      <h2>Slack channels</h2>
-      <p>
-        <small>
-          Pick which channels Context Restorer should read. Nothing is polled until at least one
-          channel is selected here, even after Slack is connected. Tag a channel with a project to
-          prioritise its threads in your briefing — untagged channels are still read, they just
-          carry no extra weight.
-        </small>
-      </p>
+    <Box>
+      <PanelHeading
+        title="Slack channels"
+        lead="Pick which channels Context Restorer reads — nothing is polled until at least one is selected, even after Slack is connected. Tag a channel with a project to prioritise its threads; untagged channels are still read, they just carry no extra weight."
+      />
 
       {notConnected ? (
-        <p>Connect Slack first, then come back to choose channels.</p>
+        <Typography sx={{ color: 'text.secondary' }}>
+          Connect Slack first, then come back to choose channels.
+        </Typography>
       ) : loadError !== null ? (
-        <p role="alert">Could not load channels: {loadError}</p>
+        <Typography role="alert" sx={{ color: 'error.main' }}>
+          Could not load channels: {loadError}
+        </Typography>
       ) : available.length === 0 ? (
-        <p>No public channels are visible to the connected account.</p>
+        <Typography sx={{ color: 'text.secondary' }}>
+          No public channels are visible to the connected account.
+        </Typography>
       ) : (
-        <ul className="list-reset">
+        <Box
+          component="ul"
+          sx={{
+            listStyle: 'none',
+            p: 0,
+            m: 0,
+            '& > li': { py: 1, borderTop: 1, borderColor: 'divider' },
+            '& > li:first-of-type': { borderTop: 0 },
+          }}
+        >
           {available.map((channel) => (
-            <li key={channel.id} className="field-row">
-              <label>
-                <input
-                  type="checkbox"
-                  disabled={!channel.isMember}
-                  checked={selectedIds.has(channel.id)}
-                  onChange={() => toggle(channel.id)}
-                />{' '}
-                #{channel.name}
-                {/* A token can SEE a public channel via conversations.list without
-                    having joined it, and conversations.history then fails for
-                    every poll cycle. Disabled rather than hidden, so the user
-                    understands why it is missing instead of assuming a bug. */}
-                {!channel.isMember ? (
-                  <>
-                    {' '}
-                    <small>— join this channel in Slack first</small>
-                  </>
-                ) : null}
-              </label>
+            <Box
+              component="li"
+              key={channel.id}
+              sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}
+            >
+              <FormControlLabel
+                sx={{ m: 0 }}
+                control={
+                  <Checkbox
+                    size="small"
+                    disabled={!channel.isMember}
+                    checked={selectedIds.has(channel.id)}
+                    onChange={() => toggle(channel.id)}
+                  />
+                }
+                label={
+                  <Box component="span" sx={{ fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '0.9rem' }}>
+                    #{channel.name}
+                    {/* A token can SEE a public channel without having joined it,
+                        and history then fails every poll. Disabled, not hidden,
+                        so the user understands why it is unavailable. */}
+                    {!channel.isMember ? (
+                      <Box component="span" sx={{ ml: 1, fontFamily: 'inherit', fontSize: '0.8rem', color: 'text.secondary' }}>
+                        — join this channel in Slack first
+                      </Box>
+                    ) : null}
+                  </Box>
+                }
+              />
 
-              {/* FR-8 / FR-5: the stated mapping that gives this channel's
-                  threads stakes weight in the ranker. Shown only for a selected
-                  channel — tagging one the app does not read would set a
-                  priority on nothing. Nothing is inferred here; an untagged
-                  channel simply earns no stakes, which is how every channel
-                  behaved before this control existed (X-2). */}
               {selectedIds.has(channel.id) ? (
                 projects.length === 0 ? (
-                  <small className="muted-note">
-                    {' '}
+                  <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary' }}>
                     Declare a project to prioritise this channel.
-                  </small>
+                  </Typography>
                 ) : (
-                  <label>
-                    {' '}
-                    <small>Project</small>{' '}
-                    <select
-                      value={tags.get(channel.id) ?? ''}
-                      aria-label={`Project for #${channel.name}`}
-                      onChange={(e) => setTag(channel.id, e.target.value)}
-                    >
-                      <option value="">— none —</option>
-                      {projects.map((project) => (
-                        <option key={project.projectId} value={project.projectId}>
-                          {project.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <TextField
+                    select
+                    size="small"
+                    label="Project"
+                    value={tags.get(channel.id) ?? ''}
+                    aria-label={`Project for #${channel.name}`}
+                    onChange={(e) => setTag(channel.id, e.target.value)}
+                    sx={{ minWidth: 180, ml: 'auto' }}
+                  >
+                    <MenuItem value="">— none —</MenuItem>
+                    {projects.map((project) => (
+                      <MenuItem key={project.projectId} value={project.projectId}>
+                        {project.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
                 )
               ) : null}
-            </li>
+            </Box>
           ))}
-        </ul>
+        </Box>
       )}
 
-      {saveError !== null ? <p role="alert">Could not save: {saveError}</p> : null}
+      {saveError !== null ? (
+        <Typography role="alert" sx={{ color: 'error.main', mt: 2 }}>
+          Could not save: {saveError}
+        </Typography>
+      ) : null}
 
       {!notConnected && available.length > 0 ? (
-        <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void save()}>
+        <Button variant="contained" sx={{ mt: 2 }} disabled={busy} onClick={() => void save()}>
           {busy ? 'Saving…' : 'Save selection'}
-        </button>
+        </Button>
       ) : null}
-    </section>
+    </Box>
   );
 }

@@ -1,5 +1,8 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
 import { useCallback, useState, type ReactNode } from 'react';
 
 import { getBridge } from '../lib/bridge';
@@ -8,13 +11,11 @@ import { getBridge } from '../lib/bridge';
  * "I'm caught up" control (Task 3.6).
  *
  * Calls `briefing:caughtUp`, which marks the briefing's deltas as seen so the
- * next briefing starts from here instead of repeating what the user has already
- * read. Because that side effect is invisible, the button has to confirm it
- * happened: it flips to a disabled, acknowledged state on success. A user who
- * cannot tell whether the click landed will click it again, and re-marking is
- * cheap but the doubt is not.
- *
- * No toast system, no global store — a local state flip is the whole feature.
+ * next briefing starts from here instead of repeating what was already read.
+ * Because that side effect is invisible, the button confirms it happened: it
+ * flips to a disabled, acknowledged state on success. A user who cannot tell
+ * whether the click landed will click again — re-marking is cheap but the
+ * doubt is not.
  */
 
 export interface CaughtUpButtonProps {
@@ -58,38 +59,28 @@ export function CaughtUpButton({ briefingId, onCaughtUp }: CaughtUpButtonProps):
   }, [briefingId, onCaughtUp]);
 
   return (
-    <p className="caught-up">
-      <button
-        type="button"
-        className={[
-          'cr-interactive',
-          'caught-up__button',
-          state === 'idle' ? 'caught-up__button--idle' : null,
-          state === 'done' ? 'caught-up__button--done' : null,
-        ]
-          .filter(Boolean)
-          .join(' ')}
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+      <Button
+        size="small"
+        variant={state === 'done' ? 'contained' : 'outlined'}
+        color={state === 'done' ? 'success' : 'primary'}
         disabled={state !== 'idle'}
         onClick={markCaughtUp}
       >
-        {state === 'done'
-          ? '✓ Marked as caught up'
-          : state === 'busy'
-            ? 'Marking…'
-            : "I'm caught up"}
-      </button>
+        {state === 'done' ? '✓ Marked as caught up' : state === 'busy' ? 'Marking…' : "I'm caught up"}
+      </Button>
       {/* Announced, not just recoloured: the confirmation is the entire point. */}
       {state === 'done' ? (
-        <span role="status" className="caught-up__status">
+        <Typography component="span" role="status" sx={{ fontSize: '0.85em', color: 'text.primary' }}>
           Your next briefing will start from here.
-        </span>
+        </Typography>
       ) : null}
       {error !== null ? (
-        <span role="alert" className="caught-up__error">
+        <Typography component="span" role="alert" sx={{ fontSize: '0.85em', color: 'error.main' }}>
           {error}
-        </span>
+        </Typography>
       ) : null}
-    </p>
+    </Box>
   );
 }
 

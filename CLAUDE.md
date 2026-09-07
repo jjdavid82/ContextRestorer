@@ -50,6 +50,15 @@ all `eval`/`bench` runs talk to real Ollama, not a mock.
   actually compiles those.
 - Use `nvm use` for this repo's Node version in-session; do not change the
   global/default `nvm` alias.
+- `apps/ui` styles through **MUI + Pigment CSS** (`@pigment-css/*` is pinned
+  pre-1.0 — `0.0.x` — and version-sensitive to Next/React; pin exact versions,
+  don't range-bump casually). Pigment extracts all component CSS to a static
+  file at build time, so there is **no runtime `<ThemeProvider>`** — the theme
+  (`apps/ui/mui-theme.mjs`) is resolved by the Pigment plugin in
+  `next.config.js`, and runtime component defaults go through
+  `DefaultPropsProvider` in `app/providers.tsx` (a `ThemeProvider` would SSR a
+  `<style>` element the shell CSP blocks). After any UI change, grep the built
+  `apps/ui/out/*.html` for `<style` — there should be zero.
 
 ## Architecture
 
@@ -93,7 +102,14 @@ file (SEC-2); secrets/PII are redacted before content reaches any LLM
 (SEC-4) and again on outputs before storage/delivery (SEC-5); no LLM API
 calls ever leave the machine (SEC-6); right-to-delete purges the relational
 store, vector index, and token vault together (SEC-8,
-`packages/store/src/retention.ts`).
+`packages/store/src/retention.ts`). The renderer CSP
+(`apps/desktop/src/security/csp.ts`) keeps `connect-src 'none'` and a
+no-`'unsafe-inline'` `script-src` as hard invariants; the one deliberate
+loosening is `style-src-attr 'unsafe-inline'` for MUI (inline style
+*attributes* only — runtime `<style>` *elements* stay blocked via
+`style-src-elem 'self'`), documented in
+`specs/2026-09-07-ui-redesign/mui-redesign-plan.md` and asserted in
+`apps/desktop/test/csp.test.ts`.
 
 **Design decisions worth knowing before changing behavior** (`OI-n` in the
 requirements doc): the latency budget is a 45s synchronous-path cap (OI-1);
