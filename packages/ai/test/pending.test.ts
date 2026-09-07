@@ -658,4 +658,34 @@ describe('Layer2Synthesizer — wired to the derivation rules', () => {
     expect(pending.listOpen()).toHaveLength(1);
     expect(pending.listOpen()[0]?.status).toBe('open');
   });
+
+  it('does not duplicate the item when a later version restates the same obligation', async () => {
+    // Reproduces the real bug: a reply that resolves an obligation gets
+    // misclassified as noise upstream, never gets embedded, and the next
+    // synthesis over the thread sees only the original message again —
+    // re-deriving the SAME still-open ask as a fresh `deltaId` rather than
+    // recognising it as nothing new or a resolution.
+    seedArtifact(A1);
+    const pendingItem = {
+      description: 'Approve the updated MSA with Northwind by end of day Friday.',
+      confidence: 1,
+      waiting_on: 'self',
+      citation_artifact_id: A1,
+    };
+    const ollama = new StubOllama()
+      .push(meaningful({ pending_item: pendingItem }))
+      .push(meaningful({ pending_item: pendingItem })); // re-synthesized, restates v1 verbatim
+    const synth = makeSynth(ollama);
+
+    await synth.synthesize(K);
+    clock.advance(10 * MIN);
+    await synth.synthesize(K);
+
+    const chain = deltas.chainFor(K);
+    expect(chain.map((d) => d.version)).toEqual([1, 2]);
+
+    // One obligation, not two, even though it now hangs off a different delta.
+    expect(pending.listOpen()).toHaveLength(1);
+    expect(pending.listOpen()[0]?.deltaId).toBe(chain[0]?.deltaId);
+  });
 });

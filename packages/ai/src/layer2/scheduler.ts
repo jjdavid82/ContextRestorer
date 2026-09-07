@@ -267,6 +267,37 @@ export class DebounceScheduler {
       // `TriggerOutcome`. Anything else is Layer 2's own outcome vocabulary.
       const outcome: TriggerOutcome = typeof reported === 'string' ? reported : 'unreported';
 
+      // `no_context` is not a decision, unlike `'ok'` and `'not_meaningful'`:
+      // retrieval had nothing citable to show the model, most often because
+      // Layer 1 extraction for the thread's newest event had not finished
+      // embedding it yet when the quiet window fired. Marking the watermark
+      // synthesized here would permanently settle a thread that was never
+      // actually looked at — the embedding lands moments later, but nothing
+      // re-triggers synthesis for it without a fresh event on the same
+      // thread. Treated like a thrown error instead: left armed so `due()`
+      // finds it again on the next tick, and counted against the retry
+      // budget so a thread that can NEVER gain context (rather than one that
+      // merely raced ahead of extraction) still parks instead of retrying
+      // every 30s forever.
+      if (outcome === 'no_context') {
+        this.deps.watermarks.incrementAttempts(threadKey);
+        const attempts = this.deps.watermarks.get(threadKey)?.attempts ?? 0;
+        const at = this.deps.clock.now();
+
+        trace.annotate({ outcome, wroteDelta: false, attempts });
+        this.deps.onTrace?.({
+          event: 'success',
+          traceId: trace.id,
+          threadKey,
+          source,
+          reason,
+          eventCount,
+          outcome,
+          at,
+        });
+        return;
+      }
+
       // Re-read the clock: synthesis is slow, and the watermark should record
       // when the cycle finished rather than when the tick began.
       const at = this.deps.clock.now();

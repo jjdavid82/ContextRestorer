@@ -506,6 +506,10 @@ export class Layer2Synthesizer {
     // The FR-4 gates (self-owed, cited, not a duplicate) and the failed-insert
     // telemetry all live in `pending.ts`. A `null` return is a normal outcome
     // and never invalidates the delta above, which is already committed.
+    //
+    // `siblingDeltaIds`: every OTHER version in this thread's chain, so rule 5
+    // catches a restated obligation minted under a fresh `deltaId` (see
+    // `derivePendingItem`'s doc comment), not just an exact repeat of this one.
     derivePendingItem(
       {
         deltaId: delta.deltaId,
@@ -514,6 +518,10 @@ export class Layer2Synthesizer {
         confidence: accepted.pending.confidence,
         description: accepted.pending.description,
         waitingOnSelf: accepted.pending.waitingOnSelf,
+        siblingDeltaIds: this.deltas
+          .chainFor(threadKey)
+          .map((prior) => prior.deltaId)
+          .filter((deltaId) => deltaId !== delta.deltaId),
       },
       this.pending,
       this.clock,

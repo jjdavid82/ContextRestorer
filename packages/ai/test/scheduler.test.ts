@@ -333,6 +333,74 @@ describe('DebounceScheduler — robustness', () => {
     expect(traces.some((t) => t.event === 'degraded' && t.threadKey === K)).toBe(true);
   });
 
+  it('leaves a `no_context` thread armed for retry instead of settling it', async () => {
+    const raced = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      onSynthesize: async (k) => {
+        synthesized.push(k);
+        return 'no_context';
+      },
+      onTrace: (t) => {
+        traces.push(t);
+      },
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+
+    await raced.tick();
+    expect(synthesized).toEqual([K]);
+    // Not settled: a real success clears `oldestUnsynthAt`/stamps
+    // `lastSynthesizedAt`. `no_context` must do neither, or the thread is
+    // never looked at again once its content actually finishes embedding.
+    expect(watermarks.get(K)?.oldestUnsynthAt).toBe(0);
+    expect(watermarks.get(K)?.lastSynthesizedAt).toBeNull();
+    // Counted like a failure, so a thread that can never gain context still
+    // parks eventually instead of retrying every tick forever.
+    expect(watermarks.get(K)?.attempts).toBe(1);
+
+    // Still due on the very next tick — nothing re-armed `lastEventAt`.
+    clock.advance(30_000);
+    await raced.tick();
+    expect(synthesized).toEqual([K, K]);
+    expect(watermarks.get(K)?.attempts).toBe(2);
+
+    const successTraces = traces.filter(
+      (t) => t.event === 'success' && t.threadKey === K,
+    );
+    expect(successTraces.every((t) => t.event === 'success' && t.outcome === 'no_context')).toBe(
+      true,
+    );
+  });
+
+  it('parks a thread after maxAttempts consecutive `no_context` outcomes', async () => {
+    const raced = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      maxAttempts: 2,
+      onSynthesize: async () => 'no_context',
+      onTrace: (t) => {
+        traces.push(t);
+      },
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+
+    await raced.tick();
+    clock.advance(30_000);
+    await raced.tick();
+    expect(watermarks.get(K)?.attempts).toBe(2);
+
+    clock.advance(60 * MIN);
+    await raced.tick();
+
+    expect(traces.some((t) => t.event === 'degraded' && t.threadKey === K)).toBe(true);
+  });
+
   it('does nothing when no thread is due, including on an empty database', async () => {
     await expect(sched.tick()).resolves.toBeUndefined();
     expect(synthesized).toEqual([]);

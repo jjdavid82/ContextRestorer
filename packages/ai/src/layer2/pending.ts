@@ -72,6 +72,14 @@ export interface PendingDerivationInput {
   description: string;
   /** True when the USER owes this. False for a third party — see rule 1. */
   waitingOnSelf: boolean;
+  /**
+   * Every OTHER deltaId in this thread's version chain (D-6), i.e. `chainFor`
+   * minus `deltaId` itself. Widens rule 5 from "not a duplicate of this exact
+   * delta" to "not a duplicate of anything still open on this thread" — see
+   * the rule's own comment for why a per-delta check alone is not enough.
+   * Omitted (or empty) reproduces the old per-delta-only behaviour.
+   */
+  siblingDeltaIds?: readonly string[];
 }
 
 /**
@@ -153,6 +161,17 @@ export function isLowConfidence(item: Pick<PendingItem, 'confidence'>): boolean 
  * delta cannot be recreated in practice, because reaching this function again
  * requires a fresh `DeltasRepo.append()`, and that always mints a new
  * `deltaId` (`thread_key` + the next version).
+ *
+ * A per-delta-only check is not enough, though: D-6 versioning mints a new
+ * `deltaId` for every re-synthesis of a thread, including one that merely
+ * restates a still-open obligation rather than resolving or replacing it (the
+ * common trigger is a reply that Layer 1 misclassified as `noise` — the reply
+ * never gets embedded, so the next synthesis sees only the original message
+ * again and re-derives the same ask as a "new" delta). Only a `resolution`
+ * delta closes the prior item (see {@link resolvePendingItemsForSupersededDelta}),
+ * so without a thread-wide check that restatement mints a second, duplicate
+ * `pending_items` row for the exact same thing owed. `siblingDeltaIds` widens
+ * rule 5 to the whole thread for exactly this reason — see its doc comment.
  */
 export function derivePendingItem(
   input: PendingDerivationInput,
@@ -170,8 +189,11 @@ export function derivePendingItem(
   const description = input.description.trim();
   if (description === '') return null;
 
-  // Rule 5: idempotent per delta.
-  if (pendingRepo.listOpen().some((existing) => existing.deltaId === input.deltaId)) return null;
+  // Rule 5: idempotent per THREAD, not merely per delta — see the doc comment
+  // above for why an exact `deltaId` match alone lets a restated obligation
+  // through as a duplicate.
+  const dedupeIds = new Set([input.deltaId, ...(input.siblingDeltaIds ?? [])]);
+  if (pendingRepo.listOpen().some((existing) => dedupeIds.has(existing.deltaId))) return null;
 
   try {
     // Rule 4: the confidence is written as given. There is no threshold check
