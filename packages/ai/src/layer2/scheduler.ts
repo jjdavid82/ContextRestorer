@@ -130,6 +130,22 @@ export interface DebounceSchedulerDeps {
   onSynthesize: (threadKey: string, traceId: string) => Promise<SynthesisOutcome | void>;
   /** Consecutive failures after which a thread is parked. Default 3. */
   maxAttempts?: number;
+  /**
+   * Wall-clock time (epoch ms) Layer 1 extraction began running in this
+   * process — a fixed value, not a getter, since it does not move.
+   *
+   * Passed straight through to {@link WatermarkRepo.due}, where it suppresses
+   * the hard-cap "Layer 1 has stalled" escape hatch until a full hard cap has
+   * elapsed since it. Without it, the first `tick()` after the app is
+   * (re)launched reads its own downtime — nothing extracted lately because
+   * nothing was running — as a stalled Layer 1 and disarms the entire
+   * unextracted backlog with no context, on slow hardware within ~90s.
+   *
+   * Omitted (most tests, and any caller with no separate extraction stage) =
+   * `0`: the escape hatch is trusted immediately, exactly as before this
+   * existed.
+   */
+  layer1ActiveSince?: number;
   onTrace?: (trace: SchedulerTrace) => void;
   /**
    * Events currently on a thread, for the decision trace only.
@@ -182,8 +198,11 @@ export class DebounceScheduler {
 
   private readonly maxAttempts: number;
 
+  private readonly layer1ActiveSince: number;
+
   constructor(private readonly deps: DebounceSchedulerDeps) {
     this.maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    this.layer1ActiveSince = deps.layer1ActiveSince ?? 0;
   }
 
   /** Threads currently being synthesized by this instance (diagnostics/tests). */
@@ -203,7 +222,11 @@ export class DebounceScheduler {
     // The quiet/hard-cap arithmetic deliberately lives in the repo's single
     // indexed query rather than being re-derived here: two implementations of
     // the same predicate is exactly how this feature goes subtly wrong.
-    const due = this.deps.watermarks.due(now, { debounce: this.deps.config });
+    const due = this.deps.watermarks.due(
+      now,
+      { debounce: this.deps.config },
+      this.layer1ActiveSince,
+    );
 
     const running: Array<Promise<void>> = [];
 

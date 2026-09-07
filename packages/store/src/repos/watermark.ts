@@ -83,7 +83,8 @@ const PENDING_COUNT_SQL = `
 `;
 
 /**
- * Due = (quiet long enough AND fully extracted) OR backed up long enough.
+ * Due = (quiet long enough AND fully extracted)
+ *    OR (backed up long enough AND not still queued behind a live Layer 1).
  *
  * The per-source thresholds are inlined as a CASE over `source` so the whole
  * scan stays a single statement; the scheduler calls this on every tick and a
@@ -131,30 +132,45 @@ const PENDING_COUNT_SQL = `
  *   2. Layer 1 has written NO extraction at all, on any thread, within the last
  *      cap — if rows are still appearing, the queue is draining and this thread
  *      will get its turn; if nothing has appeared for a whole cap while work is
- *      outstanding, the layer is wedged and waiting longer buys nothing.
+ *      outstanding, the layer is wedged and waiting longer buys nothing; AND
+ *   3. Layer 1 has been running in THIS process for at least a cap. `now -
+ *      layer1ActiveSince >= cap`. This is the cold-start guard: on the first
+ *      tick after the app is (re)launched — or after any restart that outlasted
+ *      the cap — condition (2) is trivially true because nothing has been
+ *      extracted lately, for the simple reason that nothing was running. The
+ *      window (2) scans, `(now - cap, now]`, then reaches back before Layer 1
+ *      even started, so its emptiness proves nothing. Treating that as a stall
+ *      fires the hard cap on every backlogged thread at once, each retrieves
+ *      nothing, and the scheduler parks the lot with no context inside ~90s of
+ *      ticks — precisely the failure this whole gate exists to prevent, moved
+ *      to the relaunch boundary. `layer1ActiveSince` defaults to 0 (epoch), so
+ *      a caller that does not pass it gets condition (3) satisfied always and
+ *      the pre-guard behaviour exactly.
  *
  * (1) alone was tried first and is not enough: on CPU-only hardware a backfill
  * of ~1,000 events is hours of Layer 1, so every thread would have "waited a
  * cap" long before its turn came and the hard cap would have disarmed most of
  * the backlog with no context — the original failure, delayed by thirty
- * minutes. (2) is what tells a slow queue apart from a dead one.
+ * minutes. (2) is what tells a slow queue apart from a dead one; (3) is what
+ * stops a just-started queue from looking dead.
  *
  * The cost of (2) is that a single event the model never manages to classify
- * holds its own thread while Layer 1 keeps progressing elsewhere. That is a
- * Layer 1 defect (no `extractions` row is written after a failed batch slot, so
- * `listUnextracted()` re-offers the event forever) and is where it should be
- * fixed; the alternative here — firing anyway — is precisely the silent
- * disarm-with-nothing this gate exists to stop. `ingested_at` and `created_at`
- * are the only wall-clock timestamps involved, which is why neither clause
- * compares `occurred_at`.
+ * would hold its own thread while Layer 1 keeps progressing elsewhere. Layer 1
+ * bounds that at the source (`009_extraction_gate.sql`): after
+ * `MAX_EXTRACTION_ATTEMPTS` responses that omit the event it writes a terminal
+ * `unextractable:layer1` `noise` row, and the event then satisfies every
+ * `NOT EXISTS extraction` clause below like any other. Firing anyway here — the
+ * alternative — is precisely the silent disarm-with-nothing this gate exists to
+ * stop. `ingested_at` and `created_at` are the only wall-clock timestamps
+ * involved, which is why neither clause compares `occurred_at`.
  *
  * Positional binds, in order: now, slackQuiet, gmailQuiet, now, slackHardCap,
- * gmailHardCap, now, slackHardCap, gmailHardCap, now, slackHardCap, gmailHardCap.
+ * gmailHardCap, now, slackHardCap, gmailHardCap, now, slackHardCap, gmailHardCap,
+ * now, layer1ActiveSince, slackHardCap, gmailHardCap.
  *
- * `extractions(event_id)` and `extractions(created_at)` have no index, so the
- * inner NOT EXISTS clauses scan that table — the same shape `EventsRepo`'s
- * `countUnextracted()` already runs every 5s for the status strip. Both tables
- * are small at this project's scale; an index is the follow-up if that changes.
+ * The inner `NOT EXISTS` clauses hit `extractions` by `event_id` and by
+ * `created_at`, both indexed as of `009_extraction_gate.sql` — the same shape
+ * `EventsRepo.countUnextracted()` runs every 5s for the status strip.
  */
 const DUE_SQL = `
   SELECT ${SELECT_COLUMNS} FROM synthesis_watermark w
@@ -173,16 +189,25 @@ const DUE_SQL = `
                 AND e.ingested_at > (? - (CASE w.source WHEN 'slack' THEN ? ELSE ? END))
                 AND NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
             )
-            -- (2) either the thread is fully extracted, or Layer 1 is wedged
+            -- (2) either the thread is fully extracted, or Layer 1 has STALLED:
+            -- nothing extracted anywhere for a whole cap AND Layer 1 has been
+            -- running in this process for at least a cap, so that silence is a
+            -- stall and not just a fresh (re)launch (see clause 3 below).
             AND ( NOT EXISTS (
                     SELECT 1 FROM events e
                     WHERE e.thread_key = w.thread_key
                       AND NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
                   )
-                  OR NOT EXISTS (
-                    SELECT 1 FROM extractions x
-                    WHERE x.created_at > (? - (CASE w.source WHEN 'slack' THEN ? ELSE ? END))
-                  ) ) ) )
+                  OR ( NOT EXISTS (
+                         SELECT 1 FROM extractions x
+                         WHERE x.created_at > (? - (CASE w.source WHEN 'slack' THEN ? ELSE ? END))
+                       )
+                       -- (3) Layer 1 has had a full cap of wall-clock time here
+                       -- to write one. Without this, the first tick after the
+                       -- app is reopened reads its own downtime — nothing
+                       -- extracted "lately" because nothing was running — as a
+                       -- stall, and disarms the whole unextracted backlog.
+                       AND (? - ?) >= (CASE w.source WHEN 'slack' THEN ? ELSE ? END) ) ) ) )
   ORDER BY w.oldest_unsynth_at ASC, w.last_event_at ASC
 `;
 
@@ -298,8 +323,18 @@ export class WatermarkRepo {
    * holding a full {@link AppConfig} still pass it unchanged, while the
    * scheduler — which is configured with just the debounce thresholds — does not
    * have to fabricate an entire config to ask this question.
+   *
+   * `layer1ActiveSince` is the wall-clock time Layer 1 extraction began running
+   * in this process (epoch ms). It only affects the hard-cap "Layer 1 has
+   * stalled" escape hatch — see condition (3) in `DUE_SQL`'s comment. Omitted =
+   * 0, which disables the guard (every pre-existing caller and test keeps its
+   * exact behaviour); the desktop app passes its real value.
    */
-  due(now: number, config: Pick<AppConfig, 'debounce'>): DueThread[] {
+  due(
+    now: number,
+    config: Pick<AppConfig, 'debounce'>,
+    layer1ActiveSince = 0,
+  ): DueThread[] {
     const slack = config.debounce.slack;
     const gmail = config.debounce.gmail;
 
@@ -315,8 +350,14 @@ export class WatermarkRepo {
         now,
         slack.hardCapMs,
         gmail.hardCapMs,
-        // Hard-cap clause (2): "any extraction written within the last cap".
+        // Hard-cap clause (2): "no extraction written anywhere within the last cap"...
         now,
+        slack.hardCapMs,
+        gmail.hardCapMs,
+        // ...clause (3): "...and Layer 1 has been running here for at least a
+        // cap", so a fresh launch is not misread as a stall.
+        now,
+        layer1ActiveSince,
         slack.hardCapMs,
         gmail.hardCapMs,
       )

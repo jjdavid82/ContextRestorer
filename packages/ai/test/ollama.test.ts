@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { capForEmbedding, describeFetchFailure } from '../src/ollama.js';
+import { capForEmbedding, EMBED_MAX_CHARS, describeFetchFailure } from '../src/ollama.js';
 
 // ---------------------------------------------------------------------------
 // Transport failure attribution
@@ -74,29 +74,29 @@ describe('describeFetchFailure', () => {
  */
 describe('capForEmbedding', () => {
   it('leaves a text within the ceiling exactly as it was', () => {
-    const text = 'a'.repeat(3999);
+    const text = 'a'.repeat(EMBED_MAX_CHARS - 1);
     expect(capForEmbedding(text)).toBe(text);
   });
 
   it('bounds a text past the ceiling', () => {
-    expect(capForEmbedding('a'.repeat(50_000)).length).toBeLessThanOrEqual(4000);
+    expect(capForEmbedding('a'.repeat(50_000)).length).toBeLessThanOrEqual(EMBED_MAX_CHARS);
   });
 
   it('prefers a word boundary when one is near the cut', () => {
     // Spaces every 10 chars, so the last one sits well inside the final 10%.
-    const text = ('123456789 '.repeat(1000)).slice(0, 50_000);
+    const text = '123456789 '.repeat(5000).slice(0, 50_000);
     const capped = capForEmbedding(text);
 
     expect(capped.endsWith(' ')).toBe(false);
-    expect(capped.length).toBeLessThanOrEqual(4000);
+    expect(capped.length).toBeLessThanOrEqual(EMBED_MAX_CHARS);
     // A boundary was actually used rather than a hard slice mid-token.
-    expect(capped.length).toBeGreaterThan(3600);
+    expect(capped.length).toBeGreaterThan(EMBED_MAX_CHARS * 0.9);
   });
 
   it('falls back to a hard cut when no boundary is near the limit', () => {
     // One unbroken run — a URL or minified JSON. Honouring a distant space
     // would throw away a tenth of the budget for nothing.
     const text = `${'x'.repeat(20)} ${'y'.repeat(50_000)}`;
-    expect(capForEmbedding(text)).toHaveLength(4000);
+    expect(capForEmbedding(text)).toHaveLength(EMBED_MAX_CHARS);
   });
 });

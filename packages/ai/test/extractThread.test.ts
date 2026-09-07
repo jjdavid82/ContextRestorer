@@ -17,12 +17,19 @@ import { FakeClock, type Event } from '@cr/core';
 import {
   AiCallsRepo,
   EventsRepo,
+  ExtractionFailuresRepo,
   ExtractionsRepo,
   migrate,
   openDb,
   type VectorStore,
 } from '@cr/store';
-import { Layer1Extractor, MAX_BATCH_EVENTS, parseLayer1Batch } from '../src/layer1/extract.js';
+import {
+  Layer1Extractor,
+  MAX_BATCH_EVENTS,
+  MAX_EXTRACTION_ATTEMPTS,
+  UNEXTRACTABLE_MODEL,
+  parseLayer1Batch,
+} from '../src/layer1/extract.js';
 
 const NOW = 1_800_000_000_000;
 
@@ -64,7 +71,7 @@ const batchOf = (indices: number[]) => ({
   latencyMs: 10,
 });
 
-function makeExtractor(): Layer1Extractor {
+function makeExtractor(failures?: ExtractionFailuresRepo): Layer1Extractor {
   const ollama = { generateJson, generateStream: vi.fn(), embed: vi.fn() };
   const vectors = { upsert } as unknown as VectorStore;
   return new Layer1Extractor(
@@ -76,6 +83,8 @@ function makeExtractor(): Layer1Extractor {
     'qwen2.5:14b',
     'v1',
     new FakeClock(NOW),
+    true,
+    failures,
   );
 }
 
@@ -171,6 +180,58 @@ describe('Layer1Extractor.extractThread', () => {
     expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-2', 'evt-3']);
   });
 
+  describe('writing off an event the model can never classify', () => {
+    let failures: ExtractionFailuresRepo;
+
+    beforeEach(() => {
+      failures = new ExtractionFailuresRepo(db);
+    });
+
+    it('keeps re-queuing an event until it has failed MAX_EXTRACTION_ATTEMPTS times', async () => {
+      const [a, b] = [seed(1), seed(2)];
+      generateJson.mockResolvedValue(batchOf([0])); // the model never places event b
+
+      for (let i = 1; i < MAX_EXTRACTION_ATTEMPTS; i += 1) {
+        const result = await makeExtractor(failures).extractThread([a, b], `trace-${i}`);
+        expect(result.abandoned).toBe(0);
+        expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-2']);
+      }
+
+      // The MAX-th failure writes the terminal row.
+      const result = await makeExtractor(failures).extractThread([a, b], 'trace-final');
+      expect(result.abandoned).toBe(1);
+      expect(result.unclassified).toBe(0);
+      expect(events.listUnextracted()).toEqual([]);
+
+      const row = extractions.listByEvent('evt-2')[0];
+      expect(row).toMatchObject({ class: 'noise', confidence: 0, model: UNEXTRACTABLE_MODEL });
+    });
+
+    it('does not count a transport error as an attempt', async () => {
+      const [a, b] = [seed(1), seed(2)];
+      generateJson.mockRejectedValue(new Error('fetch failed'));
+
+      for (let i = 0; i < MAX_EXTRACTION_ATTEMPTS + 2; i += 1) {
+        await expect(makeExtractor(failures).extractThread([a, b], `t-${i}`)).rejects.toThrow();
+      }
+
+      // Nothing written off: the model never actually responded.
+      expect(failures.attempts('evt-2')).toBe(0);
+      expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-1', 'evt-2']);
+    });
+
+    it('is inert without an ExtractionFailuresRepo (retry-forever, as before)', async () => {
+      const [a, b] = [seed(1), seed(2)];
+      generateJson.mockResolvedValue(batchOf([0]));
+
+      for (let i = 0; i < MAX_EXTRACTION_ATTEMPTS + 3; i += 1) {
+        const result = await makeExtractor().extractThread([a, b], `t-${i}`);
+        expect(result.abandoned).toBe(0);
+      }
+      expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-2']);
+    });
+  });
+
   it('splits a long thread into bounded batches', async () => {
     const batch = Array.from({ length: MAX_BATCH_EVENTS + 2 }, (_unused, i) => seed(i + 1));
     generateJson.mockResolvedValue(batchOf([0]));
@@ -235,6 +296,12 @@ describe('Layer1Extractor.extractThread', () => {
 
   it('returns an empty result for an empty thread', async () => {
     const result = await makeExtractor().extractThread([], 'trace-1');
-    expect(result).toEqual({ extracted: 0, prefiltered: 0, unclassified: 0, modelCalls: 0 });
+    expect(result).toEqual({
+      extracted: 0,
+      prefiltered: 0,
+      unclassified: 0,
+      abandoned: 0,
+      modelCalls: 0,
+    });
   });
 });

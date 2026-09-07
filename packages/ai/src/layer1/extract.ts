@@ -19,10 +19,16 @@
  *    into `noise`. Coercion would silently manufacture a negative for the eval
  *    harness and hide a broken prompt/model pairing.
  *
- * 3. **Failure must stay visible.** A double schema failure writes NO
- *    `extractions` row and marks the event "done" through no other channel, so
+ * 3. **Failure must stay visible.** A schema failure writes NO `extractions`
+ *    row and marks the event "done" through no other channel, so
  *    `EventsRepo.listUnextracted()` (see {@link findUnextractedEvents}) still
- *    reports it and a later sweep re-queues it.
+ *    reports it and a later sweep re-queues it — up to
+ *    {@link MAX_EXTRACTION_ATTEMPTS} times. Past that, the batched path writes a
+ *    terminal `unextractable:layer1` `noise` row so one event the model can
+ *    never place does not block its whole thread's synthesis forever; that
+ *    write-off is logged and counted (`ThreadExtractResult.abandoned`), never
+ *    silent. It needs an `ExtractionFailuresRepo`; without one, retry is
+ *    unbounded as before.
  *
  * ### `ai_calls` accounting
  *
@@ -45,7 +51,13 @@ import {
   type Extraction,
   type ExtractionClass,
 } from '@cr/core';
-import type { AiCallsRepo, Chunk, ExtractionsRepo, VectorStore } from '@cr/store';
+import type {
+  AiCallsRepo,
+  Chunk,
+  ExtractionFailuresRepo,
+  ExtractionsRepo,
+  VectorStore,
+} from '@cr/store';
 import type { OllamaClient } from '../ollama.js';
 import { prefilterReason, type PrefilterReason } from './prefilter.js';
 import { assemblePrompt } from '../prompt/assemble.js';
@@ -156,6 +168,38 @@ export const MAX_BATCH_EVENTS = 4;
 const LAYER = 1;
 
 /**
+ * Model-responded-but-unclassified attempts after which an event is written off.
+ *
+ * `parseLayer1Batch` returns a `null` slot when the model dropped an event,
+ * mis-indexed it, or emitted invalid JSON for it. No `extractions` row is
+ * written, so `EventsRepo.listUnextracted()` re-offers the event on every sweep
+ * and `WatermarkRepo.due()` holds its whole thread out of synthesis — forever,
+ * for one event the model cannot place.
+ *
+ * After this many attempts — counted ONLY across batch calls that actually
+ * returned (a transport error is the transient case and never counts) — the
+ * extractor writes a terminal `noise` row instead (see {@link
+ * Layer1Extractor.persistUnextractable}). Five is deliberately generous: a
+ * healthy batch classifies nearly everything, so five separate responses that
+ * all omit the same event is a (model, prompt) limitation, not a hiccup.
+ *
+ * Requires an {@link ExtractionFailuresRepo}; without one the extractor keeps
+ * the pre-existing behaviour of retrying indefinitely.
+ */
+export const MAX_EXTRACTION_ATTEMPTS = 5;
+
+/**
+ * `extractions.model` for an event written off after {@link
+ * MAX_EXTRACTION_ATTEMPTS} unclassifiable responses.
+ *
+ * A sentinel, like {@link PREFILTER_MODEL}: greppable, filterable out of eval
+ * scoring, and honest that no model produced the classification. The row is a
+ * `noise` row with `confidence: 0` — its only pipeline effect is that the event
+ * contributes no retrieval chunk, the same as any other `noise`.
+ */
+export const UNEXTRACTABLE_MODEL = 'unextractable:layer1';
+
+/**
  * One initial attempt plus exactly one retry. A second malformed response is
  * evidence of a prompt/model problem, not of transient noise, so hammering it
  * further would only burn the background compute budget.
@@ -196,9 +240,18 @@ export interface ThreadExtractResult {
   prefiltered: number;
   /**
    * Events the model did not classify. They stay unextracted, so
-   * `listUnextracted()` re-queues them for the next sweep.
+   * `listUnextracted()` re-queues them for the next sweep — unless they have
+   * now failed {@link MAX_EXTRACTION_ATTEMPTS} times, in which case they are
+   * counted in `abandoned` instead and written off.
    */
   unclassified: number;
+  /**
+   * Events written off this pass: the model has failed to classify them
+   * {@link MAX_EXTRACTION_ATTEMPTS} times, so a terminal `noise` row was
+   * written and they will not be retried. Always 0 without an
+   * `ExtractionFailuresRepo`.
+   */
+  abandoned: number;
   /** Model calls made. The number this whole change exists to reduce. */
   modelCalls: number;
 }
@@ -386,6 +439,14 @@ export class Layer1Extractor {
      * every event — which is what the eval should compare against.
      */
     private readonly skipNoise: boolean = true,
+    /**
+     * Recovery-sweep termination (`009_extraction_gate.sql`). When supplied,
+     * an event the model responds-to-but-cannot-classify {@link
+     * MAX_EXTRACTION_ATTEMPTS} times is written off with a terminal `noise`
+     * row instead of being re-queued forever. Omitted (the eval harness, most
+     * unit tests) = the pre-existing retry-forever behaviour.
+     */
+    private readonly failures?: ExtractionFailuresRepo,
   ) {
     this.clock = clock ?? systemClock;
   }
@@ -512,6 +573,7 @@ export class Layer1Extractor {
       extracted: 0,
       prefiltered: 0,
       unclassified: 0,
+      abandoned: 0,
       modelCalls: 0,
     };
     if (events.length === 0) return result;
@@ -535,6 +597,7 @@ export class Layer1Extractor {
       const outcome = await this.extractBatch(batch, traceId);
       result.extracted += outcome.extracted;
       result.unclassified += outcome.unclassified;
+      result.abandoned += outcome.abandoned;
       result.modelCalls += 1;
     }
 
@@ -545,7 +608,7 @@ export class Layer1Extractor {
   private async extractBatch(
     batch: readonly Event[],
     traceId: string,
-  ): Promise<{ extracted: number; unclassified: number }> {
+  ): Promise<{ extracted: number; unclassified: number; abandoned: number }> {
     // T-1: every event body reaches the model through ONE wrapped block. The
     // per-event numbering sits INSIDE the fence with the content, so a body that
     // imitates a numbering line cannot escape into the trusted half.
@@ -581,16 +644,36 @@ export class Layer1Extractor {
     }
 
     let extracted = 0;
+    let abandoned = 0;
     for (const [index, parsed] of slots.entries()) {
       const event = batch[index];
-      if (event === undefined || parsed === null) continue;
-      await this.persistExtraction(event, parsed);
-      extracted += 1;
+      if (event === undefined) continue;
+
+      if (parsed !== null) {
+        await this.persistExtraction(event, parsed);
+        extracted += 1;
+        continue;
+      }
+
+      // The model responded but did not classify this event. Count the attempt;
+      // once it has whiffed enough times, stop re-queuing it forever and write
+      // the terminal row (see `MAX_EXTRACTION_ATTEMPTS`). Only reachable when an
+      // `ExtractionFailuresRepo` was supplied.
+      if (this.failures !== undefined) {
+        const attempts = this.failures.record(event.eventId, this.clock.now());
+        if (attempts >= MAX_EXTRACTION_ATTEMPTS) {
+          this.persistUnextractable(event);
+          abandoned += 1;
+        }
+      }
     }
 
+    // `abandoned` events did not get a real classification, so they still count
+    // as unclassified for the `ai_calls` outcome — 'ok' unless the whole batch
+    // came back unusable.
     const unclassified = batch.length - extracted;
     this.logCall(traceId, tally, unclassified === batch.length ? 'schema_fail' : 'ok');
-    return { extracted, unclassified };
+    return { extracted, unclassified: unclassified - abandoned, abandoned };
   }
 
   /**
@@ -671,6 +754,29 @@ export class Layer1Extractor {
     return extraction;
   }
 
+  /**
+   * Terminal row for an event written off after {@link MAX_EXTRACTION_ATTEMPTS}
+   * (see {@link UNEXTRACTABLE_MODEL}). A `noise` row so the sweep and the
+   * synthesis gate stop waiting on it; `confidence: 0` and the sentinel `model`
+   * so nothing downstream mistakes it for a real classification. No chunk, same
+   * as any other `noise`.
+   */
+  private persistUnextractable(event: Event): Extraction {
+    const extraction: Extraction = {
+      extractionId: newId(),
+      eventId: event.eventId,
+      class: 'noise',
+      confidence: 0,
+      participants: [],
+      artifacts: [],
+      model: UNEXTRACTABLE_MODEL,
+      promptVersion: this.promptVersion,
+      createdAt: this.clock.now(),
+    };
+    this.extractions.insert(extraction);
+    return extraction;
+  }
+
   /** Write the one `ai_calls` row for this invocation. */
   private logCall(traceId: string, tally: CallTally, outcome: string): void {
     this.aiCalls.log({
@@ -708,12 +814,19 @@ export interface UnextractedEventSource {
  * `extractions` row references it. That single rule covers both failure modes
  * without any extra bookkeeping —
  *
- * - a double schema failure never wrote a row, so it reappears here; and
+ * - a schema failure never wrote a row, so it reappears here; and
  * - a crash between `events.insertIfAbsent` and the extraction write likewise
  *   leaves no row.
  *
  * — which is precisely why {@link Layer1Extractor.extractEvent} refuses to mark
  * a failed event done through any side channel.
+ *
+ * The one bounded exception (`009_extraction_gate.sql`): after
+ * {@link MAX_EXTRACTION_ATTEMPTS} model-responded-but-unclassified passes, the
+ * batched extractor writes a terminal `noise` row, so a permanently
+ * unclassifiable event stops reappearing here rather than blocking its thread
+ * forever. That is still a real `extractions` row — the rule above is intact;
+ * it is the retry that is now finite, not the definition of "outstanding".
  *
  * The join itself lives in `EventsRepo.listUnextracted` (a `NOT EXISTS` over
  * `extractions`) rather than being re-expressed as raw SQL here: `@cr/ai` owns

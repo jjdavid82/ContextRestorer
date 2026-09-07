@@ -100,8 +100,23 @@ export interface GmailClientOptions {
    * bounded — "sync the user's entire mailbox" is never an acceptable outcome.
    */
   backfillMaxMessages?: number;
-  /** Gmail search bound applied to the backfill listing. */
+  /** Gmail search bound applied to the backfill listing when {@link backfillSince} has nothing. */
   backfillQuery?: string;
+  /**
+   * Resume point for a cursor-less sync, in epoch ms — the newest message the
+   * caller has already stored. `GmailClient` is stateless and the poller keeps
+   * its cursor only in memory, so EVERY relaunch is a cursor-less sync; without
+   * this it always re-bases on {@link backfillQuery} (`newer_than:7d`) and a
+   * user away longer than that loses the messages in between. When this returns
+   * a timestamp, the backfill listing is bounded by `after:<that>` instead
+   * (minus a day, so Gmail's date-granular `after:` cannot skip the boundary).
+   * `undefined` (a fresh mailbox, nothing stored) falls back to `backfillQuery`.
+   *
+   * The {@link backfillMaxMessages} cap still applies, so a very high-volume
+   * long absence is still truncated to the most recent N — incremental sync
+   * then continues from there.
+   */
+  backfillSince?: () => number | undefined;
   /** Safety valve on `nextPageToken` following, for both list and history. */
   maxPages?: number;
 }
@@ -167,6 +182,7 @@ export class GmailClient implements SourceClient<string> {
   private readonly fetchImpl: FetchLike;
   private readonly backfillMaxMessages: number;
   private readonly backfillQuery: string;
+  private readonly backfillSince: () => number | undefined;
   private readonly maxPages: number;
 
   constructor(options: GmailClientOptions) {
@@ -174,7 +190,22 @@ export class GmailClient implements SourceClient<string> {
     this.fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
     this.backfillMaxMessages = options.backfillMaxMessages ?? DEFAULT_BACKFILL_MAX_MESSAGES;
     this.backfillQuery = options.backfillQuery ?? DEFAULT_BACKFILL_QUERY;
+    this.backfillSince = options.backfillSince ?? (() => undefined);
     this.maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
+  }
+
+  /**
+   * The Gmail `q` for the backfill listing: `after:<seconds>` derived from
+   * {@link GmailClientOptions.backfillSince} when it has a resume point, else
+   * the fixed {@link backfillQuery}. A day is subtracted from the resume point
+   * because Gmail's `after:` filter is date-granular; the overlap that creates
+   * is deduped on insert (`eventId`, AC-10).
+   */
+  private backfillListingQuery(): string {
+    const since = this.backfillSince();
+    if (since === undefined || !Number.isFinite(since)) return this.backfillQuery;
+    const seconds = Math.floor(since / 1000) - 24 * 60 * 60;
+    return `after:${Math.max(0, seconds)}`;
   }
 
   /**
@@ -283,13 +314,14 @@ export class GmailClient implements SourceClient<string> {
   private async listRecentMessageIds(): Promise<string[]> {
     const ids: string[] = [];
     let pageToken: string | undefined;
+    const listingQuery = this.backfillListingQuery();
 
     for (let page = 0; page < this.maxPages; page += 1) {
       const remaining = this.backfillMaxMessages - ids.length;
       if (remaining <= 0) break;
 
       const query = new URLSearchParams({
-        q: this.backfillQuery,
+        q: listingQuery,
         maxResults: String(Math.min(remaining, MAX_PAGE_SIZE)),
       });
       if (pageToken !== undefined) query.set('pageToken', pageToken);

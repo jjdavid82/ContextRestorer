@@ -16,6 +16,16 @@
  * prompt (or an embedding of it) out to a remote host.
  */
 
+// `undici` is a DIRECT dependency here only so we can hand a custom `Agent` to
+// Node's built-in `fetch` as its `dispatcher` (see `dispatcher` below). Node's
+// `fetch` IS undici, bundled inside Node, and a dispatcher from a different
+// undici build than that one is not reliably honoured — it can throw, or be
+// quietly ignored so the request silently falls back to the 300s default this
+// exists to defeat. So this dep's major must stay in step with the undici that
+// the supported Node ships: `engines.node` is `>=24.0 <25` (Node 24 → undici
+// 7) and `package.json` pins `undici` to `^7`. If the Node major moves, re-pin
+// `undici` to match and re-run `packages/ai` against a real Ollama — the tests
+// here mock `fetch`, so an ignored dispatcher passes CI unnoticed.
 import { Agent } from 'undici';
 
 /** Hosts that are permitted as inference targets. Deliberately minimal. */
@@ -312,8 +322,15 @@ const JSON_HEADERS = { 'content-type': 'application/json' } as const;
  * English runs looser still. Denser inputs — code, URLs, base64, CJK — go the
  * other way and can approach 1 char/token, so a ceiling picked at the prose
  * ratio would only move the failure to the inputs most likely to appear in a
- * work inbox. 4000 is ~2 chars/token: below the measured cliff by a third, and
- * deliberately pessimistic rather than tuned to the friendliest sample.
+ * work inbox. 2600 is ~1.25 chars/token — under the 2048-token limit even for
+ * near-worst-case dense input, not just for prose.
+ *
+ * That is deliberately conservative and it is NOT the only guard: {@link
+ * createOllamaClient}'s `embed` retries a `500 … context length` once at half
+ * the length, so a pathological input (solid base64, CJK) that still overshoots
+ * this cap degrades to a shorter embedding instead of failing the event's
+ * extraction — which, because the `extractions` row is written only after the
+ * embedding succeeds, used to wedge the event's whole thread indefinitely.
  *
  * What truncation costs: only retrieval reach over the tail of a very long
  * message. `Chunk.text` keeps the full text, so citations still quote the whole
@@ -323,7 +340,10 @@ const JSON_HEADERS = { 'content-type': 'application/json' } as const;
  * event (`chunkId(event.eventId, 0)`), so that is a contract change, not a
  * constant change.
  */
-const EMBED_MAX_CHARS = 4000;
+export const EMBED_MAX_CHARS = 2600;
+
+/** Substrings in an Ollama 500 body that mean "input was too long for the model". */
+const CONTEXT_LENGTH_ERROR = /context length|too (?:large|long)|exceeds/i;
 
 /**
  * Bound `text` to {@link EMBED_MAX_CHARS}, cutting at a whitespace boundary
@@ -339,6 +359,58 @@ export function capForEmbedding(text: string): string {
   // with no spaces near the cut (a URL, minified JSON) would lose a tenth of
   // its budget to nothing.
   return lastBreak > EMBED_MAX_CHARS * 0.9 ? head.slice(0, lastBreak) : head;
+}
+
+type GuardedFetch = (path: string, init: RequestInit, label: string) => Promise<Response>;
+
+/**
+ * Embed one string, with a single halve-and-retry on a length rejection.
+ *
+ * {@link EMBED_MAX_CHARS} is a static char cap for a token limit, so a
+ * pathologically dense input (solid base64, CJK) can still overshoot it. Rather
+ * than let that fail the caller — for Layer 1 that means the event's
+ * `extractions` row is never written and its thread never synthesizes — a
+ * `500` whose body names a length problem is retried once at half the length.
+ * Any other non-2xx, or a second failure, throws with the body attached: an
+ * over-long input and a dead model are both `500` and only the body tells them
+ * apart.
+ */
+async function embedOne(
+  guardedFetch: GuardedFetch,
+  embedModel: string,
+  text: string,
+): Promise<number[]> {
+  let prompt = capForEmbedding(text);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const res = await guardedFetch(
+      '/api/embeddings',
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ model: embedModel, prompt }) },
+      `embed (${embedModel})`,
+    );
+
+    if (res.ok) {
+      const body = (await res.json()) as OllamaEmbeddingsEnvelope;
+      if (!Array.isArray(body.embedding)) {
+        throw new Error('ollama: /api/embeddings response missing `embedding` array');
+      }
+      return body.embedding;
+    }
+
+    const detail = await res.text().catch(() => '');
+    const retryable =
+      attempt === 0 && res.status === 500 && CONTEXT_LENGTH_ERROR.test(detail) && prompt.length > 1;
+    if (!retryable) {
+      throw new Error(
+        `ollama: /api/embeddings returned ${res.status}` +
+          (detail === '' ? '' : ` — ${detail.slice(0, 200)}`),
+      );
+    }
+    prompt = prompt.slice(0, Math.floor(prompt.length / 2));
+  }
+
+  // Unreachable: the loop either returns an embedding or throws.
+  throw new Error('ollama: /api/embeddings retry exhausted');
 }
 
 /**
@@ -490,31 +562,7 @@ export function createOllamaClient(
       // are collected sequentially so ordering matches `texts` exactly.
       const out: number[][] = [];
       for (const text of texts) {
-        const res = await guardedFetch('/api/embeddings', {
-          method: 'POST',
-          headers: JSON_HEADERS,
-          // Truncated here, at the one point every embedding must pass through,
-          // rather than at each call site — see {@link EMBED_MAX_CHARS}. A
-          // caller cannot opt out of a model limit, so it should not be able to
-          // forget it either.
-          body: JSON.stringify({ model: embedModel, prompt: capForEmbedding(text) }),
-        }, `embed (${embedModel})`);
-        if (!res.ok) {
-          // The status alone is useless here: an over-long input and a dead
-          // model are both `500`, and the difference is entirely in the body
-          // (`{"error":"the input length exceeds the context length"}`). Reading
-          // it costs one await on a path that is already failing.
-          const detail = await res.text().catch(() => '');
-          throw new Error(
-            `ollama: /api/embeddings returned ${res.status}` +
-              (detail === '' ? '' : ` — ${detail.slice(0, 200)}`),
-          );
-        }
-        const body = (await res.json()) as OllamaEmbeddingsEnvelope;
-        if (!Array.isArray(body.embedding)) {
-          throw new Error('ollama: /api/embeddings response missing `embedding` array');
-        }
-        out.push(body.embedding);
+        out.push(await embedOne(guardedFetch, embedModel, text));
       }
       return out;
     },

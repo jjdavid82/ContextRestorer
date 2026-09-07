@@ -50,6 +50,14 @@ all `eval`/`bench` runs talk to real Ollama, not a mock.
   actually compiles those.
 - Use `nvm use` for this repo's Node version in-session; do not change the
   global/default `nvm` alias.
+- `packages/ai` depends on `undici` directly (`^7`) only to pass a custom
+  `Agent` as the `dispatcher` for Node's built-in `fetch` in `src/ollama.ts`
+  (it raises undici's 300s `headersTimeout`, otherwise a silent cap on
+  non-streaming Ollama generation). A dispatcher from a different undici build
+  than the one bundled in Node is not reliably honoured, so this dep's major
+  must track `engines.node` (`>=24.0 <25` → undici 7). If the Node major moves,
+  re-pin `undici` and re-run `npm run test -w packages/ai` against real Ollama —
+  the suite mocks `fetch`, so an ignored dispatcher passes CI silently.
 - `apps/ui` styles through **MUI + Pigment CSS** (`@pigment-css/*` is pinned
   pre-1.0 — `0.0.x` — and version-sensitive to Next/React; pin exact versions,
   don't range-bump casually). Pigment extracts all component CSS to a static

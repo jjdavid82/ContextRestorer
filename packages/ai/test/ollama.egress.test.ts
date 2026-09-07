@@ -108,6 +108,43 @@ describe('per-call re-validation', () => {
     }
   });
 
+  it('embed retries once at half length on a 500 that names a context-length problem', async () => {
+    const bodies: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)).prompt as string);
+      if (bodies.length === 1) {
+        return {
+          ok: false,
+          status: 500,
+          text: async () => '{"error":"input length exceeds the context length"}',
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ embedding: [9, 9] }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createOllamaClient(LOCAL, 'm', 'nomic-embed-text');
+    const [vector] = await client.embed(['x'.repeat(50_000)]);
+
+    expect(vector).toEqual([9, 9]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // First attempt is capped; the retry halves that.
+    expect(bodies[1]!.length).toBe(Math.floor(bodies[0]!.length / 2));
+  });
+
+  it('embed does not retry a 500 that is not a length problem, and surfaces the body', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      text: async () => '{"error":"model runner has crashed"}',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createOllamaClient(LOCAL, 'm', 'e');
+    await expect(client.embed(['hi'])).rejects.toThrow(/model runner has crashed/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('generateStream fetches only a validated loopback URL and yields chunks', async () => {
     const ndjson = [
       JSON.stringify({ response: 'Hello' }),

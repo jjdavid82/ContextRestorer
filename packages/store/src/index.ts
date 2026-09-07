@@ -17,6 +17,8 @@ export type {
 } from './repos/aiCalls.js';
 export { ExtractionsRepo } from './repos/extractions.js';
 export type { NewExtraction } from './repos/extractions.js';
+// Recovery-sweep termination for events Layer 1 can never classify. Migration 009.
+export { ExtractionFailuresRepo } from './repos/extractionFailures.js';
 export { DeltasRepo } from './repos/deltas.js';
 export type { NewStateDelta } from './repos/deltas.js';
 export { PendingItemsRepo } from './repos/pending.js';

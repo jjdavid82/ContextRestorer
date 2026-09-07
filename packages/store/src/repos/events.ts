@@ -84,6 +84,8 @@ export class EventsRepo {
   private readonly stmtWindow: Database.Statement<[number, number]>;
   private readonly stmtCountUnextracted: Database.Statement<[]>;
   private readonly stmtListUnextracted: Database.Statement<[number]>;
+  private readonly stmtNewestByPrefix: Database.Statement<[string, string]>;
+  private readonly stmtNewestBySource: Database.Statement<[string]>;
 
   constructor(private db: Database.Database) {
     this.stmtInsert = this.db.prepare(
@@ -119,6 +121,17 @@ export class EventsRepo {
        ORDER BY occurred_at ASC, event_id ASC
        LIMIT ?`,
     );
+
+    // A half-open `thread_key` range, not `LIKE 'prefix%'`: LIKE is
+    // case-insensitive by default and cannot use `idx_events_thread`; a range
+    // can. Both bounds are computed by the caller.
+    this.stmtNewestByPrefix = this.db.prepare(
+      `SELECT MAX(occurred_at) AS m FROM events WHERE thread_key >= ? AND thread_key < ?`,
+    );
+
+    this.stmtNewestBySource = this.db.prepare(
+      `SELECT MAX(occurred_at) AS m FROM events WHERE source = ?`,
+    );
   }
 
   /**
@@ -149,6 +162,40 @@ export class EventsRepo {
   /** Events whose `occurredAt` falls in the half-open interval `[start, end)`. */
   listWindow(start: number, end: number): Event[] {
     return (this.stmtWindow.all(start, end) as EventRow[]).map(fromRow);
+  }
+
+  /**
+   * Newest `occurred_at` among events whose `thread_key` starts with `prefix`,
+   * or `null` when there are none.
+   *
+   * The poller keeps its resume cursors only in memory, so every source falls
+   * back to a bounded backfill window on restart. This lets a connector resume
+   * a cursor-less fetch from the last event it actually stored instead — closing
+   * the gap between "app was closed" and "backfill window" without paging a
+   * whole channel's history.
+   *
+   * `prefix` MUST include the key's delimiter (`"C123:"`, not `"C123"`): the
+   * upper bound is the prefix with its final character bumped by one, so a
+   * trailing `:` becomes `;` and the range covers exactly the keys under that
+   * channel — never a neighbour like `C1234:…`.
+   */
+  newestOccurredAtByThreadPrefix(prefix: string): number | null {
+    const last = prefix.charCodeAt(prefix.length - 1);
+    const hi = prefix.slice(0, -1) + String.fromCharCode(last + 1);
+    const row = this.stmtNewestByPrefix.get(prefix, hi) as { m: number | null } | undefined;
+    return row?.m ?? null;
+  }
+
+  /**
+   * Newest `occurred_at` across all events from `source`, or `null` when there
+   * are none. The whole-source counterpart of {@link
+   * newestOccurredAtByThreadPrefix} — for Gmail, which has one mailbox and no
+   * per-conversation resume point, this is what lets a cursor-less sync resume
+   * from real data instead of the fixed backfill window (see `GmailClient`).
+   */
+  newestOccurredAtBySource(source: string): number | null {
+    const row = this.stmtNewestBySource.get(source) as { m: number | null } | undefined;
+    return row?.m ?? null;
   }
 
   /** How many events still have no Layer-1 extraction — the ingestion backlog. */

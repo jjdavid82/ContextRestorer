@@ -121,6 +121,57 @@ describe('EventsRepo.listWindow', () => {
   });
 });
 
+describe('EventsRepo.newestOccurredAtByThreadPrefix', () => {
+  it('returns the newest occurred_at across every thread under the prefix', () => {
+    repo.insertIfAbsent(makeEvent({ eventId: 'a', sourceEventId: 'a', threadKey: 'C1:100', occurredAt: 100 }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'b', sourceEventId: 'b', threadKey: 'C1:250', occurredAt: 250 }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'c', sourceEventId: 'c', threadKey: 'C1:250', occurredAt: 180 }));
+
+    expect(repo.newestOccurredAtByThreadPrefix('C1:')).toBe(250);
+  });
+
+  it('is null when nothing matches the prefix', () => {
+    repo.insertIfAbsent(makeEvent({ threadKey: 'C1:1', occurredAt: 100 }));
+    expect(repo.newestOccurredAtByThreadPrefix('C2:')).toBeNull();
+    expect(repo.newestOccurredAtByThreadPrefix('C1:')).toBe(100);
+  });
+
+  it('does not bleed across a channel id that is a prefix of another', () => {
+    // The `:` delimiter must isolate `C1` from `C12` — a plain `LIKE 'C1%'`
+    // would fold `C12:...` into `C1`'s result.
+    repo.insertIfAbsent(makeEvent({ eventId: 'x', sourceEventId: 'x', threadKey: 'C1:1', occurredAt: 100 }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'y', sourceEventId: 'y', threadKey: 'C12:1', occurredAt: 9_999 }));
+
+    expect(repo.newestOccurredAtByThreadPrefix('C1:')).toBe(100);
+    expect(repo.newestOccurredAtByThreadPrefix('C12:')).toBe(9_999);
+  });
+
+  it('ignores Gmail threads, whose keys carry no colon', () => {
+    repo.insertIfAbsent(
+      makeEvent({ eventId: 'g', sourceEventId: 'g', source: 'gmail', threadKey: '18f0abc', occurredAt: 5_000 }),
+    );
+    expect(repo.newestOccurredAtByThreadPrefix('18f0abc:')).toBeNull();
+  });
+});
+
+describe('EventsRepo.newestOccurredAtBySource', () => {
+  it('returns the newest occurred_at for one source, or null when it has none', () => {
+    repo.insertIfAbsent(
+      makeEvent({ eventId: 's1', sourceEventId: 's1', source: 'slack', occurredAt: 100 }),
+    );
+    repo.insertIfAbsent(
+      makeEvent({ eventId: 'g1', sourceEventId: 'g1', source: 'gmail', threadKey: 't1', occurredAt: 900 }),
+    );
+    repo.insertIfAbsent(
+      makeEvent({ eventId: 'g2', sourceEventId: 'g2', source: 'gmail', threadKey: 't2', occurredAt: 400 }),
+    );
+
+    expect(repo.newestOccurredAtBySource('gmail')).toBe(900);
+    expect(repo.newestOccurredAtBySource('slack')).toBe(100);
+    expect(repo.newestOccurredAtBySource('nonesuch')).toBeNull();
+  });
+});
+
 describe('EventsRepo.countUnextracted', () => {
   it('counts events with no row in extractions', () => {
     repo.insertIfAbsent(makeEvent({ eventId: 'e-1', sourceEventId: 's-1' }));
