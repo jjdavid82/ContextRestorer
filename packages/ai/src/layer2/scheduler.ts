@@ -157,8 +157,18 @@ export interface DebounceSchedulerDeps {
  * Exported so the OI-1 "still processing" count (`WatermarkRepo.countPendingSynthesis`)
  * can exclude threads the scheduler has already given up on — a thread parked
  * here is no longer "in progress" in any sense the disclosure should imply.
+ *
+ * Set well above 3: `tick()` runs every 30s, so a `no_context` outcome — which
+ * fires whenever Layer 1 extraction for the thread's newest event is still
+ * running when the quiet window elapses — must survive at least one full
+ * extraction call before parking. A single Layer 1 call on `qwen2.5:14b` has
+ * been observed at 70-110s even with no backlog; a `maxAttempts` of 3 (a
+ * ~90s retry window) parks a thread whose extraction is still legitimately in
+ * flight, permanently hiding content that was never actually broken. 10
+ * attempts (~5 minutes) gives enough headroom to absorb a queued extraction or
+ * two before concluding the thread can never gain context.
  */
-export const DEFAULT_MAX_ATTEMPTS = 3;
+export const DEFAULT_MAX_ATTEMPTS = 10;
 
 /** One thread that fired on this tick, with the decision that fired it. */
 interface FiredThread {

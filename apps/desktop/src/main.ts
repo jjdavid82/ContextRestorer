@@ -7,6 +7,7 @@
 import { app, BrowserWindow, dialog, powerMonitor, safeStorage } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadConfig, newId, systemClock, type AppConfig, type Event } from '@cr/core';
 import {
   BriefingGenerator,
@@ -1061,22 +1062,24 @@ async function runPreflightGate(): Promise<boolean> {
 }
 
 /**
- * Wires `electron-reload` in unpackaged (dev) runs only: watching the app
+ * Wires `electron-reloader` in unpackaged (dev) runs only: watching the app
  * directory (compiled `dist/` and the built `ui/` static export, both under
  * `app.getAppPath()`) means `npm run build:desktop` / `npm run build:ui` now
  * relaunches the app instead of requiring a manual close-and-reopen.
  *
- * Dynamically imported, not a static top-level import: `electron-reload` is a
- * devDependency that `electron-builder`'s default file set prunes from a
+ * Dynamically imported, not a static top-level import: `electron-reloader` is
+ * a devDependency that `electron-builder`'s default file set prunes from a
  * packaged build's `node_modules`, and a static import is resolved
  * unconditionally at module load — it would crash every packaged launch
  * regardless of the `isPackaged` check below. A dynamic import only runs
  * inside that check, so a packaged build never attempts to load it.
  *
- * `forceHardReset` because a soft `webContents.reload()` cannot pick up a
- * changed main-process file anyway; using one reset path for both kinds of
- * change keeps this predictable — anything a build script produces relaunches
- * the whole app, not just the window.
+ * `electron-reloader` (unlike `electron-reload`) takes an explicit `module`
+ * object rather than reading CJS's `module.parent` — the latter is never set
+ * when a package is brought in via ESM `import()` (this app is `"type":
+ * "module"`), which is exactly what made `electron-reload` throw. Since ESM
+ * has no `module` global, a minimal stand-in with just the `filename`/
+ * `children` fields the library actually reads is passed instead.
  */
 async function enableDevReload(): Promise<void> {
   try {
@@ -1084,17 +1087,21 @@ async function enableDevReload(): Promise<void> {
     // ESM `export default` on what is actually a plain CommonJS
     // `module.exports = function ...`, which `moduleResolution: nodenext`
     // resolves to the whole module namespace instead of the function itself.
-    const mod: unknown = await import('electron-reload');
-    const electronReload = (
-      mod as { default: (glob: string, options: Record<string, unknown>) => void }
+    const mod: unknown = await import('electron-reloader');
+    const electronReloader = (
+      mod as {
+        default: (
+          moduleObject: { filename: string; children: never[] },
+          options: Record<string, unknown>,
+        ) => void;
+      }
     ).default;
-    electronReload(app.getAppPath(), {
-      electron: process.execPath,
-      forceHardReset: true,
-      hardResetMethod: 'exit',
-    });
+    electronReloader(
+      { filename: fileURLToPath(import.meta.url), children: [] },
+      { debug: false },
+    );
   } catch (error) {
-    console.warn('[dev] electron-reload not active:', error);
+    console.warn('[dev] electron-reloader not active:', error);
   }
 }
 
