@@ -11,11 +11,15 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@mui/material": "^7.3.11",
+    "@mui/material-pigment-css": "^9.4.0",
+    "@pigment-css/react": "^0.0.31",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@pigment-css/nextjs-plugin": "^0.0.31",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.0.0",
     "@types/react": "^19.0.0",

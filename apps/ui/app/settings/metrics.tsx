@@ -1,63 +1,49 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
+import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
-import { getBridge } from '../../lib/bridge';
+import { getBridge, hasBridge } from '../../lib/bridge';
 import type { LocalMetrics, MetricCount, MetricDuration } from '../../types/bridge';
+import { PanelHeading } from './PanelHeading';
 
 /**
  * Diagnostics panel (Task 4.4, step 4).
  *
- * Everything it shows comes from `debug:metrics`, which reads `ai_calls`,
- * `briefings` and the last seven days of `trace-*.jsonl`. Nothing here leaves
- * the machine and nothing here is on a timer — the numbers are cumulative and
- * slow-moving, so there is a Refresh button instead of a poll loop.
+ * Everything comes from `debug:metrics`, which reads `ai_calls`, `briefings` and
+ * the last seven days of `trace-*.jsonl`. Nothing leaves the machine and nothing
+ * is on a timer — cumulative, slow-moving numbers, so a Refresh button, not a
+ * poll.
  *
- * ## Layout
+ * Two layers on purpose: an "at a glance" summary (plain-language rows with a
+ * status chip) answering "is briefing generation healthy?", and a collapsed
+ * "Details" block with the raw `ai_calls` tables for anyone filing a bug. Only
+ * a briefing P95 past the OI-1 budget and an `injection_pattern` gate drop earn
+ * "Needs a look"; redaction counts are framed as the safety net working.
  *
- * The panel is two layers deep on purpose:
+ * "Not wired" is not "zero": the channel is registered only when the main
+ * process got all three readers. When missing, the invoke rejects and this
+ * panel says so — a fresh install legitimately reports zeros, and a wiring
+ * mistake that looked identical would be undiscoverable.
  *
- *   - **At a glance** — three or four plain-language rows, each with a status
- *     chip, that answer "is briefing generation healthy, and is there anything
- *     I should look at?" without the reader having to interpret a raw count.
- *   - **Details** — the underlying tables and per-reason breakdowns, collapsed
- *     by default behind native `<details>` disclosures. This is where the raw
- *     `ai_calls` layer/outcome numbers and the trace-log counters live for
- *     anyone filing a bug.
- *
- * The only signals the summary calls "needs a look" are the ones that are
- * genuinely actionable: a briefing P95 past the OI-1 budget, and a citation-gate
- * drop attributed to `injection_pattern` (the T-1 detector firing on real
- * output). Redaction counts are framed as the safety net working, not as a
- * fault — a leak caught silently is indistinguishable from no leak, and the
- * point of surfacing it is reassurance, not alarm.
- *
- * ## "Not wired" is not "zero"
- *
- * The channel is registered only when the main process was given all three
- * readers. When it is missing, the invoke rejects and this panel says so
- * explicitly — because a fresh install legitimately reports zero of everything,
- * and a wiring mistake that looked identical to a quiet install would be
- * undiscoverable.
+ * The collapsed Details tables still use the `.diag-*` / `.data-table` classes
+ * in `globals.css` — dense read-only tables MUI would not improve; migrating
+ * them is a later cleanup.
  */
 
 /** OI-1: the synchronous briefing path carries a 45s P95 target. */
 const BRIEFING_P95_BUDGET_MS = 45_000;
 
-/** Human names for the pipeline layers `ai_calls` records as bare integers. */
-const LAYER_NAMES: Record<number, string> = {
-  1: 'Extraction',
-  2: 'Synthesis',
-  3: 'Briefing',
-};
+const LAYER_NAMES: Record<number, string> = { 1: 'Extraction', 2: 'Synthesis', 3: 'Briefing' };
 
-/** `2` → "Synthesis (Layer 2)"; an unknown layer falls back to "Layer N". */
 function layerLabel(layer: number): string {
   const name = LAYER_NAMES[layer];
   return name === undefined ? `Layer ${layer}` : `${name} (Layer ${layer})`;
 }
 
-/** `ai_calls.outcome` codes in plain language. */
 const OUTCOME_LABELS: Record<string, string> = {
   ok: 'Completed',
   error: 'Failed',
@@ -66,7 +52,6 @@ const OUTCOME_LABELS: Record<string, string> = {
   all_claims_dropped: 'Finished, but published nothing',
 };
 
-/** Citation-gate drop reasons in plain language. */
 const GATE_REASON_LABELS: Record<string, string> = {
   no_citation: 'No source cited',
   not_in_context: 'Cited a source it was never shown',
@@ -75,13 +60,11 @@ const GATE_REASON_LABELS: Record<string, string> = {
   unsupported: 'Cited source did not back up the claim',
 };
 
-/** Layer-2 synthesis trigger reasons in plain language. */
 const TRIGGER_REASON_LABELS: Record<string, string> = {
   quiet: 'Conversation went quiet',
   hard_cap: 'Maximum wait reached',
 };
 
-/** Layer-2 synthesis trigger outcomes in plain language. */
 const TRIGGER_OUTCOME_LABELS: Record<string, string> = {
   ok: 'Produced an update',
   not_meaningful: 'Nothing meaningful had changed',
@@ -125,6 +108,13 @@ const CHIP_TEXT: Record<Tone, string> = {
   none: 'No data yet',
 };
 
+const CHIP_COLOR: Record<Tone, 'success' | 'warning' | 'default'> = {
+  good: 'success',
+  attention: 'warning',
+  info: 'default',
+  none: 'default',
+};
+
 interface SummaryRow {
   key: string;
   label: string;
@@ -134,16 +124,13 @@ interface SummaryRow {
 }
 
 /**
- * Turn the raw view into the "at a glance" rows.
- *
- * Deliberately conservative about `attention`: only a briefing P95 past the
- * OI-1 budget and an `injection_pattern` gate drop earn it. Everything else is
- * `good`, `info`, or `none`.
+ * Turn the raw view into the "at a glance" rows. Deliberately conservative about
+ * `attention`: only a briefing P95 past the OI-1 budget and an
+ * `injection_pattern` gate drop earn it.
  */
 function summarize(m: LocalMetrics): SummaryRow[] {
   const rows: SummaryRow[] = [];
 
-  // 1. Briefing speed — against the OI-1 45s P95 target.
   const bl = m.briefingLatency;
   if (bl.count === 0) {
     rows.push({
@@ -161,14 +148,12 @@ function summarize(m: LocalMetrics): SummaryRow[] {
       value: `Usually ${humanDuration(bl.p50Ms)}, up to ${humanDuration(bl.p95Ms)} — over ${bl.count} briefing${bl.count === 1 ? '' : 's'}.`,
       ...(overBudget
         ? {
-            hint: `The slowest runs are past the ${humanDuration(BRIEFING_P95_BUDGET_MS)} target. Switching to a smaller chat model (Settings → Chat model) is the usual fix.`,
+            hint: `The slowest runs are past the ${humanDuration(BRIEFING_P95_BUDGET_MS)} target. Switching to a smaller chat model (Chat model panel) is the usual fix.`,
           }
         : {}),
     });
   }
 
-  // 2. Held-back claims — the citation gate. `injection_pattern` is the one
-  //    reason worth pulling a human in.
   const drops = total(m.gateDrops);
   const injection = m.gateDrops.find((r) => r.key === 'injection_pattern')?.count ?? 0;
   if (drops === 0) {
@@ -196,7 +181,6 @@ function summarize(m: LocalMetrics): SummaryRow[] {
     });
   }
 
-  // 3. Redaction (SEC-5) — reassurance, never framed as a fault.
   if (m.redactionCount === 0) {
     rows.push({
       key: 'redaction',
@@ -214,7 +198,6 @@ function summarize(m: LocalMetrics): SummaryRow[] {
     });
   }
 
-  // 4. Pipeline activity — is the local model being called at all?
   const calls = m.layers.reduce((n, row) => n + row.calls, 0);
   rows.push({
     key: 'activity',
@@ -232,14 +215,23 @@ function summarize(m: LocalMetrics): SummaryRow[] {
 /** One "at a glance" row: chip, label, plain-language value, optional hint. */
 function SummaryItem({ row }: { row: SummaryRow }): ReactNode {
   return (
-    <li className="diag-row">
-      <div className="diag-row__top">
-        <span className={`status-chip status-chip--${row.tone}`}>{CHIP_TEXT[row.tone]}</span>
-        <span className="diag-row__label">{row.label}</span>
-      </div>
-      <p className="diag-row__value">{row.value}</p>
-      {row.hint !== undefined ? <p className="diag-row__hint">{row.hint}</p> : null}
-    </li>
+    <Box component="li" sx={{ p: 1.75, '& + li': { borderTop: 1, borderColor: 'divider' } }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 0.5 }}>
+        <Chip
+          size="small"
+          variant="outlined"
+          color={CHIP_COLOR[row.tone]}
+          label={CHIP_TEXT[row.tone]}
+        />
+        <Typography sx={{ fontWeight: 600 }}>{row.label}</Typography>
+      </Box>
+      <Typography sx={{ lineHeight: 1.5 }}>{row.value}</Typography>
+      {row.hint !== undefined ? (
+        <Typography sx={{ mt: 0.5, fontSize: '0.85rem', color: 'text.secondary' }}>
+          {row.hint}
+        </Typography>
+      ) : null}
+    </Box>
   );
 }
 
@@ -280,13 +272,7 @@ function Distribution({ label, value }: { label: string; value: MetricDuration }
 }
 
 /** A collapsed detail block. */
-function DetailSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}): ReactNode {
+function DetailSection({ title, children }: { title: string; children: ReactNode }): ReactNode {
   return (
     <details className="diag-section">
       <summary>{title}</summary>
@@ -294,6 +280,16 @@ function DetailSection({
     </details>
   );
 }
+
+const CALLOUT_SX = {
+  border: 1,
+  borderLeft: 4,
+  borderColor: 'divider',
+  borderLeftColor: 'text.secondary',
+  borderRadius: 1,
+  p: 2,
+  my: 2,
+} as const;
 
 export default function LocalMetricsPanel(): ReactNode {
   const [metrics, setMetrics] = useState<LocalMetrics | null>(null);
@@ -318,71 +314,75 @@ export default function LocalMetricsPanel(): ReactNode {
   }, []);
 
   useEffect(() => {
+    if (!hasBridge()) {
+      setError('Diagnostics are only available inside the Context Restorer desktop app.');
+      return;
+    }
     void load();
   }, [load]);
 
-  const refreshButton = (
-    <button
-      type="button"
-      className="btn btn--secondary"
-      disabled={busy}
-      onClick={() => void load()}
-    >
-      {busy ? 'Reading…' : 'Refresh'}
-    </button>
-  );
-
   return (
-    <section className="card" aria-label="Diagnostics">
-      <div className="diag-header">
-        <h2>Diagnostics</h2>
-        <div className="diag-actions">
+    <Box aria-label="Diagnostics">
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
+        <PanelHeading
+          title="Diagnostics"
+          lead="How briefing generation has been doing on this machine over the last 7 days. Read-only, and nothing here leaves the device."
+        />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {loadedAt !== null ? (
-            <span className="diag-updated">
+            <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
               Updated {new Date(loadedAt).toLocaleTimeString()}
-            </span>
+            </Typography>
           ) : null}
-          {refreshButton}
-        </div>
-      </div>
-      <p className="diag-intro">
-        How briefing generation has been doing on this machine over the last 7 days. Read-only, and
-        nothing here leaves the device.
-      </p>
+          <Button size="small" variant="outlined" disabled={busy} onClick={() => void load()}>
+            {busy ? 'Reading…' : 'Refresh'}
+          </Button>
+        </Box>
+      </Box>
 
       {error !== null ? (
-        <div className="diag-callout diag-callout--muted" role="status">
-          <p className="diag-callout__title">Diagnostics aren’t available right now</p>
-          <p className="muted-note">
+        <Box role="status" sx={CALLOUT_SX}>
+          <Typography sx={{ fontWeight: 600 }}>Diagnostics aren’t available right now</Typography>
+          <Typography sx={{ color: 'text.secondary', mt: 0.5 }}>
             The app started without its metrics readers, so there is nothing to show. This is a
             setup detail, not a fault — a healthy install with the readers wired simply shows zeros
             until briefings start running.
-          </p>
-          <p className="muted-note">
-            <small>Technical detail: {error}</small>
-          </p>
-        </div>
+          </Typography>
+          <Typography sx={{ color: 'text.secondary', mt: 0.5, fontSize: '0.8rem' }}>
+            Technical detail: {error}
+          </Typography>
+        </Box>
       ) : null}
 
       {metrics === null ? (
         error === null ? (
-          <p className="muted-note">Loading…</p>
+          <Typography sx={{ color: 'text.secondary' }}>Loading…</Typography>
         ) : null
       ) : !metrics.available ? (
-        <div className="diag-callout diag-callout--muted" role="status">
-          <p className="diag-callout__title">Diagnostics couldn’t be read</p>
-          <p className="muted-note">{metrics.reason ?? 'unknown reason'}</p>
-        </div>
+        <Box role="status" sx={CALLOUT_SX}>
+          <Typography sx={{ fontWeight: 600 }}>Diagnostics couldn’t be read</Typography>
+          <Typography sx={{ color: 'text.secondary', mt: 0.5 }}>
+            {metrics.reason ?? 'unknown reason'}
+          </Typography>
+        </Box>
       ) : (
         <>
-          <ul className="diag-summary list-reset">
+          <Box
+            component="ul"
+            sx={{ listStyle: 'none', p: 0, m: '0 0 24px', border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}
+          >
             {summarize(metrics).map((row) => (
               <SummaryItem key={row.key} row={row} />
             ))}
-          </ul>
+          </Box>
 
           <div className="diag-details">
-            <h3 className="diag-details__title">Details</h3>
+            <Typography
+              component="h3"
+              sx={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.secondary', mb: 1 }}
+            >
+              Details
+            </Typography>
 
             <DetailSection title="Model calls by stage">
               {metrics.layers.length === 0 ? (
@@ -446,8 +446,6 @@ export default function LocalMetricsPanel(): ReactNode {
             </DetailSection>
 
             <DetailSection title="Held-back claims by reason">
-              {/* `injection_pattern` here means the T-1 detector fired on real
-                  generated output, which is worth a human look. */}
               <LabeledCounts
                 rows={metrics.gateDrops}
                 labels={GATE_REASON_LABELS}
@@ -462,9 +460,7 @@ export default function LocalMetricsPanel(): ReactNode {
               </p>
               <p className="metrics__line">
                 Kinds detected:{' '}
-                {metrics.redactionKinds.length === 0
-                  ? 'none'
-                  : metrics.redactionKinds.join(', ')}
+                {metrics.redactionKinds.length === 0 ? 'none' : metrics.redactionKinds.join(', ')}
               </p>
             </DetailSection>
 
@@ -487,18 +483,16 @@ export default function LocalMetricsPanel(): ReactNode {
             </DetailSection>
           </div>
 
-          <p className="diag-footer">
-            <small>
-              Based on {metrics.tracesRead.toLocaleString()} trace entr
-              {metrics.tracesRead === 1 ? 'y' : 'ies'} from the last 7 days
-              {metrics.unparseableTraceLines > 0
-                ? `; ${metrics.unparseableTraceLines} line(s) could not be parsed`
-                : ''}
-              .
-            </small>
-          </p>
+          <Typography sx={{ mt: 2, fontSize: '0.8rem', color: 'text.secondary' }}>
+            Based on {metrics.tracesRead.toLocaleString()} trace entr
+            {metrics.tracesRead === 1 ? 'y' : 'ies'} from the last 7 days
+            {metrics.unparseableTraceLines > 0
+              ? `; ${metrics.unparseableTraceLines} line(s) could not be parsed`
+              : ''}
+            .
+          </Typography>
         </>
       )}
-    </section>
+    </Box>
   );
 }

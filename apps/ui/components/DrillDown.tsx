@@ -1,22 +1,26 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { getBridge } from '../lib/bridge';
-import { ExternalLink } from './ExternalLink';
 import type { DrillDown } from '../types/bridge';
+import { ExternalLink } from './ExternalLink';
 
 /**
  * Drill-down provenance panel (Task 3.6, FR-6).
  *
- * Answers "where did this come from?" by calling `claim:drilldown` and showing
- * the raw source events behind a claim, each with its external deep link. This
- * is the trust mechanism for the whole product: a briefing the user cannot
- * verify is a briefing the user has to re-check by hand, which is the work the
- * app exists to remove.
+ * Answers "where did this come from?" via `claim:drilldown` — the raw source
+ * events behind a claim, each with its external deep link. This is the trust
+ * mechanism for the whole product: a briefing the user cannot verify is one
+ * they have to re-check by hand, which is the work the app removes.
  *
- * Exported as `DrillDownPanel` so the component name does not collide with the
- * `DrillDown` payload type from the bridge.
+ * Exported as `DrillDownPanel` so the name does not collide with the `DrillDown`
+ * payload type from the bridge. Rendered inside `BriefingView`'s `Collapse` for
+ * a claim; the accent-left inset styling stays so it reads as evidence beneath
+ * the claim rather than a peer of it.
  */
 
 export interface DrillDownPanelProps {
@@ -30,6 +34,18 @@ export interface DrillDownPanelProps {
 function describe(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
+
+const PANEL_SX = {
+  mt: 1,
+  p: 1.5,
+  borderLeft: 3,
+  borderColor: 'primary.main',
+  borderRadius: '0 4px 4px 0',
+  bgcolor: 'action.hover',
+  '& a': { color: 'primary.main', fontSize: 13 },
+} as const;
+
+const EVENT_SX = { mb: 1.5, '&:last-of-type': { mb: 0 } } as const;
 
 export function DrillDownPanel({ claimId, onClose }: DrillDownPanelProps): ReactNode {
   const [drilldown, setDrilldown] = useState<DrillDown | null>(null);
@@ -61,62 +77,59 @@ export function DrillDownPanel({ claimId, onClose }: DrillDownPanelProps): React
   }, [claimId]);
 
   return (
-    <div aria-label="Sources behind this claim" className="drilldown">
-      <h4 className="drilldown__heading">Where this came from</h4>
+    <Box aria-label="Sources behind this claim" sx={PANEL_SX}>
+      <Typography
+        component="h4"
+        sx={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'text.secondary', mb: 1 }}
+      >
+        Where this came from
+      </Typography>
 
       {error !== null ? (
-        <p role="alert" className="drilldown__error">
+        <Typography role="alert" sx={{ color: 'error.main' }}>
           Could not load sources: {error}
-        </p>
+        </Typography>
       ) : drilldown === null ? (
-        <p className="muted-note">Loading sources…</p>
+        <Typography sx={{ color: 'text.secondary' }}>Loading sources…</Typography>
       ) : drilldown.events.length === 0 ? (
-        <p className="muted-note">
+        <Typography sx={{ color: 'text.secondary' }}>
           No source events are recorded for this claim.
-        </p>
+        </Typography>
       ) : (
-        <ul className="drilldown__list">
+        <Box component="ul" sx={{ listStyle: 'none', p: 0, m: 0 }}>
           {drilldown.events.map((event) => (
-            <li key={event.eventId} className="drilldown__item">
-              <div className="drilldown__meta">
-                <strong className="drilldown__author">{event.author}</strong>
+            <Box component="li" key={event.eventId} sx={EVENT_SX}>
+              <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+                <Box component="strong" sx={{ color: 'text.primary' }}>
+                  {event.author}
+                </Box>
                 {' · '}
                 {event.source}
                 {' · '}
                 {new Date(event.occurredAt).toLocaleString()}
-              </div>
-              <div>{event.text}</div>
+              </Typography>
+              <Typography sx={{ fontSize: 13 }}>{event.text}</Typography>
               {event.externalUrl !== undefined ? (
-                // FR-6: the escape hatch out of the briefing and into the real
-                // thread. Still a real anchor (keyboard reachable, announced as
-                // a link), but the click is routed through `shell:openExternal`
-                // rather than navigating — see `ExternalLink` and Task 4.6.
-                <ExternalLink
-                  className="cr-interactive drilldown__link"
-                  href={event.externalUrl}
-                >
-                  open in {event.source}
-                </ExternalLink>
+                // FR-6: the escape hatch into the real thread. A real anchor
+                // (keyboard reachable, announced as a link), but the click is
+                // routed through `shell:openExternal` — see `ExternalLink`.
+                <ExternalLink href={event.externalUrl}>open in {event.source}</ExternalLink>
               ) : (
-                <span className="drilldown__meta">
+                <Typography component="span" sx={{ fontSize: 12, color: 'text.secondary' }}>
                   no deep link available
-                </span>
+                </Typography>
               )}
-            </li>
+            </Box>
           ))}
-        </ul>
+        </Box>
       )}
 
       {onClose !== undefined ? (
-        <button
-          type="button"
-          className="cr-interactive drilldown__close"
-          onClick={onClose}
-        >
+        <Button size="small" onClick={onClose} sx={{ mt: 1 }}>
           Close sources
-        </button>
+        </Button>
       ) : null}
-    </div>
+    </Box>
   );
 }
 

@@ -1,5 +1,9 @@
 'use client';
 
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Collapse from '@mui/material/Collapse';
+import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { getBridge } from '../lib/bridge';
@@ -170,6 +174,28 @@ function dedupeClaims(chunks: readonly ClaimChunk[]): ClaimChunk[] {
   }
   return result;
 }
+
+/**
+ * The changed list (and streamed "Waiting on you" claims): a hairline-ruled
+ * flow, not cards. Styled on the `<ul>` so `ClaimBullet` stays a dumb `<li>`
+ * (a per-list `sx` on the child cannot be statically extracted by Pigment).
+ */
+const CHANGED_LIST_SX = {
+  listStyle: 'none',
+  p: 0,
+  m: 0,
+  '& > li': { py: 1.5, borderTop: 1, borderColor: 'divider' },
+  '& > li:first-of-type': { borderTop: 0, pt: 0 },
+} as const;
+
+const SECTION_HEADING_SX = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 0.5,
+  fontSize: '1.05rem',
+  fontWeight: 650,
+  mb: 1.5,
+} as const;
 
 export interface BriefingViewProps {
   /**
@@ -431,15 +457,14 @@ export function BriefingView({
   const renderDetail = useCallback(
     (claimId: string, resolveAction?: ReactNode): ReactNode => {
       const detail: ReactNode[] = [];
-      if (openClaimId === claimId) {
-        detail.push(
-          <DrillDownPanel
-            key="drilldown"
-            claimId={claimId}
-            onClose={() => setOpenClaimId(null)}
-          />,
-        );
-      }
+      // `unmountOnExit` keeps `DrillDownPanel` unmounted while closed, so its
+      // `claim:drilldown` fetch only fires when the user actually opens it —
+      // same as the previous conditional mount, now with a slide animation.
+      detail.push(
+        <Collapse key="drilldown" in={openClaimId === claimId} unmountOnExit>
+          <DrillDownPanel claimId={claimId} onClose={() => setOpenClaimId(null)} />
+        </Collapse>,
+      );
       if (briefingId !== null) {
         const verdict = claimVerdicts[claimId];
         detail.push(
@@ -503,60 +528,49 @@ export function BriefingView({
   const hiddenChangedCount = changedClaims.length - visibleChanged.length;
 
   return (
-    <section className="cr-briefing" aria-label="Briefing">
-      <h2 className="briefing-view__title">What you missed</h2>
+    <Box component="section" aria-label="Briefing" sx={{ color: 'text.primary' }}>
+      <Typography component="h2" sx={{ fontSize: '1.35rem', fontWeight: 650, mb: 0.5 }}>
+        What you missed
+      </Typography>
       {/*
         R-6: set the expectation before the output disappoints — but truthfully.
-
-        This used to read "Still learning your preferences — early briefings will
-        be rough, and the feedback buttons sharpen them." Nothing learns. X-2
-        excludes learned ranking from the POC outright, `ranker.ts` carries a
-        guardrail forbidding any feedback-derived value from entering the scoring
-        input, and FR-7 states feedback feeds the offline eval only. The sentence
-        promised a loop the design deliberately does not have, on the one screen
-        whose whole character is disclosure (partial-generation notices,
-        threads-still-processing counts, the simplified-briefing banner).
-
-        The replacement keeps R-6's job — say the output will be imperfect before
-        the user discovers it — while describing what the ranker actually uses.
+        This once promised a learning loop the design deliberately does not have
+        (X-2 excludes learned ranking; `ranker.ts` forbids feedback-derived
+        values in scoring; FR-7 feeds the offline eval only). The replacement
+        keeps R-6's job while describing what the ranker actually uses.
       */}
-      <p className="briefing-view__subtitle">
+      <Typography sx={{ color: 'text.secondary', fontSize: '0.85rem', mb: 2 }}>
         Ranked by the projects you declared — nothing is learned from what you click. Early
         briefings will be rough; flagging a wrong item helps us fix the model offline.
-      </p>
+      </Typography>
 
       {error !== null ? (
-        <p role="alert" className="briefing-view__error">
+        <Typography role="alert" sx={{ color: 'error.main', mb: 1 }}>
           Briefing unavailable: {error}
-        </p>
+        </Typography>
       ) : null}
 
       {/*
-        The "Simplified briefing" banner was removed by P0.
-
-        It told the user their briefing had been "assembled from stored state
-        changes" because "the local model was unavailable" — a degradation
-        notice. Under deterministic-first that is simply how every briefing is
-        built: the request path renders from SQLite by design, and model-written
-        prose is folded in per delta when a background pass has produced it.
-
-        Keeping the banner would have meant telling the user their briefing was
-        second-rate on the ordinary path, which is not a warning but a lie. The
-        honest disclosures that remain are the ones that describe real gaps —
-        the OI-1 still-processing count in the footer, and the low-confidence
-        flag on individual obligations.
+        The "Simplified briefing" banner was removed by P0: under
+        deterministic-first, rendering from SQLite with model prose folded in
+        per delta is simply how every briefing is built, not a degradation. The
+        honest disclosures that remain describe real gaps — the OI-1
+        still-processing count in the footer, the low-confidence flag on
+        individual obligations.
       */}
 
       {/*
         The streaming region. `aria-live="polite"` is what makes a briefing that
         arrives a sentence at a time usable without sight: new bullets are
-        announced as they land, at the next natural pause rather than by
-        interrupting. `aria-busy` suppresses that chatter until the stream ends
-        — announcing a half-written briefing is worse than announcing it late.
+        announced as they land, at the next natural pause. `aria-busy`
+        suppresses that chatter until the stream ends — announcing a
+        half-written briefing is worse than announcing it late.
       */}
       <div aria-live="polite" aria-busy={done === null} data-testid="briefing-stream">
         {resolveError !== null ? (
-          <p role="alert">Could not mark resolved: {resolveError}</p>
+          <Typography role="alert" sx={{ color: 'error.main', mb: 1 }}>
+            Could not mark resolved: {resolveError}
+          </Typography>
         ) : null}
         <PendingSection
           items={pending}
@@ -566,65 +580,67 @@ export function BriefingView({
           onResolve={resolvePendingItem}
         >
           {waitingOnYouClaims.length > 0 ? (
-            <ul className="briefing-view__waiting-list">
+            <Box component="ul" sx={CHANGED_LIST_SX}>
               {bulletsForChunks(waitingOnYouClaims)}
-            </ul>
+            </Box>
           ) : null}
         </PendingSection>
 
         {/*
-          P2/P4: ONE "changed" group, not three sections. The generator still
+          P2/P4: ONE "changed" list, not three sections. The generator still
           emits four sections and they are still what gets persisted — this is a
-          presentation grouping only, ordered by `CHANGED_SECTIONS` so a claim's
-          relative position is unchanged from the four-section layout.
+          presentation grouping only, ordered by `CHANGED_SECTIONS`. (Grouping
+          this list by channel/project — D-2 in the redesign plan — needs a
+          `channelName` on the `Citation` IPC payload, which is a later
+          follow-up; today's `Citation` carries only `source`.)
 
-          The heading is a COUNT ("4 things changed"), so the reader learns the
-          size of the job before reading any of it.
+          The heading is a COUNT, so the reader learns the size of the job first.
         */}
-        <section aria-label="Changed while you were out">
-          <h3 className="section-heading">
+        <Box component="section" aria-label="Changed while you were out" sx={{ mt: 3 }}>
+          <Typography component="h3" sx={SECTION_HEADING_SX}>
             {changedClaims.length === 0
               ? 'Nothing else changed'
               : `${changedClaims.length} thing${changedClaims.length === 1 ? '' : 's'} changed`}
             <SectionInfoIcon meaning={CHANGED_GROUP_MEANING} />
-          </h3>
+          </Typography>
 
           {visibleChanged.length > 0 ? (
-            <ul className="bullet-list">{bulletsForChunks(visibleChanged)}</ul>
+            <Box component="ul" sx={CHANGED_LIST_SX}>
+              {bulletsForChunks(visibleChanged)}
+            </Box>
           ) : (
-            <p className="muted-note">{done === null ? 'Still writing…' : 'Nothing here.'}</p>
+            <Typography sx={{ color: 'text.secondary' }}>
+              {done === null ? 'Still writing…' : 'Nothing here.'}
+            </Typography>
           )}
 
           {/*
             A-4: the overflow is COLLAPSED, never dropped, and the count is
-            always visible — the cap makes this a briefing rather than a feed,
-            but a hidden item the user cannot even count would be a silent
-            omission. Obligations above have no equivalent control because they
-            are never capped at all.
+            always visible. Obligations above have no equivalent control because
+            they are never capped at all.
           */}
           {hiddenChangedCount > 0 ? (
-            <p>
-              <button
-                type="button"
-                className="cr-interactive feedback-button"
-                onClick={() => setShowAllChanged(true)}
-              >
+            <Box sx={{ mt: 1.5 }}>
+              <Button size="small" onClick={() => setShowAllChanged(true)}>
                 Show {hiddenChangedCount} more
-              </button>
-            </p>
+              </Button>
+            </Box>
           ) : null}
-        </section>
+        </Box>
       </div>
 
-      <footer className="briefing-view__footer">
+      <Box
+        component="footer"
+        sx={{ mt: 3, pt: 2, borderTop: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', gap: 1 }}
+      >
         {/* OI-1: a briefing generated while threads are still ingesting is
-            incomplete, and the user needs to know that before they act on it —
-            or on its silence. Hidden entirely when the backlog is drained. */}
+            incomplete, and the user needs to know that before acting on it — or
+            on its silence. Hidden when the backlog is drained. */}
         {done !== null && done.threadsStillProcessing > 0 ? (
-          <p role="status" className="briefing-view__processing-note">
+          <Typography role="status" sx={{ color: 'warning.main', fontSize: '0.85rem' }}>
             {done.threadsStillProcessing} threads still processing — this briefing may be
             incomplete.
-          </p>
+          </Typography>
         ) : null}
 
         {briefingId !== null ? (
@@ -636,8 +652,8 @@ export function BriefingView({
             <FeedbackControls briefingId={briefingId} />
           </>
         ) : null}
-      </footer>
-    </section>
+      </Box>
+    </Box>
   );
 }
 

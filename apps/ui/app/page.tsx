@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { BriefingView } from '../components/BriefingView';
-import { PipelineStatusPanel } from '../components/PipelineStatus';
-import { SourceHealthPanel } from '../components/SourceHealth';
+import { PageToolbar } from '../components/PageToolbar';
 import { getBridge } from '../lib/bridge';
 import {
   parseWindowStart,
@@ -154,7 +156,7 @@ export default function HomePage(): ReactNode {
    * the user edited it by hand, so the button re-briefed the same month on every
    * press and "I'm caught up" changed nothing but a metric.
    */
-  const requestBriefing = (): void => {
+  const requestBriefing = useCallback((): void => {
     setBriefingError(null);
 
     // Read at click time, not held in state: both inputs can change while this
@@ -190,64 +192,67 @@ export default function HomePage(): ReactNode {
     } catch (cause) {
       setBriefingError(cause instanceof Error ? cause.message : String(cause));
     }
-  };
+  }, []);
+
+  /**
+   * Option 3: the home screen IS the briefing. Instead of a hero "Brief me"
+   * button, request one automatically as soon as the OI-3 gate opens and there
+   * is nothing already on screen (a restored `briefingId` from a Settings
+   * round-trip counts). `requestBriefing` is `useCallback([])`-stable and sets
+   * `briefingId` on success, so this fires exactly once per gate-open; a failed
+   * request leaves `briefingId` null but does not re-fire (no dep changed) —
+   * the Refresh button in the toolbar is the retry.
+   */
+  useEffect(() => {
+    if (readyForBriefing && briefingId === null) requestBriefing();
+  }, [readyForBriefing, briefingId, requestBriefing]);
+
+  const noProjects = status !== null && status.projectsDeclared.length === 0;
 
   return (
-    <main className="dashboard-main">
-      {/* "Context Restorer" already appears once, in the persistent nav brand
-          (`app/layout.tsx`) — a second `<h1>` here just repeated it. */}
-      <section className="dashboard-primary">
-        <button
-          type="button"
-          className="btn btn--primary"
+    <>
+      <PageToolbar title="What you missed">
+        <Button
+          size="small"
+          variant="outlined"
           disabled={!readyForBriefing}
           onClick={requestBriefing}
         >
-          Brief me on what I missed
-        </button>
-        {status !== null && status.projectsDeclared.length === 0 ? (
-          <p>
-            <small>
-              Declare a project before your first briefing — it is what ranks your briefing by
-              what matters instead of by what is newest.{' '}
-              {/* Root-relative, with the filename spelled out: the bundle is served
-                  over the `app://` protocol (a fixed-host "standard" scheme), whose
-                  handler cannot fetch a directory-style URL, and whose root-relative
-                  resolution is what makes this correct from any route depth. */}
-              <a href="/onboarding/index.html">you can add some</a>.
-            </small>
-          </p>
-        ) : null}
-        {error !== null ? <p role="alert">Bridge unavailable: {error}</p> : null}
-        {briefingError !== null ? <p role="alert">Briefing failed: {briefingError}</p> : null}
+          Refresh
+        </Button>
+      </PageToolbar>
 
-        {/* The briefing itself (Task 3.6), kept in the SAME section as the button
-            that requests it — "What you missed" is this action's direct result,
-            not an unrelated part of the page — but rendered as its OWN card
-            (`.cr-briefing`, in `BriefingView.tsx`) rather than folded into the
-            button's plain surroundings, so the result reads as visually distinct
-            from the control that produced it. Mounted only once a briefing has
-            been requested, and handed the resulting id: this page owns the
-            request so the OI-3 gate above stays the single place that decides
-            whether a briefing may be generated at all. `BriefingView` then
+      <Box sx={{ maxWidth: 640, mx: 'auto', width: '100%', p: 3 }}>
+        {noProjects ? (
+          <Typography sx={{ color: 'text.secondary', fontSize: '0.9rem', mb: 2 }}>
+            Declare a project before your first briefing — it is what ranks the briefing by what
+            matters instead of by what is newest.{' '}
+            {/* Root-relative with the filename spelled out: the bundle is served over the
+                `app://` fixed-host scheme, whose handler cannot fetch a directory-style URL. */}
+            <Box component="a" href="/onboarding/index.html" sx={{ color: 'primary.main' }}>
+              Add some
+            </Box>
+            .
+          </Typography>
+        ) : null}
+
+        {error !== null ? (
+          <Typography role="alert" sx={{ color: 'error.main', mb: 2 }}>
+            Bridge unavailable: {error}
+          </Typography>
+        ) : null}
+        {briefingError !== null ? (
+          <Typography role="alert" sx={{ color: 'error.main', mb: 2 }}>
+            Briefing failed: {briefingError}
+          </Typography>
+        ) : null}
+
+        {/* This page owns the request (the OI-3 gate above is the single place
+            that decides whether a briefing may be generated); `BriefingView`
             subscribes to the stream and paints "Waiting on you" from
             `briefing:pending`. */}
         {briefingId !== null ? <BriefingView briefingId={briefingId} /> : null}
-      </section>
-
-      {/* Secondary, at-a-glance status — connector health and pipeline activity.
-          Demoted below the briefing itself (no card shadow): useful to have on
-          screen, but neither is what the user came here for. */}
-      <div className="dashboard-secondary">
-        {/* Live `health:sources` strip; independent of the onboarding fetch above,
-            so a failed status call does not hide connector health. */}
-        <SourceHealthPanel />
-
-        {/* Live `pipeline:status` strip — makes the silent ingest → extract →
-            synthesize pipeline visible while a briefing is not yet available to
-            show anything for it. */}
-        <PipelineStatusPanel />
-      </div>
-    </main>
+      </Box>
+    </>
   );
 }
