@@ -3,7 +3,6 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
@@ -114,24 +113,27 @@ export function FeedbackControls({
           I missed something
         </Button>
       ) : (
-        <ToggleButtonGroup size="small" aria-label="Was this claim relevant?">
+        // Individual `ToggleButton`s in the row rather than a `ToggleButtonGroup`
+        // — the group renders them flush as a segmented control; these read as
+        // three separate small toggles with the row's own gap between them.
+        // Always clickable, even once a verdict is recorded (the user must be
+        // able to change their mind); `recorded` tracks only the latest, and
+        // every click re-fires `submit`, writing another row. `selected` →
+        // MUI mirrors it to `aria-pressed`.
+        <Box role="group" aria-label="Was this claim relevant?" sx={{ display: 'flex', gap: 0.75 }}>
           {CLAIM_VERDICTS.map(({ verdict, label }) => (
             <ToggleButton
               key={verdict}
               value={verdict}
-              // Always clickable, even once a verdict is recorded — the user
-              // must be able to change their mind without a separate "edit"
-              // step. `recorded` tracks only the LATEST submitted verdict; every
-              // click still fires `submit`, which writes another row. `selected`
-              // set explicitly (it wins over the group's value-based default);
-              // MUI mirrors it to `aria-pressed`.
+              size="small"
               selected={recorded === verdict}
               onClick={() => submit(verdict)}
+              sx={{ py: 0.25, px: 1, textTransform: 'none', lineHeight: 1.4 }}
             >
               {label}
             </ToggleButton>
           ))}
-        </ToggleButtonGroup>
+        </Box>
       )}
 
       {children}
