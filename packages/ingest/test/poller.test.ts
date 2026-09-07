@@ -513,6 +513,42 @@ describe('Poller: backoff reset', () => {
     expect(slack.calls).toBe(5);
   });
 
+  it('logs the first failure of a run and the recovery, but nothing in between', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const notConnected = Object.assign(new Error('slack is not connected: no OAuth tokens in the vault'), {
+      code: 'not_authed',
+    });
+    const slack = mockSource('slack', (_cursor, call) =>
+      call < 3 ? Promise.reject(notConnected) : Promise.resolve({ events: [] }),
+    );
+    const h = makePoller({
+      config: pollingCfg({ intervalMs: 100, maxBackoffMs: 100_000 }, NEVER),
+      slack: slack.client,
+      random: () => 0,
+    });
+
+    h.poller.start();
+    await h.advance(0); // fail #1
+    await h.advance(200); // fail #2
+    await h.advance(400); // fail #3
+
+    // Auth error → one concise warn, no stack trace, only for the FIRST failure.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toMatch(/slack:.*connect it in Settings/);
+    expect(error).not.toHaveBeenCalled();
+
+    await h.advance(800); // succeeds
+    expect(h.poller.health().slack.status).toBe('ok');
+    expect(info).toHaveBeenCalledWith('[poll] slack recovered after 3 failed cycle(s)');
+
+    warn.mockRestore();
+    error.mockRestore();
+    info.mockRestore();
+  });
+
   it('restarts the exponent from the base interval after a later failure run', async () => {
     // fail, succeed, fail — the second failure must wait 200ms (2x base), not 400ms.
     const script = [false, true, false, true];

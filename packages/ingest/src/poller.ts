@@ -321,6 +321,12 @@ export class Poller {
       }
     }
 
+    // A run that had been failing and is now healthy again is worth one line —
+    // it closes the story the first-failure log opened.
+    if (state.failures > 0) {
+      console.info(`[poll] ${source} recovered after ${state.failures} failed cycle(s)`);
+    }
+
     state.status = 'ok';
     state.lastSyncAt = this.#clock.now();
     state.newEventCount = events.length;
@@ -333,22 +339,25 @@ export class Poller {
     const state = this.#state[source];
     const retryAfterMs = rateLimitRetryAfterMs(error);
 
-    // A failed cycle used to be entirely silent: the only trace was the health
-    // strip going to `disconnected`, and `never_synced` maps there too — so a
-    // source failing every cycle was indistinguishable, on screen and in the
-    // logs, from a source that had simply never run. Diagnosing one meant
-    // reading the poller's source to discover the failure was even possible.
-    // The status is recorded below; this is the only place that says WHY.
-    console.error(`[poll] ${source} cycle failed (failures=${state.failures + 1})`, error);
-
     if (retryAfterMs !== null) {
       // The provider told us exactly how long to wait. Honour it verbatim
       // (bounded by the cap) and do NOT grow the backoff exponent: throttling is
       // a normal, self-correcting condition, not an outage.
+      if (state.status !== 'rate_limited') {
+        console.warn(
+          `[poll] ${source} rate-limited; backing off ~${Math.round(retryAfterMs / 1000)}s`,
+        );
+      }
       state.status = 'rate_limited';
       state.nextDelayMs = Math.min(retryAfterMs, this.#maxBackoffMs(source));
       return;
     }
+
+    // Log the FIRST failure of a run, then stay quiet: the health strip and
+    // `health()` carry the ongoing state, and a source that has simply never
+    // been connected would otherwise print a stack trace on every backoff
+    // cycle, forever. `#recordSuccess` logs the matching recovery line.
+    const firstOfRun = state.failures === 0;
 
     state.failures += 1;
     state.nextDelayMs = this.#backoffMs(source, state.failures);
@@ -357,6 +366,17 @@ export class Poller {
       : isRateLimitError(error)
         ? 'rate_limited'
         : 'backoff';
+
+    if (!firstOfRun) return;
+    if (state.status === 'auth_error') {
+      // Almost always "not connected yet", not an outage — one concise line, no
+      // stack trace. The poller keeps checking, so a later connect just works.
+      console.warn(
+        `[poll] ${source}: ${errorMessage(error)} — connect it in Settings; the poller will keep checking`,
+      );
+    } else {
+      console.error(`[poll] ${source} cycle failed; retrying with backoff`, error);
+    }
   }
 
   /**
@@ -386,6 +406,10 @@ export class Poller {
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+
+/** A short, log-safe description of an error — its message, or a stringified fallback. */
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /** Parse a `Retry-After`-ish value into ms. Accepts numbers and numeric strings. */
 const secondsToMs = (value: unknown): number | null => {
