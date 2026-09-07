@@ -342,10 +342,14 @@ Authorization Code + PKCE, system browser, loopback redirect on an ephemeral
 immediately after (Slack's redirect uses a FIXED loopback port instead, matching its
 app registration's Redirect URL exactly — Slack requires an exact match including
 port, unlike Google's installed-app flow). `state` verified. Scopes exactly as §5.1
-specifies — Slack `channels:history`, `channels:read`, `im:history`, `users:read`;
-Gmail `mail.readonly`. `channels:read` was added 2026-08-28 (user decision) so the
-channel-selector settings page can call `conversations.list` — `channels:history`
-alone does not authorize channel discovery. Nothing broader than this set (T-2).
+specifies — Slack `channels:history`, `channels:read`, `groups:history`,
+`groups:read`, `im:history`, `users:read`; Gmail `mail.readonly`. `channels:read`
+was added 2026-08-28 (user decision) so the channel-selector settings page can call
+`conversations.list` — `channels:history` alone does not authorize channel
+discovery. `groups:read`/`groups:history` were added 2026-09-07 (user decision) to
+extend that same discovery-plus-history pairing to private channels; the token is a
+user token, so `conversations.list` returns only private channels the connecting
+user has already joined. Nothing broader than this set (T-2).
 
 **Token storage (SEC-2).** `safeStorage.encryptString` produces a ciphertext whose key
 lives in the OS keychain (DPAPI / Keychain / libsecret). The ciphertext is written to

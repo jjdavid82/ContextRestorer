@@ -360,6 +360,8 @@ export interface SlackChannel {
   name: string;
   /** Whether the connected user has already joined this channel. */
   isMember: boolean;
+  /** Whether this is a private channel (Slack "group"), not a public one. */
+  isPrivate: boolean;
 }
 
 /** A channel the user has selected for polling. Mirrors `slack_selected_channels`. */

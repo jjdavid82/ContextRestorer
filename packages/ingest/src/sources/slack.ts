@@ -48,6 +48,12 @@ export interface SlackChannelSummary {
   id: string;
   name: string;
   isMember: boolean;
+  /**
+   * Private channels are indistinguishable from public ones by name alone, and
+   * selecting one has different consequences for what the app reads. The
+   * selector surfaces this rather than making the user remember.
+   */
+  isPrivate: boolean;
 }
 
 /** The wire shape of one `conversations.list` channel entry. */
@@ -56,6 +62,7 @@ interface SlackChannelEntry {
   name?: string;
   is_archived?: boolean;
   is_member?: boolean;
+  is_private?: boolean;
 }
 
 /** Slack's uniform response envelope. `ok: false` carries a machine-readable `error`. */
@@ -440,9 +447,14 @@ export class SlackClient implements SourceClient<string> {
   }
 
   /**
-   * Public channels the token's user can see, for the channel-selector UI.
+   * Public and private channels the token's user can see, for the
+   * channel-selector UI.
    *
-   * Requires `channels:read` (added to `SLACK_SCOPES` specifically for this).
+   * Requires `channels:read` and — for the `private_channel` half — `groups:read`
+   * (both added to `SLACK_SCOPES` specifically for this). Private channels come
+   * back only where the token's user is already a member; Slack does not expose
+   * private conversations a user has not joined, so this cannot widen what the
+   * app sees beyond what that person already sees.
    * Archived channels are excluded — polling a channel nobody can post to again
    * is never a useful selection. Paginates the same way `#paginate` does, just
    * over `channels` instead of `messages`, since `conversations.list`'s page
@@ -455,7 +467,7 @@ export class SlackClient implements SourceClient<string> {
 
     for (;;) {
       const page = await this.request('conversations.list', {
-        types: 'public_channel',
+        types: 'public_channel,private_channel',
         exclude_archived: 'true',
         limit: this.#pageSize,
         ...(cursor !== undefined ? { cursor } : {}),
@@ -475,6 +487,7 @@ export class SlackClient implements SourceClient<string> {
       id: c.id,
       name: c.name ?? c.id,
       isMember: c.is_member ?? false,
+      isPrivate: c.is_private ?? false,
     }));
   }
 

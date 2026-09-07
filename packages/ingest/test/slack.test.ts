@@ -301,7 +301,7 @@ describe('conversations.history pagination', () => {
 });
 
 describe('listChannels (conversations.list)', () => {
-  it('maps id/name/is_member and follows pagination across pages', async () => {
+  it('maps id/name/is_member/is_private and follows pagination across pages', async () => {
     const { client, fetchImpl, urls } = makeClient({
       'conversations.list': [
         () =>
@@ -316,7 +316,7 @@ describe('listChannels (conversations.list)', () => {
         () =>
           json({
             ok: true,
-            channels: [{ id: 'C3', name: 'eng-team', is_member: true }],
+            channels: [{ id: 'C3', name: 'eng-team', is_member: true, is_private: true }],
             response_metadata: { next_cursor: '' },
           }),
       ],
@@ -327,14 +327,26 @@ describe('listChannels (conversations.list)', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(new URL(urls[0]!).searchParams.get('cursor')).toBeNull();
     expect(new URL(urls[1]!).searchParams.get('cursor')).toBe('page2cursor');
-    expect(new URL(urls[0]!).searchParams.get('types')).toBe('public_channel');
     expect(new URL(urls[0]!).searchParams.get('exclude_archived')).toBe('true');
 
     expect(channels).toEqual([
-      { id: 'C1', name: 'general', isMember: true },
-      { id: 'C2', name: 'random', isMember: false },
-      { id: 'C3', name: 'eng-team', isMember: true },
+      { id: 'C1', name: 'general', isMember: true, isPrivate: false },
+      { id: 'C2', name: 'random', isMember: false, isPrivate: false },
+      { id: 'C3', name: 'eng-team', isMember: true, isPrivate: true },
     ]);
+  });
+
+  // Pinned deliberately: private-channel discovery is a scope-bearing decision
+  // (`groups:read`), and dropping `private_channel` here would silently narrow
+  // the selector back to public-only with the scope still granted.
+  it('requests both public and private channels', async () => {
+    const { client, urls } = makeClient({
+      'conversations.list': [() => json({ ok: true, channels: [] })],
+    });
+
+    await client.listChannels();
+
+    expect(new URL(urls[0]!).searchParams.get('types')).toBe('public_channel,private_channel');
   });
 
   it('stops at an empty next_cursor rather than looping forever', async () => {
@@ -371,12 +383,14 @@ describe('listChannels (conversations.list)', () => {
     expect(channels.map((c) => c.id)).toEqual(['C1', 'C2']);
   });
 
-  it('falls back to the channel id for a missing name and to isMember: false when absent', async () => {
+  it('falls back to the channel id for a missing name and to false for absent is_member/is_private', async () => {
     const { client } = makeClient({
       'conversations.list': [() => json({ ok: true, channels: [{ id: 'C9' }] })],
     });
 
-    expect(await client.listChannels()).toEqual([{ id: 'C9', name: 'C9', isMember: false }]);
+    expect(await client.listChannels()).toEqual([
+      { id: 'C9', name: 'C9', isMember: false, isPrivate: false },
+    ]);
   });
 });
 

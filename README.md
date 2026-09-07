@@ -95,10 +95,15 @@ setup per provider; do them once, then every install (source or packaged
    including the port (`SLACK_REDIRECT_PORT` in
    `apps/desktop/src/ipc/oauth.ts`), unlike Google's installed-app flow.
 4. Under **Scopes → User Token Scopes** (not Bot Token Scopes — this app reads
-   *your* channel/DM history, not a bot's), add exactly these four:
-   `channels:history`, `channels:read`, `im:history`, `users:read`. These come
-   from `packages/ingest/src/oauth/scopes.ts`'s `SLACK_SCOPES` — do not add
-   anything broader.
+   *your* channel/DM history, not a bot's), add exactly these six:
+   `channels:history`, `channels:read`, `groups:history`, `groups:read`,
+   `im:history`, `users:read`. These come from
+   `packages/ingest/src/oauth/scopes.ts`'s `SLACK_SCOPES` — do not add
+   anything broader. The `groups:*` pair covers **private** channels (Slack's
+   scope vocabulary calls them "groups"); because this is a user token, they
+   reach only the private channels you have already joined. Omit both if you
+   want the app restricted to public channels — everything else still works,
+   and the selector simply lists fewer channels.
 5. Scroll up and click **Install to Workspace** (or **Reinstall** if you
    change scopes later — a scope change needs a reinstall to take effect),
    then approve.
