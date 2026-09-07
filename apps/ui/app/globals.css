@@ -362,6 +362,36 @@
   background: transparent;
 }
 
+/* Diagnostics "at a glance" tones (app/settings/metrics.tsx). Semantic, not
+   decorative: `--good` and `--attention` must read differently at a glance and
+   never rely on colour alone — `--attention` also carries the "Needs a look"
+   wording and a heavier weight. */
+.status-chip--good {
+  color: var(--cr-color-success);
+  background: var(--cr-color-success-bg);
+  border-color: var(--cr-color-success);
+}
+
+.status-chip--attention {
+  color: var(--cr-color-warning-text-strong);
+  background: var(--cr-color-warning-bg);
+  border-color: var(--cr-color-warning-border);
+  font-weight: 700;
+}
+
+.status-chip--info {
+  color: var(--cr-color-text-muted);
+  background: transparent;
+  border-color: var(--cr-color-border-strong);
+}
+
+.status-chip--none {
+  color: var(--cr-color-text-muted);
+  background: transparent;
+  border-color: var(--cr-color-border);
+  border-style: dashed;
+}
+
 .chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -574,7 +604,7 @@
 }
 
 /* -------------------------------------------------------------------------- */
-/* app/settings/metrics.tsx                                                   */
+/* app/settings/metrics.tsx — Diagnostics panel                               */
 /* -------------------------------------------------------------------------- */
 
 .metrics__line {
@@ -585,6 +615,204 @@
   list-style: none;
   padding: 0;
   margin: var(--cr-space-1) 0;
+}
+
+/* Header: title on the left, "Updated …" + Refresh on the right, wrapping to
+   two lines on a narrow window rather than overflowing. */
+.diag-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cr-space-2) var(--cr-space-3);
+}
+
+.diag-header h2 {
+  margin: 0;
+}
+
+.diag-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--cr-space-2);
+}
+
+.diag-updated {
+  color: var(--cr-color-text-muted);
+  font-size: var(--cr-font-size-xs);
+}
+
+.diag-intro {
+  margin: var(--cr-space-2) 0 var(--cr-space-4);
+  max-width: 52ch;
+  color: var(--cr-color-text-muted);
+  font-size: var(--cr-font-size-sm);
+  line-height: var(--cr-line-height-normal);
+}
+
+/* "At a glance" — the top layer of the hierarchy. One bordered box, one row
+   per signal, hairline dividers between. */
+.diag-summary {
+  margin: 0 0 var(--cr-space-5);
+  border: 1px solid var(--cr-color-border);
+  border-radius: var(--cr-radius-md);
+  overflow: hidden;
+}
+
+.diag-row {
+  padding: var(--cr-space-3);
+}
+
+.diag-row + .diag-row {
+  border-top: 1px solid var(--cr-color-border);
+}
+
+.diag-row__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cr-space-2);
+  margin-bottom: var(--cr-space-1);
+}
+
+.diag-row__label {
+  font-weight: 600;
+  color: var(--cr-color-text);
+}
+
+.diag-row__value {
+  margin: 0;
+  color: var(--cr-color-text);
+  line-height: var(--cr-line-height-normal);
+}
+
+.diag-row__hint {
+  margin: var(--cr-space-1) 0 0;
+  color: var(--cr-color-text-muted);
+  font-size: var(--cr-font-size-sm);
+  line-height: var(--cr-line-height-normal);
+}
+
+/* "Details" — the collapsed second layer. */
+.diag-details__title {
+  margin: 0 0 var(--cr-space-2);
+  font-size: var(--cr-font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--cr-color-text-muted);
+}
+
+.diag-section {
+  border: 1px solid var(--cr-color-border);
+  border-radius: var(--cr-radius-sm);
+  margin-bottom: var(--cr-space-2);
+  background: var(--cr-color-bg-surface);
+}
+
+.diag-section > summary {
+  cursor: pointer;
+  padding: var(--cr-space-2) var(--cr-space-3);
+  font-size: var(--cr-font-size-sm);
+  font-weight: 600;
+  color: var(--cr-color-text);
+}
+
+.diag-section > summary:focus-visible {
+  outline: 3px solid var(--cr-color-focus-ring);
+  outline-offset: -3px;
+}
+
+.diag-section[open] > summary {
+  border-bottom: 1px solid var(--cr-color-border);
+}
+
+.diag-section__body {
+  padding: var(--cr-space-3);
+}
+
+.diag-section__body .data-table {
+  margin: 0;
+}
+
+.diag-section__body .metrics__line:first-child {
+  margin-top: 0;
+}
+
+.diag-section__empty {
+  margin: var(--cr-space-2) 0 0;
+  color: var(--cr-color-text-muted);
+  font-size: var(--cr-font-size-sm);
+}
+
+.diag-section__body > .diag-section__empty:first-child {
+  margin-top: 0;
+}
+
+.diag-section__subhead {
+  margin: var(--cr-space-3) 0 var(--cr-space-1);
+  font-size: var(--cr-font-size-sm);
+  font-weight: 600;
+  color: var(--cr-color-text-muted);
+}
+
+/* A count + its plain-language meaning, with the raw code kept as a quiet
+   monospace tag for anyone cross-referencing a trace log. */
+.diag-count-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--cr-font-size-sm);
+}
+
+.diag-count-list__item {
+  display: flex;
+  gap: var(--cr-space-2);
+  padding: var(--cr-space-1) 0;
+  align-items: baseline;
+}
+
+.diag-count-list__n {
+  flex: 0 0 auto;
+  min-width: 2.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.diag-count-list__code {
+  color: var(--cr-color-text-muted);
+  font-size: 0.85em;
+}
+
+/* Callout for the "not wired" / "couldn't read" states — a bordered box, not a
+   red alert, because the usual cause is a setup detail rather than a fault. */
+.diag-callout {
+  border: 1px solid var(--cr-color-border);
+  border-left-width: 4px;
+  border-radius: var(--cr-radius-sm);
+  padding: var(--cr-space-3);
+  margin: var(--cr-space-2) 0 var(--cr-space-4);
+}
+
+.diag-callout--muted {
+  border-left-color: var(--cr-color-border-strong);
+  background: var(--cr-color-accent-bg-subtle);
+}
+
+.diag-callout__title {
+  margin: 0 0 var(--cr-space-1);
+  font-weight: 600;
+  color: var(--cr-color-text);
+}
+
+.diag-callout p:last-child {
+  margin-bottom: 0;
+}
+
+.diag-footer {
+  margin: var(--cr-space-4) 0 0;
+  color: var(--cr-color-text-muted);
 }
 
 .data-table {
