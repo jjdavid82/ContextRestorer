@@ -367,7 +367,13 @@ export interface IpcDeps {
  * and before the first window loads.
  */
 export function registerIpcHandlers(deps: IpcDeps): void {
-  registerOauthHandlers({ vault: deps.vault, config: deps.config });
+  registerOauthHandlers({
+    vault: deps.vault,
+    config: deps.config,
+    // A successful connect forgets the source's backoff and polls it at once —
+    // see `OauthHandlerDeps.onConnected` for the ten-minute wait this cuts short.
+    onConnected: (source) => deps.poller.pollNow(source),
+  });
 
   // Task 4.6: the single sanctioned egress for FR-6 source deep links. Takes no
   // deps and is registered unconditionally — the renderer's "open in Slack/Gmail"
@@ -475,6 +481,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       // A-2: rebuild `belongs_to` edges after a save. Absent, the selection
       // still saves and simply does not backfill.
       ...(deps.relinkProjects !== undefined ? { relinkProjects: deps.relinkProjects } : {}),
+      // A saved selection is polled at once rather than on the next 5-minute
+      // tick — see `SlackChannelsHandlerDeps.onSelectionSaved`.
+      onSelectionSaved: () => deps.poller.pollNow('slack'),
     });
   }
 

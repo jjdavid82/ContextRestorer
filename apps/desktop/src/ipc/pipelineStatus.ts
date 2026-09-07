@@ -33,6 +33,12 @@ export interface PipelineStatus {
    * threads the scheduler has parked after exhausting `maxAttempts` — those
    * will not be picked up on the next tick (or any tick), so counting them as
    * "queued" would never resolve.
+   *
+   * A thread whose clocks have elapsed but that still has recently-ingested
+   * events awaiting Layer 1 is NOT due either (`WatermarkRepo`'s `DUE_SQL`
+   * gates firing on extraction), so it is not counted here; it is already
+   * visible in `extractionBacklog`, which is the honest place for it — the
+   * thread is waiting on the model, not on the clock.
    */
   synthesisDue: number;
   /** Threads Layer 2 is synthesizing at this exact moment. */

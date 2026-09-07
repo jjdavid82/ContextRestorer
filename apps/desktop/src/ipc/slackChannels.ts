@@ -78,6 +78,18 @@ export interface SlackChannelsHandlerDeps {
    * {@link RelinkProjects}.
    */
   relinkProjects?: RelinkProjects;
+  /**
+   * Called after a selection is saved (and after `relinkProjects`).
+   *
+   * Wired to `Poller.pollNow('slack')` in production. `VaultBackedSlackClient`
+   * reads the selection on every Slack cycle, so a new selection is honoured —
+   * but only by the NEXT cycle, up to `polling.slack.intervalMs` (five minutes)
+   * after the user clicked Save. Until then the source reads Connected with
+   * `lag unknown`, and nothing says the fix is merely time. Same contract as
+   * `OauthHandlerDeps.onConnected`: optional, and a throw is logged rather than
+   * turning a saved selection into a reported failure.
+   */
+  onSelectionSaved?: () => void;
 }
 
 /** One entry of a parsed selection. `projectId` follows the repo's tri-state. */
@@ -175,6 +187,19 @@ export function setSelectedChannels(arg: unknown, deps: SlackChannelsHandlerDeps
       deps.relinkProjects(deps.channels.list());
     } catch (error) {
       console.error('[slackChannels] project relink failed; selection was still saved', error);
+    }
+  }
+
+  // The new selection takes effect on the next Slack poll — so make that poll
+  // now instead of up to an interval away. After the relink on purpose, so the
+  // cycle it triggers sees the rebuilt `belongs_to` edges. Same reasoning as
+  // the relink: the selection IS saved whatever this does, so a throw is
+  // logged, never returned.
+  if (deps.onSelectionSaved !== undefined) {
+    try {
+      deps.onSelectionSaved();
+    } catch (error) {
+      console.error('[slackChannels] post-save poll failed; selection was still saved', error);
     }
   }
 

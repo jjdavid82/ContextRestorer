@@ -183,6 +183,139 @@ describe('Poller: independent per-source scheduling', () => {
 });
 
 // ---------------------------------------------------------------------------
+// pollNow — the connect-triggered immediate poll
+// ---------------------------------------------------------------------------
+
+describe('Poller.pollNow — a connected source is polled at once', () => {
+  /** Fails until "connected", then succeeds — the shape of a fresh install. */
+  const connectable = (): { source: MockSource; connect: () => void } => {
+    let connected = false;
+    const source = mockSource('slack', () =>
+      connected
+        ? Promise.resolve({ events: [] })
+        : Promise.reject(new Error('slack is not connected: no OAuth tokens in the vault')),
+    );
+    return {
+      source,
+      connect: () => {
+        connected = true;
+      },
+    };
+  };
+
+  it('forgets the backoff and polls immediately, then resumes the base cadence', async () => {
+    const { source: slack, connect } = connectable();
+    const h = makePoller({
+      config: pollingCfg({ intervalMs: 1_000, maxBackoffMs: 60_000 }, NEVER),
+      slack: slack.client,
+    });
+
+    // The first cycle runs before the user has connected: it fails and earns a
+    // 2s backoff (interval * 2^1, jitter pinned to 0).
+    h.poller.start();
+    await h.advance(0);
+    expect(slack.calls).toBe(1);
+    expect(h.poller.health().slack.status).not.toBe('ok');
+
+    // Well inside that backoff nothing would run on its own...
+    await h.advance(1_500);
+    expect(slack.calls).toBe(1);
+
+    // ...until the user connects. Then the poll is immediate.
+    connect();
+    h.poller.pollNow('slack');
+    await h.advance(0);
+    expect(slack.calls).toBe(2);
+    expect(h.poller.health().slack.status).toBe('ok');
+
+    // And the cadence is the base interval, not the backoff that was pending.
+    await h.advance(999);
+    expect(slack.calls).toBe(2);
+    await h.advance(1);
+    expect(slack.calls).toBe(3);
+  });
+
+  it('runs one more cycle right after an in-flight one settles, ignoring the backoff it earned', async () => {
+    let failInFlight: (() => void) | undefined;
+    const slack = mockSource('slack', (_cursor, call) =>
+      call === 0
+        ? new Promise<SourceFetchResult<unknown>>((_resolve, reject) => {
+            failInFlight = () => reject(new Error('no OAuth tokens in the vault'));
+          })
+        : Promise.resolve({ events: [] }),
+    );
+    const h = makePoller({
+      config: pollingCfg({ intervalMs: 1_000, maxBackoffMs: 60_000 }, NEVER),
+      slack: slack.client,
+    });
+
+    h.poller.start();
+    await h.advance(0);
+    expect(slack.calls).toBe(1); // cycle 0 is in flight, hung on its fetch
+
+    // The connect lands while that pre-token cycle is still running. No
+    // re-entrancy: it does not start a second cycle underneath the first.
+    h.poller.pollNow('slack');
+    await h.advance(0);
+    expect(slack.calls).toBe(1);
+
+    // The stale cycle now fails, as it was always going to. That failure must
+    // not cost the user its backoff: the follow-up is immediate.
+    failInFlight!();
+    await h.advance(0);
+    expect(slack.calls).toBe(2);
+    expect(h.poller.health().slack.status).toBe('ok');
+  });
+
+  it('while paused only forgets the backoff; resume re-arms at the base interval', async () => {
+    const { source: slack, connect } = connectable();
+    const h = makePoller({
+      config: pollingCfg({ intervalMs: 1_000, maxBackoffMs: 60_000 }, NEVER),
+      slack: slack.client,
+    });
+
+    h.poller.start();
+    await h.advance(0); // fails -> 2s backoff pending
+    h.poller.pause();
+
+    connect();
+    h.poller.pollNow('slack');
+    await h.advance(5_000);
+    expect(slack.calls).toBe(1); // paused means paused
+
+    h.poller.resume();
+    await h.advance(999);
+    expect(slack.calls).toBe(1);
+    await h.advance(1); // base interval, not the 2s backoff it had earned
+    expect(slack.calls).toBe(2);
+  });
+
+  it('leaves the other source entirely alone', async () => {
+    const { source: slack, connect } = connectable();
+    const gmail = mockSource('gmail', () => Promise.resolve({ events: [] }));
+    const h = makePoller({
+      config: pollingCfg(
+        { intervalMs: 1_000, maxBackoffMs: 60_000 },
+        { intervalMs: 1_000, maxBackoffMs: 60_000 },
+      ),
+      slack: slack.client,
+      gmail: gmail.client,
+    });
+
+    h.poller.start();
+    await h.advance(0);
+    expect(gmail.calls).toBe(1);
+
+    connect();
+    h.poller.pollNow('slack');
+    await h.advance(0);
+
+    expect(slack.calls).toBe(2);
+    expect(gmail.calls).toBe(1); // no extra Gmail poll rode along
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R2 — Retry-After
 // ---------------------------------------------------------------------------
 

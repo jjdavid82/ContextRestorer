@@ -90,10 +90,22 @@ const CALLBACK_PATH = '/callback';
  * keeps using an ephemeral one (see `startLoopbackServer`'s default).
  *
  * Whoever registers the Slack app must set its Redirect URL to
- * `http://127.0.0.1:53682/callback` (or whatever this constant is changed to)
+ * `http://127.0.0.1:17532/callback` (or whatever this constant is changed to)
  * — the two must always match.
+ *
+ * **It must also stay below 49152, and that is not cosmetic.** Windows' dynamic
+ * port range starts there (`netsh int ipv4 show dynamicport tcp`), and Hyper-V /
+ * WSL / Docker reserve blocks *inside* it at every boot
+ * (`netsh interface ipv4 show excludedportrange protocol=tcp`). Binding inside a
+ * reserved block fails with `EACCES`, not `EADDRINUSE` — the port is not taken,
+ * it is forbidden — so the usual "is something listening?" check comes back
+ * clean and the cause looks like a permissions problem. The previous value,
+ * 53682, sat inside a reserved 53596-53695 block and made `oauth:connect`
+ * unusable on exactly the machines that run Docker or WSL. Those blocks move
+ * between reboots, so any ephemeral-range port is a latent version of this bug;
+ * only staying out of the range avoids it.
  */
-const SLACK_REDIRECT_PORT = 53682;
+const SLACK_REDIRECT_PORT = 17532;
 
 /** Fallback token lifetime when the provider returns no `expires_in` (Slack user tokens). */
 const DEFAULT_EXPIRY_MS = 12 * 60 * 60 * 1000;
@@ -102,6 +114,21 @@ export interface OauthHandlerDeps {
   vault: TokenVault;
   /** Read for `config.oauth.<source>.clientId` / `clientSecret`. */
   config: AppConfig;
+  /**
+   * Called once per successful connect, after the tokens are in the vault.
+   *
+   * Wired to `Poller.pollNow` in production. The poller's first cycle on a
+   * fresh install runs before any tokens exist, fails, and backs the source off
+   * for ~10 minutes — during which the health strip reads "Not connected" for a
+   * source the user connected successfully seconds ago, with nothing to say the
+   * only fix is time. This is the signal that cuts that wait short.
+   *
+   * Optional so the pure-glue tests can build deps without a poller. A hook that
+   * throws is logged and never turns a completed connect into a failure: by the
+   * time it runs the tokens are already stored, and that is the fact the
+   * renderer is being told about.
+   */
+  onConnected?: (source: Source) => void;
 }
 
 /** Narrow the renderer-supplied argument. The preload's check is a convenience, not trust. */
@@ -407,6 +434,16 @@ export async function connect(source: Source, deps: OauthHandlerDeps): Promise<O
     if (tokens === null) throw new Error('token exchange returned no access token');
 
     await deps.vault.store(source, tokens);
+
+    // Only now: the hook's whole premise is that the vault holds the tokens, so
+    // the poll it triggers can succeed. Its own try/catch keeps it out of the
+    // failure path below — the connect HAS succeeded, whatever the hook does
+    // with that, and `reasonFor` must not be handed a poller error to explain.
+    try {
+      deps.onConnected?.(source);
+    } catch (hookError) {
+      console.error(`[oauth] ${source} onConnected hook failed`, hookError);
+    }
     return { ok: true };
   } catch (error) {
     // Never log `error` verbatim at higher fidelity than this: the message can
@@ -421,7 +458,8 @@ export async function connect(source: Source, deps: OauthHandlerDeps): Promise<O
  *
  * Safe to call before any window exists — neither handler needs a `BrowserWindow`.
  *
- * @param deps Vault to persist into, and the config carrying the client ids.
+ * @param deps Vault to persist into, the config carrying the client ids, and the
+ *   optional `onConnected` hook a successful connect reports to.
  */
 export function registerOauthHandlers(deps: OauthHandlerDeps): void {
   ipcMain.handle('oauth:connect', async (_event, arg: unknown): Promise<OkResult> => {

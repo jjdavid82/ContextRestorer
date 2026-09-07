@@ -8,6 +8,9 @@
  * - It OWNS failure policy: `Retry-After` is honoured verbatim, everything else
  *   gets exponential backoff with additive jitter, capped by config.
  * - It OWNS source health, including the NFR-2 lag measurement.
+ * - It exposes exactly one way to change *when* a source is next fetched from
+ *   outside its own clocks: `pollNow(source)`, for the moment the user connects
+ *   a source — see its doc comment for why that one case earns an exception.
  * - It does NOT persist anything. Fetched events are handed to `onEvents`, which
  *   is the ingestion pipeline (Task 1.6).
  * - It does NOT interpret cursors. `SourceFetchResult.cursor` is stored opaquely
@@ -95,6 +98,8 @@ interface SourceState {
   cursor: unknown;
   timer: unknown;
   inFlight: boolean;
+  /** Set by `pollNow` while a cycle is in flight: run again at once when it settles. */
+  rerunImmediately: boolean;
 }
 
 export class Poller {
@@ -166,6 +171,37 @@ export class Poller {
     }
   }
 
+  /**
+   * Forget `source`'s backoff and poll it as soon as possible.
+   *
+   * For the one moment that legitimately changes a source's prospects from
+   * outside its own clocks: the user has just connected it. On a fresh install
+   * the first cycle runs before any tokens exist, fails, and earns a backoff —
+   * ten minutes at the default interval — and nothing would cut that wait
+   * short. The user watches "Not connected" for a source they connected
+   * successfully seconds ago, with no hint that the only fix is time.
+   *
+   * Health is deliberately NOT touched: `status` and `lastSyncAt` describe what
+   * the last cycle actually observed, and only the cycle this schedules may
+   * change them — reporting "connected" here would be a claim, not an
+   * observation. A cycle already in flight is left to finish and record its
+   * result (it may well fail: it started before the tokens existed), and is
+   * followed immediately by the requested one instead of by the backoff it
+   * earned. While paused, only the backoff is forgotten; `resume()` then
+   * re-arms at the base interval rather than the stale backoff.
+   */
+  pollNow(source: PollSourceKind): void {
+    const state = this.#state[source];
+    state.failures = 0;
+    state.nextDelayMs = this.#intervalMs(source);
+    if (!this.#running) return;
+    if (state.inFlight) {
+      state.rerunImmediately = true;
+      return;
+    }
+    this.#scheduleNext(source, 0);
+  }
+
   /** Immutable snapshot of both sources' health, `lagMs` computed against now. */
   health(): Record<PollSourceKind, SourceHealth> {
     return {
@@ -189,6 +225,7 @@ export class Poller {
       cursor: undefined,
       timer: undefined,
       inFlight: false,
+      rerunImmediately: false,
     };
   }
 
@@ -254,9 +291,20 @@ export class Poller {
       this.#recordFailure(source, error);
     } finally {
       state.inFlight = false;
-      // `#scheduleNext` is a no-op while paused, so a cycle that finishes after
-      // `pause()` quietly stops the loop instead of resurrecting it.
-      this.#scheduleNext(source, state.nextDelayMs);
+      if (state.rerunImmediately) {
+        // A `pollNow` landed mid-cycle. The cycle that just ended started before
+        // whatever prompted the request (freshly stored tokens, typically), so
+        // the backoff it may have just earned describes a state that no longer
+        // exists. Forget it and go again now.
+        state.rerunImmediately = false;
+        state.failures = 0;
+        state.nextDelayMs = this.#intervalMs(source);
+        this.#scheduleNext(source, 0);
+      } else {
+        // `#scheduleNext` is a no-op while paused, so a cycle that finishes after
+        // `pause()` quietly stops the loop instead of resurrecting it.
+        this.#scheduleNext(source, state.nextDelayMs);
+      }
     }
   }
 
@@ -284,6 +332,14 @@ export class Poller {
   #recordFailure(source: PollSourceKind, error: unknown): void {
     const state = this.#state[source];
     const retryAfterMs = rateLimitRetryAfterMs(error);
+
+    // A failed cycle used to be entirely silent: the only trace was the health
+    // strip going to `disconnected`, and `never_synced` maps there too — so a
+    // source failing every cycle was indistinguishable, on screen and in the
+    // logs, from a source that had simply never run. Diagnosing one meant
+    // reading the poller's source to discover the failure was even possible.
+    // The status is recorded below; this is the only place that says WHY.
+    console.error(`[poll] ${source} cycle failed (failures=${state.failures + 1})`, error);
 
     if (retryAfterMs !== null) {
       // The provider told us exactly how long to wait. Honour it verbatim

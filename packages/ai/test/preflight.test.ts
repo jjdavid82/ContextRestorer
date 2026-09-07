@@ -68,7 +68,18 @@ describe('preflight', () => {
     expect(result).toEqual({ ok: true });
     // Task 4.6: routed through guardedFetchUrl, so the request now carries
     // `redirect: 'manual'` (the SEC-6 redirect guard) rather than a bare fetch.
-    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/api/tags`, { redirect: 'manual' });
+    //
+    // `objectContaining` rather than an exact match: the same call now also
+    // carries the undici `dispatcher` that raises `headersTimeout` above
+    // undici's 300s default (see `TRANSPORT_TIMEOUT_MS`). Both properties are
+    // asserted because both are load-bearing — dropping the dispatcher would
+    // silently reintroduce a 5-minute cap on every non-streaming generation —
+    // but the object is left open so a future transport option does not fail a
+    // test that is about the redirect guard.
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE}/api/tags`,
+      expect.objectContaining({ redirect: 'manual', dispatcher: expect.anything() }),
+    );
   });
 
   it('does not fuzzy-match tag suffixes', async () => {

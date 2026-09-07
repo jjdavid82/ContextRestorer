@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { describeFetchFailure } from '../src/ollama.js';
+import { capForEmbedding, describeFetchFailure } from '../src/ollama.js';
 
 // ---------------------------------------------------------------------------
 // Transport failure attribution
@@ -58,5 +58,45 @@ describe('describeFetchFailure', () => {
     // Bounded depth: a malformed chain must fail loudly, not hang.
     const message = describeFetchFailure(loop, 'embed', 5);
     expect(message.split('<-').length).toBeLessThanOrEqual(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Embedding input ceiling
+// ---------------------------------------------------------------------------
+
+/**
+ * `nomic-embed-text` rejects an over-long input outright (`500 the input length
+ * exceeds the context length`) instead of truncating it. Because Layer 1 writes
+ * the `extractions` row only after the embedding succeeds, one oversized
+ * message left its event unextracted and every later sweep retried and failed
+ * on it identically — ingestion wedged on a single long email.
+ */
+describe('capForEmbedding', () => {
+  it('leaves a text within the ceiling exactly as it was', () => {
+    const text = 'a'.repeat(3999);
+    expect(capForEmbedding(text)).toBe(text);
+  });
+
+  it('bounds a text past the ceiling', () => {
+    expect(capForEmbedding('a'.repeat(50_000)).length).toBeLessThanOrEqual(4000);
+  });
+
+  it('prefers a word boundary when one is near the cut', () => {
+    // Spaces every 10 chars, so the last one sits well inside the final 10%.
+    const text = ('123456789 '.repeat(1000)).slice(0, 50_000);
+    const capped = capForEmbedding(text);
+
+    expect(capped.endsWith(' ')).toBe(false);
+    expect(capped.length).toBeLessThanOrEqual(4000);
+    // A boundary was actually used rather than a hard slice mid-token.
+    expect(capped.length).toBeGreaterThan(3600);
+  });
+
+  it('falls back to a hard cut when no boundary is near the limit', () => {
+    // One unbroken run — a URL or minified JSON. Honouring a distant space
+    // would throw away a tenth of the budget for nothing.
+    const text = `${'x'.repeat(20)} ${'y'.repeat(50_000)}`;
+    expect(capForEmbedding(text)).toHaveLength(4000);
   });
 });

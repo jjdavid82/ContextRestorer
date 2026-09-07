@@ -307,3 +307,74 @@ describe('setSelectedChannels relinks projects (A-2)', () => {
     expect(setSelectedChannels({ channels: [] }, makeDeps())).toEqual({ ok: true });
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Post-save poll — the selection takes effect now, not on the next tick       */
+/* -------------------------------------------------------------------------- */
+
+describe('setSelectedChannels polls Slack after a save', () => {
+  it('fires once, after the save and after the relink', () => {
+    const setSelected = vi.fn();
+    const relinkProjects = vi.fn();
+    const onSelectionSaved = vi.fn();
+    const deps = makeDeps({
+      channels: { list: vi.fn(() => []), setSelected },
+      relinkProjects,
+      onSelectionSaved,
+    });
+
+    expect(
+      setSelectedChannels({ channels: [{ channelId: 'C1', name: 'general' }] }, deps),
+    ).toEqual({ ok: true });
+
+    expect(onSelectionSaved).toHaveBeenCalledTimes(1);
+    // Order matters twice over: the poll this triggers must read the persisted
+    // selection, and it must see the rebuilt `belongs_to` edges.
+    expect(setSelected.mock.invocationCallOrder[0]!).toBeLessThan(
+      onSelectionSaved.mock.invocationCallOrder[0]!,
+    );
+    expect(relinkProjects.mock.invocationCallOrder[0]!).toBeLessThan(
+      onSelectionSaved.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('still reports success when the poll hook throws', () => {
+    const onSelectionSaved = vi.fn(() => {
+      throw new Error('poller is gone');
+    });
+
+    // The selection IS saved; the poll is a courtesy on top of it.
+    expect(setSelectedChannels({ channels: [] }, makeDeps({ onSelectionSaved }))).toEqual({
+      ok: true,
+    });
+    expect(onSelectionSaved).toHaveBeenCalled();
+  });
+
+  it('does not poll when the save itself failed', () => {
+    const onSelectionSaved = vi.fn();
+    const deps = makeDeps({
+      channels: {
+        list: vi.fn(() => []),
+        setSelected: vi.fn(() => {
+          throw new Error('disk full');
+        }),
+      },
+      onSelectionSaved,
+    });
+
+    expect(setSelectedChannels({ channels: [] }, deps)).toEqual({
+      ok: false,
+      reason: 'internal_error',
+    });
+    expect(onSelectionSaved).not.toHaveBeenCalled();
+  });
+
+  it('does not poll on an invalid selection', () => {
+    const onSelectionSaved = vi.fn();
+
+    expect(
+      setSelectedChannels({ channels: [{ channelId: '' }] }, makeDeps({ onSelectionSaved })),
+    ).toEqual({ ok: false, reason: 'invalid_selection' });
+    expect(onSelectionSaved).not.toHaveBeenCalled();
+  });
+});

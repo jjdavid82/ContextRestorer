@@ -83,19 +83,107 @@ const PENDING_COUNT_SQL = `
 `;
 
 /**
- * Due = quiet long enough, OR backed up long enough.
+ * Due = (quiet long enough AND fully extracted) OR backed up long enough.
  *
  * The per-source thresholds are inlined as a CASE over `source` so the whole
  * scan stays a single statement; the scheduler calls this on every tick and a
- * per-thread round trip would dominate it. Positional binds, in order:
- *   now, slackQuiet, gmailQuiet, now, slackHardCap, gmailHardCap.
+ * per-thread round trip would dominate it. The bind order is listed at the end
+ * of this comment, after the clauses that consume it.
+ *
+ * ### The Layer 1 gate on the quiet window
+ *
+ * The quiet-window branch additionally requires that no event on the thread is
+ * still waiting for its `extractions` row. Without it the scheduler fires on a
+ * thread whose events Layer 1 has not embedded yet, retrieval finds no chunks,
+ * Layer 2 returns `no_context`, and `DebounceScheduler.run()` — which cannot
+ * tell "nothing to say" from "nothing to read yet" — calls `markSynthesized`
+ * and disarms the thread. Its content is then never synthesized until an
+ * unrelated later message happens to re-arm it. Observed on a real backfill:
+ * 15 of 19 Layer 2 outcomes were `no_context`, every thread ended disarmed, and
+ * one was marked caught-up 30 seconds after ingesting an event that still had
+ * no extraction.
+ *
+ * Why it bites on backfill in particular: `last_event_at` is the event's own
+ * `occurred_at`, not its ingest time, so a backfilled thread is already "quiet
+ * for hours" the moment it lands and is due on the very next tick — long before
+ * a multi-minute Layer 1 call on local hardware can finish. The main-process
+ * wiring used to compensate by making ingestion await extraction, which coupled
+ * source health to model latency (see `createPipeline` in the desktop app) and
+ * still could not help the backfill case.
+ *
+ * ### The hard cap: gated on wall-clock, not on the source clock
+ *
+ * Both clocks are in source time, so on a backfill `oldest_unsynth_at` is just
+ * as stale as `last_event_at` and the hard cap fires immediately too — a gate on
+ * the quiet branch alone would change nothing for the case that motivated it.
+ * But the hard cap must not be gated the same way: its whole purpose is that a
+ * thread which never settles still checkpoints instead of starving, and a
+ * plain extraction gate would let a backlog — or one event the model never
+ * manages to classify — hold a thread hostage indefinitely.
+ *
+ * So the hard-cap branch asks a different question: is this thread QUEUED behind
+ * Layer 1, or has Layer 1 STALLED on it? A thread with unextracted events fires
+ * on the hard cap only when both of these hold, measured in wall-clock time:
+ *
+ *   1. every unextracted event on the thread was ingested more than a cap ago —
+ *      an event that landed seconds ago has not been failed by Layer 1, it is
+ *      merely waiting its turn; and
+ *   2. Layer 1 has written NO extraction at all, on any thread, within the last
+ *      cap — if rows are still appearing, the queue is draining and this thread
+ *      will get its turn; if nothing has appeared for a whole cap while work is
+ *      outstanding, the layer is wedged and waiting longer buys nothing.
+ *
+ * (1) alone was tried first and is not enough: on CPU-only hardware a backfill
+ * of ~1,000 events is hours of Layer 1, so every thread would have "waited a
+ * cap" long before its turn came and the hard cap would have disarmed most of
+ * the backlog with no context — the original failure, delayed by thirty
+ * minutes. (2) is what tells a slow queue apart from a dead one.
+ *
+ * The cost of (2) is that a single event the model never manages to classify
+ * holds its own thread while Layer 1 keeps progressing elsewhere. That is a
+ * Layer 1 defect (no `extractions` row is written after a failed batch slot, so
+ * `listUnextracted()` re-offers the event forever) and is where it should be
+ * fixed; the alternative here — firing anyway — is precisely the silent
+ * disarm-with-nothing this gate exists to stop. `ingested_at` and `created_at`
+ * are the only wall-clock timestamps involved, which is why neither clause
+ * compares `occurred_at`.
+ *
+ * Positional binds, in order: now, slackQuiet, gmailQuiet, now, slackHardCap,
+ * gmailHardCap, now, slackHardCap, gmailHardCap, now, slackHardCap, gmailHardCap.
+ *
+ * `extractions(event_id)` and `extractions(created_at)` have no index, so the
+ * inner NOT EXISTS clauses scan that table — the same shape `EventsRepo`'s
+ * `countUnextracted()` already runs every 5s for the status strip. Both tables
+ * are small at this project's scale; an index is the follow-up if that changes.
  */
 const DUE_SQL = `
-  SELECT ${SELECT_COLUMNS} FROM synthesis_watermark
-  WHERE oldest_unsynth_at IS NOT NULL
-    AND ( (? - last_event_at) >= (CASE source WHEN 'slack' THEN ? ELSE ? END)
-       OR (? - oldest_unsynth_at) >= (CASE source WHEN 'slack' THEN ? ELSE ? END) )
-  ORDER BY oldest_unsynth_at ASC, last_event_at ASC
+  SELECT ${SELECT_COLUMNS} FROM synthesis_watermark w
+  WHERE w.oldest_unsynth_at IS NOT NULL
+    AND ( ( (? - w.last_event_at) >= (CASE w.source WHEN 'slack' THEN ? ELSE ? END)
+            AND NOT EXISTS (
+              SELECT 1 FROM events e
+              WHERE e.thread_key = w.thread_key
+                AND NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
+            ) )
+       OR ( (? - w.oldest_unsynth_at) >= (CASE w.source WHEN 'slack' THEN ? ELSE ? END)
+            -- (1) nothing on this thread is still freshly queued
+            AND NOT EXISTS (
+              SELECT 1 FROM events e
+              WHERE e.thread_key = w.thread_key
+                AND e.ingested_at > (? - (CASE w.source WHEN 'slack' THEN ? ELSE ? END))
+                AND NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
+            )
+            -- (2) either the thread is fully extracted, or Layer 1 is wedged
+            AND ( NOT EXISTS (
+                    SELECT 1 FROM events e
+                    WHERE e.thread_key = w.thread_key
+                      AND NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
+                  )
+                  OR NOT EXISTS (
+                    SELECT 1 FROM extractions x
+                    WHERE x.created_at > (? - (CASE w.source WHEN 'slack' THEN ? ELSE ? END))
+                  ) ) ) )
+  ORDER BY w.oldest_unsynth_at ASC, w.last_event_at ASC
 `;
 
 function toDomain(row: WatermarkRow): SynthesisWatermark {
@@ -220,6 +308,14 @@ export class WatermarkRepo {
         now,
         slack.quietWindowMs,
         gmail.quietWindowMs,
+        now,
+        slack.hardCapMs,
+        gmail.hardCapMs,
+        // Hard-cap clause (1): "unextracted AND ingested within the last cap".
+        now,
+        slack.hardCapMs,
+        gmail.hardCapMs,
+        // Hard-cap clause (2): "any extraction written within the last cap".
         now,
         slack.hardCapMs,
         gmail.hardCapMs,
