@@ -139,7 +139,7 @@ export default function SlackChannelSettings(): ReactNode {
         </Typography>
       ) : available.length === 0 ? (
         <Typography sx={{ color: 'text.secondary' }}>
-          No public channels are visible to the connected account.
+          No channels are visible to the connected account.
         </Typography>
       ) : (
         <Box
@@ -171,6 +171,14 @@ export default function SlackChannelSettings(): ReactNode {
                 label={
                   <Box component="span" sx={{ fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '0.9rem' }}>
                     #{channel.name}
+                    {/* Private and public channels are indistinguishable by name,
+                        and reading a private one is the more consequential
+                        choice — say which it is rather than relying on recall. */}
+                    {channel.isPrivate ? (
+                      <Box component="span" sx={{ ml: 1, fontFamily: 'inherit', fontSize: '0.8rem', color: 'text.secondary' }}>
+                        — private
+                      </Box>
+                    ) : null}
                     {/* A token can SEE a public channel without having joined it,
                         and history then fails every poll. Disabled, not hidden,
                         so the user understands why it is unavailable. */}

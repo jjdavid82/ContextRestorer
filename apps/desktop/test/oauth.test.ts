@@ -103,7 +103,7 @@ describe('authorizeUrl (T-2: no scope creep)', () => {
     const url = call('slack');
     expect(url.searchParams.get('user_scope')).toBe(SLACK_SCOPES);
     expect(url.searchParams.get('user_scope')).toBe(
-      'channels:history,channels:read,im:history,users:read',
+      'channels:history,channels:read,groups:history,groups:read,im:history,users:read',
     );
     // A bot identity must not be created as a side effect of connecting.
     expect(url.searchParams.get('scope')).toBeNull();

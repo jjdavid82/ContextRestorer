@@ -164,7 +164,10 @@ describe('listAvailableChannels', () => {
       vi.fn(async () =>
         jsonResponse({
           ok: true,
-          channels: [{ id: 'C1', name: 'general', is_member: true }],
+          channels: [
+            { id: 'C1', name: 'general', is_member: true },
+            { id: 'C2', name: 'leads-only', is_member: true, is_private: true },
+          ],
         }),
       ),
     );
@@ -174,7 +177,7 @@ describe('listAvailableChannels', () => {
           accessToken: 'xoxp-token',
           refreshToken: '',
           expiresAt: CLOCK_NOW + 1_000,
-          scope: 'channels:history,channels:read,im:history,users:read',
+          scope: 'channels:history,channels:read,groups:history,groups:read,im:history,users:read',
         })),
         store: vi.fn(async () => undefined),
         revoke: vi.fn(async () => undefined),
@@ -183,7 +186,10 @@ describe('listAvailableChannels', () => {
 
     await expect(listAvailableChannels(deps)).resolves.toEqual({
       ok: true,
-      channels: [{ id: 'C1', name: 'general', isMember: true }],
+      channels: [
+        { id: 'C1', name: 'general', isMember: true, isPrivate: false },
+        { id: 'C2', name: 'leads-only', isMember: true, isPrivate: true },
+      ],
     });
   });
 
@@ -198,7 +204,7 @@ describe('listAvailableChannels', () => {
           accessToken: 'xoxp-revoked',
           refreshToken: '',
           expiresAt: CLOCK_NOW + 1_000,
-          scope: 'channels:history,channels:read,im:history,users:read',
+          scope: 'channels:history,channels:read,groups:history,groups:read,im:history,users:read',
         })),
         store: vi.fn(async () => undefined),
         revoke: vi.fn(async () => undefined),
