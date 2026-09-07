@@ -13,6 +13,7 @@ import {
   BriefingPrecomputer,
   CitationGate,
   DebounceScheduler,
+  DEFAULT_MAX_ATTEMPTS,
   Layer1Extractor,
   Layer2Synthesizer,
   RetrievalService,
@@ -996,7 +997,7 @@ function startBriefingGeneration(
 /** OI-1 backlog size, or 0 when it cannot be read. Never throws. */
 function pendingSynthesisCount(): number {
   try {
-    return watermarks?.countPendingSynthesis() ?? 0;
+    return watermarks?.countPendingSynthesis(DEFAULT_MAX_ATTEMPTS) ?? 0;
   } catch (error) {
     console.error('[briefing] could not count pending synthesis', error);
     return 0;
@@ -1421,6 +1422,7 @@ if (!app.requestSingleInstanceLock()) {
         watermarks: watermarks!,
         scheduler: layer12.scheduler,
         debounce: config!.debounce,
+        maxAttempts: DEFAULT_MAX_ATTEMPTS,
         clock: systemClock,
       });
 

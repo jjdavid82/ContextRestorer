@@ -643,15 +643,7 @@ export function BriefingView({
           </Typography>
         ) : null}
 
-        {briefingId !== null ? (
-          <>
-            <CaughtUpButton briefingId={briefingId} />
-            {/* FR-7: briefing-level feedback, submitted with no `claimId`,
-                because "you missed something" is by definition about a claim
-                that is not on the page. */}
-            <FeedbackControls briefingId={briefingId} />
-          </>
-        ) : null}
+        {briefingId !== null ? <CaughtUpButton briefingId={briefingId} /> : null}
       </Box>
     </Box>
   );

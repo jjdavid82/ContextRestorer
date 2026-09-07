@@ -791,20 +791,6 @@ describe('FeedbackControls — verdicts (FR-7)', () => {
     expect(relevant.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('submits briefing-level "missed" feedback with no claimId', async () => {
-    const mock = installBridge();
-    await renderBriefing(mock);
-
-    const missed = await screen.findByRole('button', { name: /missed something/i });
-    fireEvent.click(missed);
-
-    await waitFor(() => expect(mock.submit).toHaveBeenCalledTimes(1));
-    const input = mock.submit.mock.calls[0]?.[0] as FeedbackInput;
-    expect(input).toEqual({ briefingId: BRIEFING_ID, verdict: 'missed' });
-    // Not merely undefined — the key must be absent from the wire payload.
-    expect(Object.hasOwn(input, 'claimId')).toBe(false);
-  });
-
   it('offers the three claim verdicts, and only those, on a claim', async () => {
     const mock = installBridge();
     await renderBriefing(mock);

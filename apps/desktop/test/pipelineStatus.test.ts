@@ -16,8 +16,9 @@ const DEBOUNCE: DebounceConfig = {
   gmail: { quietWindowMs: 300_000, hardCapMs: 1_800_000 },
 };
 
-const due = (threadKey: string): DueThread =>
-  ({ threadKey, source: 'gmail' }) as DueThread;
+const MAX_ATTEMPTS = 3;
+
+const due = (threadKey: string, attempts = 0): DueThread => ({ threadKey, source: 'gmail', attempts });
 
 describe('computePipelineStatus', () => {
   it('reports zero across the board when nothing is outstanding', () => {
@@ -26,6 +27,7 @@ describe('computePipelineStatus', () => {
       watermarks: { due: () => [] },
       scheduler: { pending: [] },
       debounce: DEBOUNCE,
+      maxAttempts: MAX_ATTEMPTS,
       clock: CLOCK,
     });
     expect(status).toEqual({ extractionBacklog: 0, synthesisDue: 0, synthesisInFlight: 0 });
@@ -37,6 +39,7 @@ describe('computePipelineStatus', () => {
       watermarks: { due: () => [] },
       scheduler: { pending: [] },
       debounce: DEBOUNCE,
+      maxAttempts: MAX_ATTEMPTS,
       clock: CLOCK,
     });
     expect(status.extractionBacklog).toBe(7);
@@ -48,10 +51,26 @@ describe('computePipelineStatus', () => {
       watermarks: { due: () => [due('t1'), due('t2')] },
       scheduler: { pending: ['t1'] },
       debounce: DEBOUNCE,
+      maxAttempts: MAX_ATTEMPTS,
       clock: CLOCK,
     });
     // t1 is due AND in flight — it must be counted once, as in-flight, not twice.
     expect(status.synthesisInFlight).toBe(1);
+    expect(status.synthesisDue).toBe(1);
+  });
+
+  it('excludes a parked thread (attempts >= maxAttempts) from synthesisDue', () => {
+    const status = computePipelineStatus({
+      events: { countUnextracted: () => 0 },
+      watermarks: { due: () => [due('t1'), due('doomed', MAX_ATTEMPTS)] },
+      scheduler: { pending: [] },
+      debounce: DEBOUNCE,
+      maxAttempts: MAX_ATTEMPTS,
+      clock: CLOCK,
+    });
+    // 'doomed' is still in the raw `due()` list (its hard cap has elapsed) but
+    // the scheduler will skip and park it rather than synthesize it — it must
+    // not read as "queued for summarizing" alongside genuinely-due threads.
     expect(status.synthesisDue).toBe(1);
   });
 
@@ -62,6 +81,7 @@ describe('computePipelineStatus', () => {
       watermarks: { due: dueFn },
       scheduler: { pending: [] },
       debounce: DEBOUNCE,
+      maxAttempts: MAX_ATTEMPTS,
       clock: CLOCK,
     });
     expect(dueFn).toHaveBeenCalledWith(CLOCK.now(), { debounce: DEBOUNCE });

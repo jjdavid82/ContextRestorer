@@ -67,6 +67,7 @@ import type {
 } from '@cr/store';
 import { rankDeltas, toRankableDelta, type RankableDeltaContext } from '../ranker.js';
 import { preflight, type PreflightResult } from '../preflight.js';
+import { DEFAULT_MAX_ATTEMPTS } from '../layer2/scheduler.js';
 import {
   BRIEFING_SECTIONS,
   type AcceptedClaimChunk,
@@ -384,7 +385,7 @@ export class TemplateBriefingRenderer {
 
     // OI-1, read before any work, exactly as the LLM path does: the number has
     // to describe the backlog this briefing was built against.
-    const threadsStillProcessing = this.watermarks.countPendingSynthesis();
+    const threadsStillProcessing = this.watermarks.countPendingSynthesis(DEFAULT_MAX_ATTEMPTS);
 
     // ---- stage 1: read ------------------------------------------------------
     const readSpan = trace.span('retrieval');

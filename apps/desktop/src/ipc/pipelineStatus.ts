@@ -29,7 +29,10 @@ export interface PipelineStatus {
   /**
    * Threads whose D-7 quiet window or hard cap has already elapsed, so they
    * will be picked up on the debounce scheduler's next tick (at most 30s).
-   * Excludes threads already being synthesized (`synthesisInFlight`).
+   * Excludes threads already being synthesized (`synthesisInFlight`) and
+   * threads the scheduler has parked after exhausting `maxAttempts` — those
+   * will not be picked up on the next tick (or any tick), so counting them as
+   * "queued" would never resolve.
    */
   synthesisDue: number;
   /** Threads Layer 2 is synthesizing at this exact moment. */
@@ -42,6 +45,8 @@ export interface PipelineStatusDeps {
   scheduler: Pick<DebounceScheduler, 'pending'>;
   /** `config.debounce` — the quiet-window/hard-cap thresholds `due()` needs. */
   debounce: DebounceConfig;
+  /** The scheduler's park threshold — `DEFAULT_MAX_ATTEMPTS` in production. */
+  maxAttempts: number;
   clock: Clock;
 }
 
@@ -53,7 +58,7 @@ export function computePipelineStatus(deps: PipelineStatusDeps): PipelineStatus 
   const inFlight = new Set(deps.scheduler.pending);
   const due = deps.watermarks
     .due(deps.clock.now(), { debounce: deps.debounce })
-    .filter((thread) => !inFlight.has(thread.threadKey));
+    .filter((thread) => !inFlight.has(thread.threadKey) && thread.attempts < deps.maxAttempts);
 
   return {
     extractionBacklog: deps.events.countUnextracted(),

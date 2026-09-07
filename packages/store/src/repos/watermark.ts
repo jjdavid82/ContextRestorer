@@ -15,6 +15,14 @@ interface WatermarkRow {
 export interface DueThread {
   threadKey: string;
   source: string;
+  /**
+   * Consecutive failed/`no_context` attempts so far. Exposed so a consumer
+   * that is not the scheduler itself (the `pipeline:status` disclosure) can
+   * tell a genuinely-due thread from one the scheduler will actually skip and
+   * park on this very tick — `due()`'s own predicate has no opinion on
+   * attempts, only on the quiet/hard-cap clocks.
+   */
+  attempts: number;
 }
 
 const SELECT_COLUMNS = `
@@ -61,9 +69,17 @@ const RESET_ATTEMPTS_SQL = `
  * predicate as `DUE_SQL`: a thread that is backed up but has not yet gone quiet
  * is not *due* for synthesis, yet its work is still missing from the briefing,
  * which is precisely what the user is being told.
+ *
+ * `attempts < ?` excludes a thread the scheduler has parked (exhausted its
+ * retry budget on repeated failures or `no_context` outcomes — see
+ * `DebounceScheduler`). A parked thread's `oldest_unsynth_at` stays set
+ * forever (only `markSynthesized` clears it, and a parked thread never
+ * reaches that call), so without this the disclosure would report it as
+ * "still processing" indefinitely even though nothing is or ever will be
+ * working on it.
  */
 const PENDING_COUNT_SQL = `
-  SELECT COUNT(*) AS n FROM synthesis_watermark WHERE oldest_unsynth_at IS NOT NULL
+  SELECT COUNT(*) AS n FROM synthesis_watermark WHERE oldest_unsynth_at IS NOT NULL AND attempts < ?
 `;
 
 /**
@@ -114,7 +130,7 @@ export class WatermarkRepo {
   private readonly stmtGet: Statement<unknown[], WatermarkRow>;
   private readonly stmtIncrementAttempts: Statement<unknown[], unknown>;
   private readonly stmtResetAttempts: Statement<unknown[], unknown>;
-  private readonly stmtPendingCount: Statement<unknown[], { n: number }>;
+  private readonly stmtPendingCount: Statement<[number], { n: number }>;
 
   constructor(private readonly db: Database) {
     this.stmtTouch = this.db.prepare(TOUCH_SQL);
@@ -122,7 +138,7 @@ export class WatermarkRepo {
     this.stmtIncrementAttempts = this.db.prepare(INCREMENT_ATTEMPTS_SQL);
     this.stmtResetAttempts = this.db.prepare(RESET_ATTEMPTS_SQL);
     this.stmtDue = this.db.prepare<unknown[], WatermarkRow>(DUE_SQL);
-    this.stmtPendingCount = this.db.prepare<unknown[], { n: number }>(PENDING_COUNT_SQL);
+    this.stmtPendingCount = this.db.prepare<[number], { n: number }>(PENDING_COUNT_SQL);
     this.stmtGet = this.db.prepare<unknown[], WatermarkRow>(
       `SELECT ${SELECT_COLUMNS} FROM synthesis_watermark WHERE thread_key = ?`,
     );
@@ -208,7 +224,7 @@ export class WatermarkRepo {
         slack.hardCapMs,
         gmail.hardCapMs,
       )
-      .map((row) => ({ threadKey: row.thread_key, source: row.source }));
+      .map((row) => ({ threadKey: row.thread_key, source: row.source, attempts: row.attempts }));
   }
 
   /**
@@ -218,9 +234,14 @@ export class WatermarkRepo {
    * Independent of any clock or debounce threshold: the question is "is there
    * work the briefing could not possibly include?", not "would the scheduler
    * pick this thread up on the next tick?". See {@link PENDING_COUNT_SQL}.
+   *
+   * @param maxAttempts - The scheduler's park threshold (`DebounceScheduler`'s
+   *   `DEFAULT_MAX_ATTEMPTS` in production). Required rather than defaulted
+   *   here: this repo has no opinion of its own on the retry budget, and a
+   *   silent default would drift from the scheduler's real one unnoticed.
    */
-  countPendingSynthesis(): number {
-    return this.stmtPendingCount.get()?.n ?? 0;
+  countPendingSynthesis(maxAttempts: number): number {
+    return this.stmtPendingCount.get(maxAttempts)?.n ?? 0;
   }
 
   /** Current watermark for a thread, or `undefined` if it has never been touched. */

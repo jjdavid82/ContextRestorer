@@ -10,6 +10,8 @@ let repo: WatermarkRepo;
 const THREAD = 'C1:1';
 const QUIET_MS = 300_000; // 5 min
 const HARD_CAP_MS = 1_800_000; // 30 min
+/** Mirrors `DebounceScheduler.DEFAULT_MAX_ATTEMPTS`; kept local to avoid an `@cr/ai` test dependency. */
+const MAX_ATTEMPTS = 3;
 
 /**
  * Only `debounce` matters to `due()`; the rest of AppConfig is irrelevant here
@@ -150,7 +152,7 @@ describe('WatermarkRepo.due', () => {
 
     const due = repo.due(now, config);
 
-    expect(due).toEqual([{ threadKey: THREAD, source: 'slack' }]);
+    expect(due).toEqual([{ threadKey: THREAD, source: 'slack', attempts: 0 }]);
   });
 
   it('returns a never-quiet thread once the hard cap has elapsed', () => {
@@ -163,7 +165,7 @@ describe('WatermarkRepo.due', () => {
 
     const due = repo.due(now, config);
 
-    expect(due).toEqual([{ threadKey: THREAD, source: 'slack' }]);
+    expect(due).toEqual([{ threadKey: THREAD, source: 'slack', attempts: 0 }]);
   });
 
   it('excludes a thread that is neither quiet enough nor capped out', () => {
@@ -183,22 +185,35 @@ describe('WatermarkRepo.due', () => {
 
     expect(due.map((d) => d.threadKey)).toEqual(['slack-thread']);
   });
+
+  it('still returns a parked thread, with its attempt count, for the caller to filter', () => {
+    // `due()` answers "is the clock predicate satisfied", not "should this be
+    // retried" — that second question belongs to whoever reads `attempts`
+    // (the scheduler parks; `pipeline:status` excludes from its own count).
+    const now = 10_000_000;
+    repo.touch(THREAD, 'slack', now - QUIET_MS - 1);
+    repo.incrementAttempts(THREAD);
+    repo.incrementAttempts(THREAD);
+    repo.incrementAttempts(THREAD);
+
+    expect(repo.due(now, config)).toEqual([{ threadKey: THREAD, source: 'slack', attempts: 3 }]);
+  });
 });
 
 describe('WatermarkRepo.countPendingSynthesis — the OI-1 disclosure', () => {
   it('counts only threads whose oldest_unsynth_at is still armed', () => {
-    expect(repo.countPendingSynthesis()).toBe(0);
+    expect(repo.countPendingSynthesis(MAX_ATTEMPTS)).toBe(0);
 
     repo.touch('a', 'slack', 1_000);
     repo.touch('b', 'gmail', 2_000);
-    expect(repo.countPendingSynthesis()).toBe(2);
+    expect(repo.countPendingSynthesis(MAX_ATTEMPTS)).toBe(2);
 
     // Caught up: markSynthesized(…, null) disarms the hard cap.
     repo.markSynthesized('a', 3_000, null);
-    expect(repo.countPendingSynthesis()).toBe(1);
+    expect(repo.countPendingSynthesis(MAX_ATTEMPTS)).toBe(1);
 
     repo.markSynthesized('b', 3_000, null);
-    expect(repo.countPendingSynthesis()).toBe(0);
+    expect(repo.countPendingSynthesis(MAX_ATTEMPTS)).toBe(0);
   });
 
   it('still counts a thread whose synthesis was raced by a newer event', () => {
@@ -206,7 +221,7 @@ describe('WatermarkRepo.countPendingSynthesis — the OI-1 disclosure', () => {
     // An event landed at 2_500 while synthesis was running: work remains.
     repo.markSynthesized('a', 3_000, 2_500);
 
-    expect(repo.countPendingSynthesis()).toBe(1);
+    expect(repo.countPendingSynthesis(MAX_ATTEMPTS)).toBe(1);
   });
 
   it('counts backed-up threads that are not yet DUE for synthesis', () => {
@@ -215,6 +230,21 @@ describe('WatermarkRepo.countPendingSynthesis — the OI-1 disclosure', () => {
 
     expect(repo.due(now, config)).toEqual([]);
     // "Not due" is not "nothing missing" — the user is told about it either way.
-    expect(repo.countPendingSynthesis()).toBe(1);
+    expect(repo.countPendingSynthesis(MAX_ATTEMPTS)).toBe(1);
+  });
+
+  it('excludes a thread the scheduler has parked (attempts >= maxAttempts)', () => {
+    repo.touch('doomed', 'gmail', 1_000);
+    repo.touch('healthy', 'slack', 1_000);
+
+    for (let i = 0; i < MAX_ATTEMPTS; i++) repo.incrementAttempts('doomed');
+
+    // Still "unsynthesized" — just no longer being retried, so it must drop
+    // out of a count whose whole point is "work still in flight".
+    expect(repo.get('doomed')?.oldestUnsynthAt).not.toBeNull();
+    expect(repo.countPendingSynthesis(MAX_ATTEMPTS)).toBe(1);
+
+    // A lower threshold parks 'healthy' too, at the caller's discretion.
+    expect(repo.countPendingSynthesis(0)).toBe(0);
   });
 });

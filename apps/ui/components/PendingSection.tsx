@@ -75,7 +75,14 @@ export interface PendingSectionProps {
   children?: ReactNode;
 }
 
-const HEADING_SX = { display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '1.05rem', mb: 1.5 } as const;
+const HEADING_SX = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 0.5,
+  fontSize: '1.05rem',
+  fontWeight: 650,
+  mb: 1.5,
+} as const;
 
 // Each obligation is an accent-left card. Styled on the list so `ClaimBullet`
 // stays a dumb `<li>` (a per-variant `sx` on the child can't be statically

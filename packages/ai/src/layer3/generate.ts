@@ -76,6 +76,7 @@ import type { RetrievalService, RetrievedChunk } from '../retrieval.js';
 import { assemblePrompt } from '../prompt/assemble.js';
 import { wrapUntrusted } from '../prompt/wrap.js';
 import { rankDeltas, toRankableDelta, type RankableDeltaContext } from '../ranker.js';
+import { DEFAULT_MAX_ATTEMPTS } from '../layer2/scheduler.js';
 import type { CitationGate, DropReason, GroundingOptions } from './citationGate.js';
 import { ClaimLineBuffer } from './claimLines.js';
 
@@ -618,7 +619,7 @@ export class BriefingGenerator {
 
     // OI-1, read BEFORE any work: the number must describe the backlog this
     // briefing was built against, not the one that exists once it finishes.
-    const threadsStillProcessing = this.watermarks.countPendingSynthesis();
+    const threadsStillProcessing = this.watermarks.countPendingSynthesis(DEFAULT_MAX_ATTEMPTS);
 
     trace.annotate({
       event: 'briefing',

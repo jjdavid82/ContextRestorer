@@ -151,7 +151,14 @@ export interface DebounceSchedulerDeps {
   logsDir?: string;
 }
 
-const DEFAULT_MAX_ATTEMPTS = 3;
+/**
+ * Consecutive failed/no-context attempts after which a thread is parked.
+ *
+ * Exported so the OI-1 "still processing" count (`WatermarkRepo.countPendingSynthesis`)
+ * can exclude threads the scheduler has already given up on — a thread parked
+ * here is no longer "in progress" in any sense the disclosure should imply.
+ */
+export const DEFAULT_MAX_ATTEMPTS = 3;
 
 /** One thread that fired on this tick, with the decision that fired it. */
 interface FiredThread {
