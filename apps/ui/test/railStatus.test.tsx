@@ -92,6 +92,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  localStorage.clear();
   // @ts-expect-error — the global is declared always-present; tests own it.
   delete window.contextRestorer;
 });
@@ -125,6 +126,15 @@ describe('RailStatus refresh button', () => {
     gate.resolve(OK_COOLDOWN);
     await flush();
 
+    // The spin is floored (`REFRESH_MIN_SPIN_MS`) so a fast IPC round-trip still
+    // shows it: still spinning right after the call settles...
+    expect(button.querySelector('.cr-spin')).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    // ...and stopped once the floor elapses.
     expect(button.querySelector('.cr-spin')).toBeNull();
   });
 
@@ -189,10 +199,60 @@ describe('RailStatus refresh button', () => {
 
     h.emitPipeline({ ...base, parkedThreads: 2 });
     const link = screen.getByText('2 conversations stuck — see Diagnostics');
-    expect(link.getAttribute('href')).toBe('/settings');
+    expect(link.getAttribute('href')).toBe('/settings/index.html#diagnostics');
 
     h.emitPipeline({ ...base, parkedThreads: 0 });
     expect(screen.queryByText(/stuck/i)).toBeNull();
+  });
+
+  const PIPELINE_BASE: PipelineStatus = {
+    extractionBacklog: 0,
+    synthesisDue: 0,
+    synthesisInFlight: 0,
+    parkedThreads: 0,
+  };
+
+  it('dismisses the stuck notice, then re-shows it only once the backlog grows past the dismissed count', () => {
+    const h = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h.emitHealth(HEALTH);
+
+    h.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 3 });
+    expect(screen.getByText('3 conversations stuck — see Diagnostics')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss stuck-conversation notice' }));
+    expect(screen.queryByText(/stuck/i)).toBeNull();
+
+    // Same or smaller backlog stays hidden.
+    h.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 3 });
+    h.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 2 });
+    expect(screen.queryByText(/stuck/i)).toBeNull();
+
+    // A worse backlog brings it back.
+    h.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 5 });
+    expect(screen.getByText('5 conversations stuck — see Diagnostics')).toBeTruthy();
+  });
+
+  it('persists the dismissal across remounts and forgets it once the backlog clears', () => {
+    const h1 = installBridge(vi.fn(async () => OK_COOLDOWN));
+    const first = render(<RailStatus />);
+    h1.emitHealth(HEALTH);
+    h1.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 2 });
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss stuck-conversation notice' }));
+    expect(screen.queryByText(/stuck/i)).toBeNull();
+
+    first.unmount();
+
+    const h2 = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h2.emitHealth(HEALTH);
+    h2.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 2 });
+    expect(screen.queryByText(/stuck/i)).toBeNull(); // still dismissed
+
+    // Backlog clears, then the same count returns — no longer suppressed.
+    h2.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 0 });
+    h2.emitPipeline({ ...PIPELINE_BASE, parkedThreads: 2 });
+    expect(screen.getByText('2 conversations stuck — see Diagnostics')).toBeTruthy();
   });
 
   it('shows the desktop-only note and no buttons without a bridge', () => {
