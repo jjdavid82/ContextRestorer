@@ -199,6 +199,11 @@ npm run eval
 npm run bench:briefing
 ```
 
+**Manual, end-to-end testing through a real connected account:**
+[`docs/manual-test-scenarios.md`](docs/manual-test-scenarios.md) — copy-paste
+email scenarios that exercise ingestion, threading, redaction, the briefing
+surface, and the "Mark resolved" flow, with expected results.
+
 ## Project layout
 
 npm workspaces monorepo:
