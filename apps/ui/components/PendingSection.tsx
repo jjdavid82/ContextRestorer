@@ -3,7 +3,7 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import type { PendingItemView } from '../types/bridge';
 import { CITATION_CHIP_LABEL, ClaimBullet } from './ClaimBullet';
@@ -105,6 +105,59 @@ const PENDING_LIST_SX = {
   },
 } as const;
 
+/**
+ * "Mark resolved" with an inline confirm step.
+ *
+ * Marking an obligation done is low-stakes but not quite free: it closes the
+ * item AND appends a `resolution` delta to its thread (`ipc/briefing.ts`), so it
+ * drops off every future briefing, not just this view. A stray click should not
+ * do that, so the first click asks and a second one commits. Inline rather than
+ * a modal dialog — it matches the rest of this surface (see `CaughtUpButton`),
+ * needs no portal, and a native `window.confirm` would block the whole renderer.
+ */
+function ResolveControl({
+  pendingId,
+  onResolve,
+}: {
+  pendingId: string;
+  onResolve: (pendingId: string) => void;
+}): ReactNode {
+  const [confirming, setConfirming] = useState(false);
+
+  if (!confirming) {
+    return (
+      <Button size="small" variant="outlined" onClick={() => setConfirming(true)}>
+        Mark resolved
+      </Button>
+    );
+  }
+
+  return (
+    <Box
+      role="group"
+      aria-label="Confirm mark resolved"
+      sx={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}
+    >
+      <Typography component="span" sx={{ fontSize: '0.85em', color: 'text.secondary' }}>
+        Mark done and drop from future briefings?
+      </Typography>
+      <Button
+        size="small"
+        variant="contained"
+        onClick={() => {
+          setConfirming(false);
+          onResolve(pendingId);
+        }}
+      >
+        Yes, resolve
+      </Button>
+      <Button size="small" variant="text" onClick={() => setConfirming(false)}>
+        Cancel
+      </Button>
+    </Box>
+  );
+}
+
 const QUOTE_SX = {
   m: 0,
   mt: 1,
@@ -161,9 +214,7 @@ export function PendingSection({
             const claimId = item.citationArtifactId;
             const resolveAction =
               onResolve === undefined ? undefined : (
-                <Button size="small" variant="outlined" onClick={() => onResolve(item.pendingId)}>
-                  Mark resolved
-                </Button>
+                <ResolveControl pendingId={item.pendingId} onResolve={onResolve} />
               );
             return (
               <ClaimBullet

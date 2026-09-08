@@ -220,6 +220,15 @@ export function BriefingView({
   const [error, setError] = useState<string | null>(null);
   const [openClaimId, setOpenClaimId] = useState<string | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
+  /**
+   * Artifact ids of items the user resolved in THIS view. The pinned card is
+   * dropped from `pending` on resolve, and that alone would *un-hide* a streamed
+   * "Waiting on you" bullet citing the same artifact — the changed-list filter
+   * below only suppresses claims still backed by an open pending item. The next
+   * briefing drops these claims main-side (a `resolution` delta now supersedes
+   * the obligation); this set covers the gap until then.
+   */
+  const [resolvedArtifactIds, setResolvedArtifactIds] = useState<Set<string>>(() => new Set());
   const [claimVerdicts, setClaimVerdicts] = useState<Record<string, FeedbackInput['verdict']>>({});
   /** A-4 cap for the changed list; replaced by the config value once known. */
   const [maxChangedItems, setMaxChangedItems] = useState(DEFAULT_MAX_CHANGED_ITEMS);
@@ -420,29 +429,37 @@ export function BriefingView({
   }, [done, briefingId]);
 
   /**
-   * The user manually declaring a "Waiting on you" item dealt with — the only
-   * way one leaves that list today, short of the model later detecting a reply
-   * that superseded it (see `@cr/ai`'s `resolvePendingItemsForSupersededDelta`).
-   * Removed from local state immediately on success so the list does not sit
-   * stale until the next full reload.
+   * The user manually declaring a "Waiting on you" item dealt with. Main-side
+   * this closes the row AND appends a `resolution` delta to its thread (see
+   * `ipc/briefing.ts`), so the obligation is off every future briefing too, not
+   * just this view. Here we drop the pinned card immediately, and remember the
+   * item's artifact id so a streamed bullet for the same obligation cannot
+   * resurface in this view before the next request.
    */
-  const resolvePendingItem = useCallback((pendingId: string): void => {
-    setResolveError(null);
-    try {
-      getBridge()
-        .briefing.resolvePending(pendingId)
-        .then((result) => {
-          if (result.ok) {
-            setPending((current) => current.filter((item) => item.pendingId !== pendingId));
-          } else {
-            setResolveError(result.reason ?? 'could not resolve this item');
-          }
-        })
-        .catch((cause: unknown) => setResolveError(describe(cause)));
-    } catch (cause) {
-      setResolveError(describe(cause));
-    }
-  }, []);
+  const resolvePendingItem = useCallback(
+    (pendingId: string): void => {
+      setResolveError(null);
+      const artifactId = pending.find((item) => item.pendingId === pendingId)?.citationArtifactId;
+      try {
+        getBridge()
+          .briefing.resolvePending(pendingId)
+          .then((result) => {
+            if (result.ok) {
+              setPending((current) => current.filter((item) => item.pendingId !== pendingId));
+              if (artifactId != null && artifactId !== '') {
+                setResolvedArtifactIds((ids) => new Set(ids).add(artifactId));
+              }
+            } else {
+              setResolveError(result.reason ?? 'could not resolve this item');
+            }
+          })
+          .catch((cause: unknown) => setResolveError(describe(cause)));
+      } catch (cause) {
+        setResolveError(describe(cause));
+      }
+    },
+    [pending],
+  );
 
   /**
    * Drill-down panel + feedback for a claim, rendered only while it is open.
@@ -514,15 +531,22 @@ export function BriefingView({
   const pendingArtifactIds = new Set(
     pending.flatMap((item) => (item.citationArtifactId !== null ? [item.citationArtifactId] : [])),
   );
+  // A claim whose obligation the user just resolved in this view is gone for
+  // good here — it is not re-backed by an open pending item, so the check above
+  // would otherwise let the streamed "Waiting on you" bullet reappear.
+  const isLive = (chunk: ClaimChunk): boolean => !resolvedArtifactIds.has(claimIdOf(chunk));
   const waitingOnYouClaims = claims.filter(
-    (chunk) => sectionOf(chunk) === 'Waiting on you' && !pendingArtifactIds.has(claimIdOf(chunk)),
+    (chunk) =>
+      sectionOf(chunk) === 'Waiting on you' &&
+      !pendingArtifactIds.has(claimIdOf(chunk)) &&
+      isLive(chunk),
   );
 
   // P2: every non-obligation claim, in canonical section order. Sorted rather
   // than concatenated per section so one flat list still reads in the order the
   // four-section layout would have shown.
   const changedClaims = CHANGED_SECTIONS.flatMap((section) =>
-    claims.filter((chunk) => sectionOf(chunk) === section),
+    claims.filter((chunk) => sectionOf(chunk) === section && isLive(chunk)),
   );
   const visibleChanged = showAllChanged ? changedClaims : changedClaims.slice(0, maxChangedItems);
   const hiddenChangedCount = changedClaims.length - visibleChanged.length;

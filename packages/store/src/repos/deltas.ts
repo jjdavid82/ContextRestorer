@@ -118,11 +118,15 @@ export class DeltasRepo {
   private readonly stmtInsert: Statement<[DeltaInsertParams], unknown>;
   private readonly stmtCurrentForWindow: Statement<unknown[], DeltaRow>;
   private readonly stmtChainFor: Statement<unknown[], DeltaRow>;
+  private readonly stmtById: Statement<unknown[], DeltaRow>;
   private readonly txAppend: Transaction<(input: NewStateDelta) => StateDelta>;
 
   constructor(private readonly db: Database) {
     this.stmtLatest = this.db.prepare<unknown[], { delta_id: string; version: number }>(LATEST_SQL);
     this.stmtInsert = this.db.prepare<DeltaInsertParams, unknown>(INSERT_SQL);
+    this.stmtById = this.db.prepare<unknown[], DeltaRow>(
+      `SELECT ${SELECT_COLUMNS} FROM state_deltas WHERE delta_id = ?`,
+    );
     this.stmtCurrentForWindow = this.db.prepare<unknown[], DeltaRow>(
       `SELECT ${SELECT_COLUMNS} FROM current_state_deltas
        WHERE created_at >= ? AND created_at < ?
@@ -198,5 +202,16 @@ export class DeltasRepo {
   /** Full ordered history for a thread, v1 first — includes superseded versions. */
   chainFor(threadKey: string): StateDelta[] {
     return this.stmtChainFor.all(threadKey).map(toDomain);
+  }
+
+  /**
+   * One delta by id, or `undefined` for an unknown id. Reads `state_deltas`
+   * directly, so a since-superseded version is still returned — the caller that
+   * needs this (a manual "Mark resolved" turning a pending item into a
+   * `resolution` delta on the item's thread) only wants the `thread_key`.
+   */
+  getById(deltaId: string): StateDelta | undefined {
+    const row = this.stmtById.get(deltaId);
+    return row === undefined ? undefined : toDomain(row);
   }
 }

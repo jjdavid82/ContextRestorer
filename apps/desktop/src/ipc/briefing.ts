@@ -34,7 +34,8 @@
  * handler synchronous regardless of what generation turns out to cost.
  */
 import { ipcMain } from 'electron';
-import { newId, systemClock, type PendingItem } from '@cr/core';
+import { newId, systemClock, type PendingItem, type StateDelta } from '@cr/core';
+import type { NewStateDelta } from '@cr/store';
 import type {
   BriefingChunk,
   BriefingDone,
@@ -141,7 +142,25 @@ export function sourceQuoteFor(
  */
 export interface PendingReader {
   listOpen(): PendingItem[];
+  /** `undefined` for an unknown id — used by the manual-resolve path to read the
+   *  item's `deltaId`/`description`/citation before closing it. */
+  getById(pendingId: string): PendingItem | undefined;
   resolve(pendingId: string, at: number): void;
+}
+
+/**
+ * The slice of `DeltasRepo` the manual "Mark resolved" path needs.
+ *
+ * Optional on {@link BriefingHandlerDeps}: when a host wires it, resolving an
+ * item also appends a `resolution` delta to its thread so the obligation stops
+ * being restated in every future briefing (see {@link resolvePendingItem});
+ * when it does not, resolve falls back to only flipping `pending_items.status`,
+ * which clears the pinned card but leaves the narrative restatement.
+ */
+export interface ResolutionDeltaWriter {
+  getById(deltaId: string): StateDelta | undefined;
+  chainFor(threadKey: string): StateDelta[];
+  append(input: NewStateDelta): StateDelta;
 }
 
 /**
@@ -213,6 +232,12 @@ export interface ResumePointReader {
 export interface BriefingHandlerDeps {
   /** Open-obligation source; `PendingItemsRepo` in production. */
   pending: PendingReader;
+  /**
+   * D-6 delta store, used only by the manual-resolve path to turn a "Mark
+   * resolved" click into a real `resolution` delta — `DeltasRepo` in
+   * production. Optional; absent, resolve only flips `pending_items.status`.
+   */
+  deltas?: ResolutionDeltaWriter;
   /** Optional stakes source; `GraphRepo` in production. */
   graph?: StakesReader;
   /**
@@ -383,6 +408,69 @@ export function parsePendingIdArg(arg: unknown): string | null {
   return pendingId;
 }
 
+/** `state_deltas.model` / `prompt_version` sentinels for a user-authored delta:
+ *  no model wrote it, so the audit columns must not read as though one did. */
+const MANUAL_RESOLVE_MODEL = 'none:user-action';
+const MANUAL_RESOLVE_PROMPT_VERSION = 'user-resolve.v1';
+
+/**
+ * Close a pending item on the user's say-so AND, when the delta store is wired,
+ * append a `resolution` delta to its thread.
+ *
+ * The delta is the load-bearing half. The briefing narrative is rebuilt from
+ * `current_state_deltas` on every request (`TemplateBriefingRenderer`), and a
+ * tip delta that once carried an obligation is rendered on every run — as a
+ * "Waiting on you" line while an open item hangs off it, and, once that item is
+ * merely marked resolved, as a plain restatement under "What moved" / "Worth
+ * knowing". Only a superseding `resolution` delta takes it off the briefing
+ * (it then reads once under "Quietly resolved" and ages out with the window).
+ * Layer 2 writes one automatically when it sees a reply that closes the thread;
+ * a user who dealt with something offline produces no such reply, so this does.
+ *
+ * Falls back to a bare status flip when the delta store is absent, or the item
+ * / its delta cannot be found — an unknown id reaching `resolve` is a harmless
+ * no-op UPDATE, exactly as before this path existed.
+ */
+function recordManualResolution(pendingId: string, at: number, deps: BriefingHandlerDeps): void {
+  const item = deps.pending.getById(pendingId);
+
+  if (item === undefined || deps.deltas === undefined) {
+    deps.pending.resolve(pendingId, at);
+    return;
+  }
+
+  const delta = deps.deltas.getById(item.deltaId);
+  if (delta === undefined) {
+    deps.pending.resolve(pendingId, at);
+    return;
+  }
+
+  // `append` derives version/supersedes from the chain tip inside its own
+  // IMMEDIATE transaction (D-6), so a synthesis worker writing the same thread
+  // concurrently blocks rather than races.
+  deps.deltas.append({
+    threadKey: delta.threadKey,
+    artifactId: null,
+    summary: `You marked this done: ${item.description}`,
+    kind: 'resolution',
+    confidence: 1,
+    sourceEventIds: [],
+    citationArtifactIds: item.citationArtifactId !== null ? [item.citationArtifactId] : [],
+    model: MANUAL_RESOLVE_MODEL,
+    promptVersion: MANUAL_RESOLVE_PROMPT_VERSION,
+    createdAt: at,
+  });
+
+  // Close this item and any open duplicates that a restatement minted on the
+  // same chain before this fix landed.
+  const chainDeltaIds = new Set(deps.deltas.chainFor(delta.threadKey).map((d) => d.deltaId));
+  for (const open of deps.pending.listOpen()) {
+    if (open.pendingId === pendingId || chainDeltaIds.has(open.deltaId)) {
+      deps.pending.resolve(open.pendingId, at);
+    }
+  }
+}
+
 /**
  * The whole of `briefing:resolvePending`: the user manually declaring "I've
  * dealt with this" for an item that would otherwise sit in "Waiting on you"
@@ -398,7 +486,7 @@ export function resolvePendingItem(arg: unknown, deps: BriefingHandlerDeps): OkR
   if (pendingId === null) return { ok: false, reason: 'invalid_pending_id' };
 
   try {
-    deps.pending.resolve(pendingId, (deps.clock ?? systemClock).now());
+    recordManualResolution(pendingId, (deps.clock ?? systemClock).now(), deps);
     return { ok: true };
   } catch (error) {
     console.error('[briefing] resolvePending failed', pendingId, error);

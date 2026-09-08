@@ -1460,6 +1460,10 @@ if (!app.requestSingleInstanceLock()) {
         poller,
         config: config!,
         pending,
+        // `briefing:resolvePending` appends a `resolution` delta when the user
+        // marks an obligation done, so it stops being restated in every future
+        // briefing. Same `DeltasRepo` instance every layer already shares.
+        deltas: sharedAiDeps.deltas,
         graph,
         // Task 4.4 step 4: the local metrics view (per-layer call stats, briefing
         // latency percentiles, gate drop reasons from the trace). Read-only, and

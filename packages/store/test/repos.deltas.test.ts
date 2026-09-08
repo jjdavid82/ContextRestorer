@@ -125,6 +125,22 @@ describe('DeltasRepo.currentForWindow', () => {
   });
 });
 
+describe('DeltasRepo.getById', () => {
+  it('returns one delta by id, including a since-superseded version', () => {
+    const v1 = repo.append(makeDelta({ summary: 'v1', createdAt: 1_000 }));
+    repo.append(makeDelta({ summary: 'v2', kind: 'reversal', createdAt: 2_000 }));
+
+    const got = repo.getById(v1.deltaId);
+    expect(got?.deltaId).toBe(v1.deltaId);
+    expect(got?.threadKey).toBe(THREAD);
+    expect(got?.version).toBe(1);
+  });
+
+  it('returns undefined for an unknown id', () => {
+    expect(repo.getById('nope')).toBeUndefined();
+  });
+});
+
 describe('DeltasRepo.chainFor', () => {
   it('returns the full ordered history so a briefing can narrate a reversal', () => {
     repo.append(makeDelta({ summary: 'shipping Friday', createdAt: 1_000 }));

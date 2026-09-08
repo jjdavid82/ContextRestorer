@@ -324,11 +324,73 @@ describe('BriefingView — pending then stream', () => {
 
     await screen.findByText('Sign off on the two SRE reqs.');
     fireEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
+    // First click only asks; the bridge is untouched until the user confirms.
+    expect(mock.resolvePending).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, resolve' }));
 
     expect(mock.resolvePending).toHaveBeenCalledWith('p1');
     await waitFor(() =>
       expect(screen.queryByText('Sign off on the two SRE reqs.')).toBeNull(),
     );
+  });
+
+  it('does not touch the bridge when the resolve confirmation is cancelled', async () => {
+    const mock = installBridge({
+      pending: [
+        {
+          pendingId: 'p1',
+          description: 'Sign off on the two SRE reqs.',
+          confidence: 0.9,
+          citationArtifactId: 'art-p1',
+          sourceQuote: null,
+        },
+      ],
+    });
+    await renderBriefing(mock);
+
+    await screen.findByText('Sign off on the two SRE reqs.');
+    fireEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(mock.resolvePending).not.toHaveBeenCalled();
+    // Back to the idle affordance, item still shown.
+    expect(screen.getByRole('button', { name: 'Mark resolved' })).toBeTruthy();
+    expect(screen.getByText('Sign off on the two SRE reqs.')).toBeTruthy();
+  });
+
+  it('does not resurface a streamed "Waiting on you" bullet for a just-resolved item', async () => {
+    const mock = installBridge({
+      pending: [
+        {
+          pendingId: 'p1',
+          description: 'Sign off on the two SRE reqs.',
+          confidence: 0.9,
+          citationArtifactId: 'art-p1',
+          sourceQuote: null,
+        },
+      ],
+    });
+    await renderBriefing(mock);
+    await screen.findByText('Sign off on the two SRE reqs.');
+
+    // The model also filed this obligation as a streamed claim. While the
+    // pending item is open it is suppressed; it must stay suppressed once the
+    // item is resolved, not pop back in as a button-less bullet.
+    mock.emitChunk(
+      chunk({
+        section: 'Waiting on you',
+        claim: 'You still owe sign-off on the two SRE reqs.',
+        citation: citation({ artifactId: 'art-p1' }),
+      }),
+    );
+    expect(screen.queryByText('You still owe sign-off on the two SRE reqs.')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, resolve' }));
+    await waitFor(() =>
+      expect(screen.queryByText('Sign off on the two SRE reqs.')).toBeNull(),
+    );
+    expect(screen.queryByText('You still owe sign-off on the two SRE reqs.')).toBeNull();
   });
 
   it('keeps a pending item and surfaces the reason when resolving it fails', async () => {
@@ -348,6 +410,7 @@ describe('BriefingView — pending then stream', () => {
 
     await screen.findByText('Sign off on the two SRE reqs.');
     fireEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, resolve' }));
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('internal_error');
