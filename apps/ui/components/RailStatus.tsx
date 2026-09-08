@@ -78,14 +78,71 @@ function pipelineLine(status: PipelineStatus | null): string {
   return 'Idle';
 }
 
-const STUCK_LINK_SX = {
-  display: 'block',
+/**
+ * The bundle is served over the `app://local` fixed-host scheme, where directory
+ * URLs don't resolve — every in-app link points at an explicit `index.html`
+ * (same reasoning as `AppShell`'s nav). The `#diagnostics` hash tells the
+ * settings screen which panel to open.
+ */
+const DIAGNOSTICS_HREF = '/settings/index.html#diagnostics';
+
+const STUCK_ROW_SX = {
   mt: 0.25,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 0.5,
+} as const;
+const STUCK_LINK_SX = {
+  flex: 1,
+  minWidth: 0,
   fontSize: 12,
   color: 'warning.main',
   textDecoration: 'none',
   '&:hover': { textDecoration: 'underline' },
 } as const;
+const STUCK_DISMISS_BTN_SX = { p: 0.25, color: 'warning.main', flexShrink: 0 } as const;
+
+/**
+ * `localStorage` key holding the parked-thread count the user last dismissed the
+ * "conversations stuck" notice at. Per-viewer convenience only — every access is
+ * wrapped, and a private window that can't persist simply won't remember it.
+ */
+const STUCK_DISMISS_KEY = 'cr.railStatus.stuckDismissedAt';
+
+function readStuckDismissedCount(): number {
+  try {
+    const raw = localStorage.getItem(STUCK_DISMISS_KEY);
+    const n = raw === null ? 0 : Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeStuckDismissedCount(count: number): void {
+  try {
+    if (count > 0) localStorage.setItem(STUCK_DISMISS_KEY, String(count));
+    else localStorage.removeItem(STUCK_DISMISS_KEY);
+  } catch {
+    // Blocked/again storage — the notice just won't stay dismissed across reloads.
+  }
+}
+
+/** A plain × — dismisses the stuck-conversation notice. */
+const DismissIcon = (
+  <svg
+    viewBox="0 0 24 24"
+    width="12"
+    height="12"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    aria-hidden="true"
+  >
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);
 
 // Static object literals only — Pigment extracts `sx={CONST}` but not a spread
 // or a runtime-computed value, so the two eyebrow variants are spelled out.
@@ -106,6 +163,19 @@ const EYEBROW_SX_SPACED = {
 } as const;
 const REFRESH_BTN_SX = { p: 0.25, color: 'text.secondary' } as const;
 
+/**
+ * Floor on how long the refresh icon keeps spinning after a click.
+ *
+ * `poll:refresh` only *schedules* the source's next cycle and returns at once —
+ * the fetch itself runs later, off in the poller — so the IPC round-trip settles
+ * in a few milliseconds and an un-floored spinner would just flicker. Holding it
+ * for this long turns the click into visible "on it" feedback; the button's
+ * 60-second cooldown disable then carries "done" from there.
+ */
+const REFRESH_MIN_SPIN_MS = 900;
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 export function RailStatus(): ReactNode {
   const [health, setHealth] = useState<SourceHealth[]>([]);
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null);
@@ -116,6 +186,13 @@ export function RailStatus(): ReactNode {
   const [readyAt, setReadyAt] = useState<Partial<Record<SourceId, number>>>({});
   /** Bumped once a second while a cooldown is active, to re-render the countdown. */
   const [nowTs, setNowTs] = useState(() => Date.now());
+  /**
+   * Parked-thread count at which the user last dismissed the "conversations
+   * stuck" notice. Seeded post-mount (below) so the static-export prerender and
+   * hydration stay on the un-dismissed markup. The notice re-appears once the
+   * count climbs past this — a worsening backlog is worth re-raising.
+   */
+  const [stuckDismissedCount, setStuckDismissedCount] = useState(0);
 
   useEffect(() => {
     if (!hasBridge()) {
@@ -152,8 +229,30 @@ export function RailStatus(): ReactNode {
     return () => clearInterval(id);
   }, [readyAt]);
 
+  // Seed the dismissed-count from storage once, after mount.
+  useEffect(() => {
+    setStuckDismissedCount(readStuckDismissedCount());
+  }, []);
+
+  // Once a real status reports the backlog fully cleared, forget any dismissal
+  // so the next occurrence shows again from scratch. Gated on a non-null
+  // `pipeline` so the initial "no status yet" render can't wipe a stored value.
+  const parkedThreads = pipeline?.parkedThreads ?? 0;
+  useEffect(() => {
+    if (pipeline !== null && pipeline.parkedThreads === 0 && stuckDismissedCount !== 0) {
+      setStuckDismissedCount(0);
+      writeStuckDismissedCount(0);
+    }
+  }, [pipeline, stuckDismissedCount]);
+
+  const handleDismissStuck = useCallback((count: number): void => {
+    setStuckDismissedCount(count);
+    writeStuckDismissedCount(count);
+  }, []);
+
   const handleRefresh = useCallback(async (source: SourceId): Promise<void> => {
     setBusy((b) => ({ ...b, [source]: true }));
+    const startedAt = Date.now();
     try {
       const res = await getBridge().poll.refresh(source);
       if (typeof res.retryAfterMs === 'number' && res.retryAfterMs > 0) {
@@ -164,6 +263,10 @@ export function RailStatus(): ReactNode {
       // The bridge went away mid-session — leave the button enabled and let the
       // next click surface the failure.
     } finally {
+      // Keep the icon spinning for a beat even when the IPC call returned
+      // instantly, so the click always registers visually.
+      const remaining = REFRESH_MIN_SPIN_MS - (Date.now() - startedAt);
+      if (remaining > 0) await wait(remaining);
       setBusy((b) => ({ ...b, [source]: false }));
     }
   }, []);
@@ -238,16 +341,27 @@ export function RailStatus(): ReactNode {
         Pipeline
       </Typography>
       <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>{pipelineLine(pipeline)}</Typography>
-      {pipeline !== null && pipeline.parkedThreads > 0 ? (
-        <Box
-          component="a"
-          href="/settings"
-          sx={STUCK_LINK_SX}
-          title="These threads failed to summarize repeatedly. Open Diagnostics for details."
-        >
-          {pipeline.parkedThreads === 1
-            ? '1 conversation stuck — see Diagnostics'
-            : `${pipeline.parkedThreads} conversations stuck — see Diagnostics`}
+      {parkedThreads > 0 && parkedThreads > stuckDismissedCount ? (
+        <Box sx={STUCK_ROW_SX}>
+          <Box
+            component="a"
+            href={DIAGNOSTICS_HREF}
+            sx={STUCK_LINK_SX}
+            title="These threads failed to summarize repeatedly. Open Diagnostics for details."
+          >
+            {parkedThreads === 1
+              ? '1 conversation stuck — see Diagnostics'
+              : `${parkedThreads} conversations stuck — see Diagnostics`}
+          </Box>
+          <IconButton
+            size="small"
+            aria-label="Dismiss stuck-conversation notice"
+            title="Dismiss — returns if more conversations get stuck"
+            onClick={() => handleDismissStuck(parkedThreads)}
+            sx={STUCK_DISMISS_BTN_SX}
+          >
+            {DismissIcon}
+          </IconButton>
         </Box>
       ) : null}
     </Box>
