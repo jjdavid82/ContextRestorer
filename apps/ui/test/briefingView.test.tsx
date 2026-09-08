@@ -135,6 +135,7 @@ function installBridge(
       // A-2 channel tagging. Bridge-contract only; the briefing view never
       // reads it — the Settings channel panel does.
       list: vi.fn(async () => []),
+      remove: vi.fn(async () => ({ ok: true })),
     },
     briefing: {
       request,
