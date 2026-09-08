@@ -9,8 +9,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { PageToolbar } from '../../components/PageToolbar';
 import BriefingWindowSettings from './briefingWindow';
 import SlackChannelSettings from './channels';
+import ConnectionsSettings from './connections';
 import LocalMetricsPanel from './metrics';
 import ModelSettings from './model';
+import ProjectSettings from './projects';
 import ScheduleSettings from './schedule';
 
 /**
@@ -40,7 +42,9 @@ const SCHEDULE_PANEL: PanelDef = {
 
 const PANELS: readonly PanelDef[] = [
   SCHEDULE_PANEL,
+  { id: 'connections', label: 'Connections', render: () => <ConnectionsSettings /> },
   { id: 'channels', label: 'Slack channels', render: () => <SlackChannelSettings /> },
+  { id: 'projects', label: 'Projects', render: () => <ProjectSettings /> },
   { id: 'model', label: 'Chat model', render: () => <ModelSettings /> },
   { id: 'window', label: 'Briefing window', render: () => <BriefingWindowSettings /> },
   { id: 'diagnostics', label: 'Diagnostics', render: () => <LocalMetricsPanel /> },

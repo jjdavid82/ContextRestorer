@@ -72,6 +72,7 @@ export { toHealthPayload, HEALTH_CHANNEL, type SourceHealth } from './health.js'
 export {
   registerProjectsHandlers,
   parseDeclareNames,
+  parseRemoveProjectArg,
   distinctNames,
   type ProjectsHandlerDeps,
 } from './projects.js';
@@ -265,6 +266,13 @@ export interface IpcDeps {
    */
   projectStore?: GraphRepo;
   /**
+   * Invoked after `projects:remove` deletes a project. `main.ts` wires this to
+   * `relinkProjects(slackChannels.list())` so the ingestion pipeline's
+   * channel → project resolver never points at a project id that is gone. See
+   * `ProjectsHandlerDeps.onProjectsChanged`.
+   */
+  onProjectsChanged?: () => void;
+  /**
    * Layer-3 hand-off invoked after `briefing:request` has already returned its
    * handle. `main.ts` supplies an adapter over `BriefingGenerator` that threads
    * this `briefingId` into `generate()` and streams accepted claims out on
@@ -415,13 +423,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   // loop cannot walk the app into a provider throttle. See `ipc/poll.ts`.
   registerPollHandlers({ poller: deps.poller, clock: deps.clock ?? systemClock });
 
-  // OI-3 onboarding: `projects:suggest`, `projects:declare`, `onboarding:status`.
+  // OI-3 onboarding + Settings "Projects" panel: `projects:suggest`,
+  // `projects:declare`, `projects:list`, `projects:remove`, `onboarding:status`.
   if (deps.events !== undefined && deps.projectStore !== undefined) {
     registerProjectsHandlers({
       events: deps.events,
       graph: deps.projectStore,
       config: deps.config,
       vault: deps.vault,
+      // Spread, not assigned: `exactOptionalPropertyTypes` distinguishes an
+      // absent hook from an explicit `undefined`.
+      ...(deps.onProjectsChanged !== undefined
+        ? { onProjectsChanged: deps.onProjectsChanged }
+        : {}),
     });
   }
 

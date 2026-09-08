@@ -1498,6 +1498,11 @@ if (!app.requestSingleInstanceLock()) {
         // would re-prepare every statement for no benefit.
         events,
         projectStore: graph,
+        // Settings "Projects" panel: after `projects:remove` deletes a project,
+        // rebuild the channel → project resolver and `belongs_to` edges so a
+        // channel the FK just untagged is no longer mapped to a dead id. Reuses
+        // the same rebuild the Slack channel save runs.
+        onProjectsChanged: () => relinkProjects(slackChannels.list()),
         // Layer 3's DETERMINISTIC path (P0). No model client is reachable from
         // here — `TemplateBriefingRenderer`'s structural guarantee is that none
         // of its dependencies can be one — which is what makes AC-1 a property

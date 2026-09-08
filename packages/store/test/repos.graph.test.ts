@@ -126,3 +126,47 @@ describe('GraphRepo.declareProject', () => {
     expect(n.n).toBe(0);
   });
 });
+
+describe('GraphRepo.removeProject', () => {
+  it('deletes the row and reports it, returns false for an unknown id', () => {
+    const project = repo.declareProject({ name: 'Migration', origin: 'declared' });
+
+    expect(repo.removeProject(project.projectId)).toBe(true);
+    expect(repo.getProject(project.projectId)).toBeUndefined();
+
+    expect(repo.removeProject(project.projectId)).toBe(false);
+    expect(repo.removeProject('never-existed')).toBe(false);
+  });
+
+  it("removes only the belongs_to edges pointing at the removed project", () => {
+    const gone = repo.declareProject({ name: 'Gone', origin: 'declared' });
+    const kept = repo.declareProject({ name: 'Kept', origin: 'declared' });
+
+    repo.relate({ fromId: 'a1', rel: 'belongs_to', toId: gone.projectId });
+    repo.relate({ fromId: 'a2', rel: 'belongs_to', toId: kept.projectId });
+    // A non-stakes edge that also happens to reach the removed project id must
+    // be left alone — removeProject only speaks for `belongs_to`.
+    repo.relate({ fromId: 'a3', rel: 'participant', toId: gone.projectId });
+
+    repo.removeProject(gone.projectId);
+
+    expect(repo.relatedFromIds(gone.projectId, 'belongs_to')).toEqual([]);
+    expect(repo.relatedFromIds(kept.projectId, 'belongs_to')).toEqual(['a2']);
+    expect(repo.relatedFromIds(gone.projectId, 'participant')).toEqual(['a3']);
+  });
+
+  it('untags a referencing Slack channel via the ON DELETE SET NULL FK, keeping the channel', () => {
+    const project = repo.declareProject({ name: 'Platform', origin: 'declared' });
+    db.prepare(
+      `INSERT INTO slack_selected_channels (channel_id, name, added_at, project_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run('C1', 'platform-migration', 1_000, project.projectId);
+
+    repo.removeProject(project.projectId);
+
+    const row = db
+      .prepare(`SELECT channel_id, project_id FROM slack_selected_channels WHERE channel_id = 'C1'`)
+      .get() as { channel_id: string; project_id: string | null };
+    expect(row).toEqual({ channel_id: 'C1', project_id: null });
+  });
+});

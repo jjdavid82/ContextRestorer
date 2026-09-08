@@ -622,6 +622,12 @@ export interface ContextRestorerBridge {
     declare(names: string[]): Promise<OkResult>;
     /** Declared projects with their ids, for the channel-tagging control (A-2). */
     list(): Promise<DeclaredProject[]>;
+    /**
+     * Delete a declared project (Settings "Projects" panel). Also drops its
+     * `belongs_to` stakes edges and untags any Slack channel that referenced it.
+     * `{ ok: false, reason: 'not_found' }` when the id is already gone.
+     */
+    remove(projectId: string): Promise<OkResult>;
   };
   briefing: {
     request(window: BriefingWindow): Promise<BriefingHandle>;
@@ -747,6 +753,10 @@ const bridge: ContextRestorerBridge = {
     declare: (names) => {
       assertProjectNames(names);
       return ipcRenderer.invoke('projects:declare', { names }) as Promise<OkResult>;
+    },
+    remove: (projectId) => {
+      assertNonEmptyString(projectId, 'projectId');
+      return ipcRenderer.invoke('projects:remove', { projectId }) as Promise<OkResult>;
     },
   },
   briefing: {
