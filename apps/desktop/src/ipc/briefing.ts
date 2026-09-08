@@ -414,6 +414,36 @@ const MANUAL_RESOLVE_MODEL = 'none:user-action';
 const MANUAL_RESOLVE_PROMPT_VERSION = 'user-resolve.v1';
 
 /**
+ * Append the `resolution` delta that takes an obligation off the briefing
+ * narrative for good (see {@link recordManualResolution} for why it, and not
+ * the `pending_items.status` flip, is load-bearing).
+ *
+ * `append` derives version/supersedes from the chain tip inside its own
+ * IMMEDIATE transaction (D-6), so a synthesis worker writing the same thread
+ * concurrently blocks rather than races.
+ */
+function appendResolutionDelta(
+  deltas: ResolutionDeltaWriter,
+  threadKey: string,
+  description: string,
+  citationArtifactId: string | null,
+  at: number,
+): void {
+  deltas.append({
+    threadKey,
+    artifactId: null,
+    summary: `You marked this done: ${description}`,
+    kind: 'resolution',
+    confidence: 1,
+    sourceEventIds: [],
+    citationArtifactIds: citationArtifactId !== null ? [citationArtifactId] : [],
+    model: MANUAL_RESOLVE_MODEL,
+    promptVersion: MANUAL_RESOLVE_PROMPT_VERSION,
+    createdAt: at,
+  });
+}
+
+/**
  * Close a pending item on the user's say-so AND, when the delta store is wired,
  * append a `resolution` delta to its thread.
  *
@@ -445,21 +475,7 @@ function recordManualResolution(pendingId: string, at: number, deps: BriefingHan
     return;
   }
 
-  // `append` derives version/supersedes from the chain tip inside its own
-  // IMMEDIATE transaction (D-6), so a synthesis worker writing the same thread
-  // concurrently blocks rather than races.
-  deps.deltas.append({
-    threadKey: delta.threadKey,
-    artifactId: null,
-    summary: `You marked this done: ${item.description}`,
-    kind: 'resolution',
-    confidence: 1,
-    sourceEventIds: [],
-    citationArtifactIds: item.citationArtifactId !== null ? [item.citationArtifactId] : [],
-    model: MANUAL_RESOLVE_MODEL,
-    promptVersion: MANUAL_RESOLVE_PROMPT_VERSION,
-    createdAt: at,
-  });
+  appendResolutionDelta(deps.deltas, delta.threadKey, item.description, item.citationArtifactId, at);
 
   // Close this item and any open duplicates that a restatement minted on the
   // same chain before this fix landed.
@@ -469,6 +485,58 @@ function recordManualResolution(pendingId: string, at: number, deps: BriefingHan
       deps.pending.resolve(open.pendingId, at);
     }
   }
+}
+
+/**
+ * The slice of `PendingItemsRepo` the startup backfill (below) needs: every
+ * item already `resolved`/`dismissed`, so it can check each one's thread for a
+ * missing `resolution` delta.
+ */
+export interface ClosedPendingReader {
+  listClosed(): PendingItem[];
+}
+
+/**
+ * One-time-per-launch repair for items resolved before {@link recordManualResolution}
+ * existed (or resolved with `deps.deltas` unwired): those closes only flipped
+ * `pending_items.status`, so their thread's tip delta still carries the
+ * obligation and the briefing keeps restating it — moved out of "Waiting on
+ * you" since the item itself is gone from `listOpen`, but still read out under
+ * "What moved" / "Worth knowing" on every run, looking exactly like something
+ * still open.
+ *
+ * For every closed item whose thread's current tip is not already a
+ * `resolution`, appends one — the same delta a fresh manual resolve would have
+ * written. Idempotent: run it again once every affected thread's tip is
+ * `resolution` and it is a no-op, so calling it unconditionally on every
+ * startup is safe and cheap (one `listClosed()` scan, no writes once caught up).
+ *
+ * Threads only, not items: two closed items on the same chain (a duplicate a
+ * pre-fix restatement minted) need exactly one `resolution` delta between them,
+ * not one each.
+ */
+export function backfillMissingResolutionDeltas(
+  pending: ClosedPendingReader,
+  deltas: ResolutionDeltaWriter,
+  at: number,
+): number {
+  const patchedThreads = new Set<string>();
+  let patched = 0;
+
+  for (const item of pending.listClosed()) {
+    const delta = deltas.getById(item.deltaId);
+    if (delta === undefined || patchedThreads.has(delta.threadKey)) continue;
+    patchedThreads.add(delta.threadKey);
+
+    const chain = deltas.chainFor(delta.threadKey);
+    const tip = chain.at(-1);
+    if (tip === undefined || tip.kind === 'resolution') continue;
+
+    appendResolutionDelta(deltas, delta.threadKey, item.description, item.citationArtifactId, at);
+    patched += 1;
+  }
+
+  return patched;
 }
 
 /**

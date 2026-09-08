@@ -70,6 +70,7 @@ import {
 import { createTray, destroyTray, updateTrayStatus } from './tray.js';
 import { registerAutostart } from './autostart.js';
 import { CHAT_MODEL_SETTING_KEY, registerIpcHandlers, startHealthPush } from './ipc/index.js';
+import { backfillMissingResolutionDeltas } from './ipc/briefing.js';
 import { deepLinkFor, resolveEvents } from './ipc/claim.js';
 import { ensureFreshTokens } from './ipc/oauth.js';
 import { registerPipelineStatusPush } from './ipc/pipelineStatus.js';
@@ -1311,6 +1312,15 @@ if (!app.requestSingleInstanceLock()) {
       // the placeholder was still installed would hand the renderer an id it
       // would never see a chunk for.
       const sharedAiDeps = createSharedAiDeps(db!, config!, vectors!, graph);
+
+      // One-time-per-launch repair for items closed before manual "Mark
+      // resolved" started writing a `resolution` delta (see
+      // `recordManualResolution` in `ipc/briefing.ts`): without one, a closed
+      // item's thread tip still carries the obligation and the briefing keeps
+      // restating it. Idempotent and cheap once caught up, so it runs
+      // unconditionally rather than needing a one-off migration script.
+      backfillMissingResolutionDeltas(pending, sharedAiDeps.deltas, systemClock.now());
+
       const layer3 = createLayer3(sharedAiDeps, config!, {
         graph,
         briefings,
