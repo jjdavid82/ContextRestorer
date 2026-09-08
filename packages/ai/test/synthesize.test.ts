@@ -497,6 +497,73 @@ describe('Layer2Synthesizer — pending items', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 7b. The `request` kind (2026-09-07): a new obligation, nothing else changed.
+// ---------------------------------------------------------------------------
+
+describe('Layer2Synthesizer — request kind', () => {
+  it('writes a delta AND a self-owed pending item for a new open ask', async () => {
+    seedArtifact(A1);
+    ollama.push(
+      meaningful({
+        kind: 'request',
+        summary: 'Legal asked the user to approve the SOW before Friday.',
+        pending_item: {
+          description: 'Approve the vendor SOW so Legal can countersign.',
+          confidence: 0.7,
+          citation_artifact_id: A1,
+          waiting_on: 'self',
+        },
+      }),
+    );
+
+    await makeSynth().synthesize(K);
+
+    const delta = deltas.chainFor(K)[0];
+    expect(delta).toMatchObject({ version: 1, kind: 'request' });
+
+    const open = pending.listOpen();
+    expect(open).toHaveLength(1);
+    expect(open[0]).toMatchObject({
+      deltaId: delta?.deltaId,
+      description: 'Approve the vendor SOW so Legal can countersign.',
+      status: 'open',
+    });
+    expect(loggedCalls()[0]).toMatchObject({ layer: 2, outcome: 'ok' });
+  });
+
+  it('writes the request delta but no pending item when the ask is owed by a third party', async () => {
+    seedArtifact(A1);
+    ollama.push(
+      meaningful({
+        kind: 'request',
+        summary: 'The user asked the vendor to send a revised SOW.',
+        pending_item: {
+          description: 'Vendor to send a revised SOW.',
+          confidence: 0.7,
+          citation_artifact_id: A1,
+          waiting_on: 'vendor',
+        },
+      }),
+    );
+
+    await makeSynth().synthesize(K);
+
+    expect(deltas.chainFor(K)[0]?.kind).toBe('request');
+    // Rule 1 (FR-4 / AC-4): only self-owed obligations become items.
+    expect(pending.listOpen()).toEqual([]);
+  });
+
+  it('rejects an unknown kind, so `request` did not just widen the gate to anything', async () => {
+    ollama.push(meaningful({ kind: 'ask' }));
+
+    await makeSynth().synthesize(K);
+
+    expect(deltas.chainFor(K)).toEqual([]);
+    expect(loggedCalls()[0]).toMatchObject({ layer: 2, outcome: 'schema_error' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 8. T-1: thread content only ever reaches the model inside a fenced block.
 // ---------------------------------------------------------------------------
 
