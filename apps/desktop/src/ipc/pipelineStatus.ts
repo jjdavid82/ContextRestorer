@@ -43,6 +43,14 @@ export interface PipelineStatus {
   synthesisDue: number;
   /** Threads Layer 2 is synthesizing at this exact moment. */
   synthesisInFlight: number;
+  /**
+   * Threads the scheduler has parked — due by the clock, extraction finished,
+   * but `maxAttempts` synthesis attempts all failed, so it has stopped retrying.
+   * Nothing clears this without a fresh event on the thread (or manual repair),
+   * so it is the one pipeline number that means "a human should look", which is
+   * why the rail surfaces it separately from `synthesisDue`.
+   */
+  parkedThreads: number;
 }
 
 export interface PipelineStatusDeps {
@@ -62,14 +70,19 @@ export interface PipelineStatusDeps {
  */
 export function computePipelineStatus(deps: PipelineStatusDeps): PipelineStatus {
   const inFlight = new Set(deps.scheduler.pending);
-  const due = deps.watermarks
+  const dueNow = deps.watermarks
     .due(deps.clock.now(), { debounce: deps.debounce })
-    .filter((thread) => !inFlight.has(thread.threadKey) && thread.attempts < deps.maxAttempts);
+    .filter((thread) => !inFlight.has(thread.threadKey));
 
   return {
     extractionBacklog: deps.events.countUnextracted(),
-    synthesisDue: due.length,
+    // Queued = due and still within the retry budget.
+    synthesisDue: dueNow.filter((t) => t.attempts < deps.maxAttempts).length,
     synthesisInFlight: inFlight.size,
+    // Parked = due but out of retries. Read from `attempts` rather than the
+    // scheduler's in-memory set so a thread parked in a previous run still
+    // counts before this process's scheduler has ticked.
+    parkedThreads: dueNow.filter((t) => t.attempts >= deps.maxAttempts).length,
   };
 }
 

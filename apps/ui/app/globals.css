@@ -81,6 +81,21 @@ summary:focus-visible,
   }
 }
 
+/* components/RailStatus.tsx — the per-source "refresh now" icon spins while its
+   poll request is in flight. A keyframe rather than an `sx` value because
+   Pigment only extracts static `sx`, and the class is applied conditionally.
+   Frozen by the reduced-motion block above, which is fine: the button also
+   disables while busy, so "working" still reads without the motion. */
+@keyframes cr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cr-spin {
+  display: inline-flex;
+  animation: cr-spin 0.8s linear infinite;
+}
+
 /* -------------------------------------------------------------------------- */
 /* MUI app-shell overrides (components/AppShell.tsx)                          */
 /* -------------------------------------------------------------------------- */

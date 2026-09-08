@@ -7,31 +7,34 @@ import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { getBridge, hasBridge } from '../../lib/bridge';
-import type { LocalMetrics, MetricCount, MetricDuration } from '../../types/bridge';
+import type { ActivityEvent, LocalMetrics, MetricCount, MetricDuration } from '../../types/bridge';
 import { PanelHeading } from './PanelHeading';
 
 /**
- * Diagnostics panel (Task 4.4, step 4).
+ * Diagnostics panel.
  *
  * Everything comes from `debug:metrics`, which reads `ai_calls`, `briefings` and
  * the last seven days of `trace-*.jsonl`. Nothing leaves the machine and nothing
  * is on a timer — cumulative, slow-moving numbers, so a Refresh button, not a
  * poll.
  *
- * Two layers on purpose: an "at a glance" summary (plain-language rows with a
- * status chip) answering "is briefing generation healthy?", and a collapsed
- * "Details" block with the raw `ai_calls` tables for anyone filing a bug. Only
- * a briefing P95 past the OI-1 budget and an `injection_pattern` gate drop earn
- * "Needs a look"; redaction counts are framed as the safety net working.
+ * Three zones, built for a non-technical user:
+ *
+ *   1. **Status** — one verdict (`healthy` / `needs a look`) and two or three
+ *      plain lines: how fast briefings run, and the local-only reassurance.
+ *   2. **Recent activity** — the pipeline failures and deliberate discards from
+ *      the last 7 days, each as one plain sentence with a relative time. This is
+ *      the part that answers "did something get dropped?", which the old panel
+ *      only ever showed as a 7-day count buried in a table.
+ *   3. **Technical details** — the previous panel in full (summary rows + every
+ *      raw `ai_calls` / trace table), collapsed. Unchanged; it is the bug-report
+ *      payload and still uses the `.diag-*` / `.data-table` classes in
+ *      `globals.css`.
  *
  * "Not wired" is not "zero": the channel is registered only when the main
- * process got all three readers. When missing, the invoke rejects and this
- * panel says so — a fresh install legitimately reports zeros, and a wiring
- * mistake that looked identical would be undiscoverable.
- *
- * The collapsed Details tables still use the `.diag-*` / `.data-table` classes
- * in `globals.css` — dense read-only tables MUI would not improve; migrating
- * them is a later cleanup.
+ * process got all its readers. When missing, the invoke rejects and this panel
+ * says so — a fresh install legitimately reports zeros, and a wiring mistake
+ * that looked identical would be undiscoverable.
  */
 
 /** OI-1: the synchronous briefing path carries a 45s P95 target. */
@@ -235,6 +238,232 @@ function SummaryItem({ row }: { row: SummaryRow }): ReactNode {
   );
 }
 
+// ===========================================================================
+// Zone 1 — Status headline
+// ===========================================================================
+
+interface Verdict {
+  tone: Tone;
+  headline: string;
+}
+
+/**
+ * One plain-language verdict for the top of the panel. Deliberately only two
+ * real states: `attention` when the recent-activity feed holds anything the
+ * user should look at (a parked thread, an injection-shaped drop) or the slowest
+ * briefings run past the OI-1 budget; `good` otherwise. `none` is the untouched
+ * install.
+ */
+function computeVerdict(m: LocalMetrics): Verdict {
+  const idle = m.briefingLatency.count === 0 && m.layers.length === 0;
+  if (idle) {
+    return { tone: 'none', headline: 'Nothing has run yet' };
+  }
+  const needsLook =
+    m.recentActivity.some((e) => e.severity === 'attention') ||
+    (m.briefingLatency.p95Ms !== null && m.briefingLatency.p95Ms > BRIEFING_P95_BUDGET_MS);
+  return needsLook
+    ? { tone: 'attention', headline: 'A few things are worth a look' }
+    : { tone: 'good', headline: 'Everything looks healthy' };
+}
+
+function StatusHeadline({ metrics, nowMs }: { metrics: LocalMetrics; nowMs: number }): ReactNode {
+  const verdict = computeVerdict(metrics);
+  const bl = metrics.briefingLatency;
+  const slow = bl.p95Ms !== null && bl.p95Ms > BRIEFING_P95_BUDGET_MS;
+
+  return (
+    <Box
+      sx={{
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 1,
+        p: 2,
+        mb: 3,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 0.75,
+      }}
+    >
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+        <Chip
+          size="small"
+          variant="outlined"
+          color={CHIP_COLOR[verdict.tone]}
+          label={CHIP_TEXT[verdict.tone]}
+        />
+        <Typography sx={{ fontWeight: 650, fontSize: '1rem' }}>{verdict.headline}</Typography>
+      </Box>
+
+      {bl.count > 0 ? (
+        <Typography sx={{ fontSize: '0.9rem', lineHeight: 1.5 }}>
+          Briefings usually finish in about {humanDuration(bl.p50Ms)}
+          {slow ? `, but the slowest have run past the ${humanDuration(BRIEFING_P95_BUDGET_MS)} target` : ''} —
+          over {bl.count} in the last 7 days.
+          {slow ? ' Switching to a smaller chat model (Chat model panel) is the usual fix.' : ''}
+        </Typography>
+      ) : (
+        <Typography sx={{ fontSize: '0.9rem', color: 'text.secondary' }}>
+          No briefings have been generated in the last 7 days.
+        </Typography>
+      )}
+
+      {metrics.lastBriefingAt !== null ? (
+        <Typography sx={{ fontSize: '0.9rem', color: 'text.secondary' }}>
+          Last briefing: {relativeTime(metrics.lastBriefingAt, nowMs)}.
+        </Typography>
+      ) : null}
+
+      <Typography sx={{ fontSize: '0.9rem', color: 'text.secondary', lineHeight: 1.5 }}>
+        All processing runs on this computer. Nothing here — messages, summaries, or briefings — is ever
+        sent to a server.
+      </Typography>
+    </Box>
+  );
+}
+
+// ===========================================================================
+// Zone 2 — Recent activity feed
+// ===========================================================================
+
+/** A compact, human "time since": "just now", "12 min ago", "yesterday". */
+function relativeTime(atMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.round((nowMs - atMs) / 1000));
+  if (seconds < 90) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days} days ago`;
+}
+
+/** Plain-language copy per event kind. `next` is the dim "what happens now" line. */
+const ACTIVITY_COPY: Record<ActivityEvent['kind'], (n: number) => { text: string; next?: string }> = {
+  thread_parked: () => ({
+    text: 'A conversation couldn’t be summarized after several tries.',
+    next: 'It will be picked up again automatically as the conversation continues.',
+  }),
+  gate_injection: (n) => ({
+    text: `${n} ${n === 1 ? 'line was' : 'lines were'} kept out of a briefing for looking like a planted instruction.`,
+    next: 'Worth opening the most recent briefing to check nothing important is missing.',
+  }),
+  gate_drops: (n) => ({
+    text: `${n} ${n === 1 ? 'line was' : 'lines were'} left out of a briefing because ${
+      n === 1 ? 'it wasn’t' : 'they weren’t'
+    } backed by a source.`,
+  }),
+  template_fallback: () => ({
+    text: 'A briefing used a simpler format because the model didn’t respond in time.',
+  }),
+  extraction_writeoff: (n) => ({
+    text: `${n} ${n === 1 ? 'message' : 'messages'} couldn’t be read by the model and ${
+      n === 1 ? 'was' : 'were'
+    } set aside.`,
+  }),
+  model_error: () => ({
+    text: 'A processing step failed and was retried.',
+  }),
+  noise_skipped: (n) => ({
+    text: `${n} automated ${n === 1 ? 'message' : 'messages'} (bots, notifications) skipped — this is normal.`,
+  }),
+};
+
+const DOT_COLOR: Record<ActivityEvent['severity'], string> = {
+  attention: 'var(--mui-palette-warning-main)',
+  info: 'var(--mui-palette-text-secondary)',
+};
+
+function ActivityRow({ event, nowMs }: { event: ActivityEvent; nowMs: number }): ReactNode {
+  const copy = ACTIVITY_COPY[event.kind]?.(event.count) ?? { text: humanize(event.kind) };
+  return (
+    <Box
+      component="li"
+      sx={{ display: 'flex', gap: 1.25, p: 1.5, '& + li': { borderTop: 1, borderColor: 'divider' } }}
+    >
+      {/* Runtime colour → a plain `style` attribute (CSP `style-src-attr`), not
+          `sx`, which Pigment cannot extract for a computed value. */}
+      <span
+        aria-hidden="true"
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          flexShrink: 0,
+          marginTop: 6,
+          backgroundColor: DOT_COLOR[event.severity],
+        }}
+      />
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.72rem', color: 'text.secondary', mb: 0.25 }}>
+          {relativeTime(event.atMs, nowMs)}
+        </Typography>
+        <Typography sx={{ fontSize: '0.9rem', lineHeight: 1.45 }}>{copy.text}</Typography>
+        {copy.next !== undefined ? (
+          <Typography sx={{ fontSize: '0.82rem', color: 'text.secondary', mt: 0.25 }}>
+            {copy.next}
+          </Typography>
+        ) : null}
+      </Box>
+    </Box>
+  );
+}
+
+function RecentActivity({ events, nowMs }: { events: ActivityEvent[]; nowMs: number }): ReactNode {
+  const attention = events.filter((e) => e.severity === 'attention').length;
+  return (
+    <Box sx={{ mb: 3 }}>
+      <Typography
+        component="h3"
+        sx={{
+          fontSize: '0.7rem',
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: 'text.secondary',
+          mb: 1,
+        }}
+      >
+        Recent activity · last 7 days
+      </Typography>
+
+      {events.length === 0 ? (
+        <Typography sx={{ fontSize: '0.9rem', color: 'text.secondary' }}>
+          Nothing has been dropped or failed. Everything the app took in was processed.
+        </Typography>
+      ) : (
+        <>
+          <Box
+            component="ul"
+            sx={{
+              listStyle: 'none',
+              p: 0,
+              m: 0,
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 1,
+              overflow: 'hidden',
+            }}
+          >
+            {events.map((event, i) => (
+              <ActivityRow key={`${event.kind}-${event.atMs}-${i}`} event={event} nowMs={nowMs} />
+            ))}
+          </Box>
+          <Typography sx={{ mt: 1, fontSize: '0.82rem', color: 'text.secondary' }}>
+            {attention === 0
+              ? 'None of this needs your attention — it’s the pipeline working as intended.'
+              : `${attention} of these may need a look (marked in amber).`}
+          </Typography>
+        </>
+      )}
+    </Box>
+  );
+}
+
+// ===========================================================================
+// Zone 3 — Technical details (unchanged from the previous panel)
+// ===========================================================================
+
 /** A `{ key, count }` list with friendly labels, or an explicit empty line. */
 function LabeledCounts({
   rows,
@@ -326,7 +555,7 @@ export default function LocalMetricsPanel(): ReactNode {
       <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
         <PanelHeading
           title="Diagnostics"
-          lead="How briefing generation has been doing on this machine over the last 7 days. Read-only, and nothing here leaves the device."
+          lead="How the app has been doing on this machine over the last 7 days, and anything it had to drop or retry. Read-only, and nothing here leaves the device."
         />
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {loadedAt !== null ? (
@@ -367,6 +596,12 @@ export default function LocalMetricsPanel(): ReactNode {
         </Box>
       ) : (
         <>
+          <StatusHeadline metrics={metrics} nowMs={loadedAt ?? Date.now()} />
+          <RecentActivity events={metrics.recentActivity} nowMs={loadedAt ?? Date.now()} />
+
+          <details className="diag-section">
+            <summary>Technical details</summary>
+            <div className="diag-section__body">
           <Box
             component="ul"
             sx={{ listStyle: 'none', p: 0, m: '0 0 24px', border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}
@@ -491,6 +726,8 @@ export default function LocalMetricsPanel(): ReactNode {
               : ''}
             .
           </Typography>
+            </div>
+          </details>
         </>
       )}
     </Box>

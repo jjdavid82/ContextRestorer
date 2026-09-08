@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
 import { FakeClock } from '@cr/core';
 import { startTrace } from '@cr/observability';
-import { AiCallsRepo, BriefingsRepo, migrate, openDb } from '@cr/store';
+import { AiCallsRepo, BriefingsRepo, ExtractionFailuresRepo, migrate, openDb } from '@cr/store';
 
 const handle = vi.fn();
 vi.mock('electron', () => ({ ipcMain: { handle } }));
@@ -32,7 +32,11 @@ const GENERATED_AT = 1_700_000_000_000;
 let db: Database;
 let aiCalls: AiCallsRepo;
 let briefings: BriefingsRepo;
+let extractionFailures: ExtractionFailuresRepo;
 let logsDir: string;
+
+/** Fixed "now" for the activity window; comfortably after every fixture time. */
+const NOW = Date.UTC(2025, 2, 5, 0, 0, 0);
 
 beforeEach(() => {
   handle.mockClear();
@@ -40,6 +44,7 @@ beforeEach(() => {
   migrate(db);
   aiCalls = new AiCallsRepo(db);
   briefings = new BriefingsRepo(db);
+  extractionFailures = new ExtractionFailuresRepo(db);
   logsDir = mkdtempSync(join(tmpdir(), 'cr-ipc-metrics-'));
 });
 
@@ -48,7 +53,26 @@ afterEach(() => {
   rmSync(logsDir, { recursive: true, force: true });
 });
 
-const deps = () => ({ aiCalls, briefings, logsDir });
+const deps = () => ({ aiCalls, briefings, extractionFailures, logsDir, nowMs: NOW });
+
+/** Insert an `ai_calls` row with an explicit `created_at`. */
+const logAt = (createdAt: number, layer: 1 | 2 | 3, outcome: string): void => {
+  db.prepare(
+    `INSERT INTO ai_calls
+       (call_id, trace_id, layer, model, prompt_version, latency_ms,
+        tokens_in, tokens_out, outcome, created_at)
+     VALUES (?, ?, ?, 'm', 'v1', 1, NULL, NULL, ?, ?)`,
+  ).run(`c-${createdAt}-${outcome}`, `t-${createdAt}`, layer, outcome, createdAt);
+};
+
+/** Seed an event so `extraction_failures` can reference it, then record a failure. */
+const recordWriteoff = (eventId: string, at: number): void => {
+  db.prepare(
+    `INSERT INTO events (event_id, source, source_event_id, thread_key, occurred_at, ingested_at, payload_json)
+     VALUES (?, 'slack', ?, 'C1:1', 1000, 1000, '{}')`,
+  ).run(eventId, eventId);
+  extractionFailures.record(eventId, at);
+};
 
 const log = (layer: 1 | 2 | 3, latencyMs: number, outcome: string): void => {
   aiCalls.log({
@@ -106,6 +130,11 @@ describe('collectLocalMetrics', () => {
 
     expect(metrics.briefingLatency).toEqual({ count: 1, p50Ms: 4_200, p95Ms: 4_200 });
     expect(metrics.reEntry).toEqual({ count: 1, p50Ms: 90_000, p95Ms: 90_000 });
+    expect(metrics.lastBriefingAt).toBe(GENERATED_AT);
+  });
+
+  it('reports lastBriefingAt as null until a briefing exists', () => {
+    expect(collectLocalMetrics(deps()).lastBriefingAt).toBeNull();
   });
 
   it('surfaces gate drops by reason, sorted by count (Gap A)', () => {
@@ -166,13 +195,20 @@ describe('collectLocalMetrics', () => {
   it('reports an available-but-empty view on a fresh install', () => {
     // Distinguishable from a failed read: `available` is true and everything is
     // legitimately zero, which is what a machine that has run nothing looks like.
-    const metrics = collectLocalMetrics({ aiCalls, briefings, logsDir: join(logsDir, 'missing') });
+    const metrics = collectLocalMetrics({
+      aiCalls,
+      briefings,
+      extractionFailures,
+      logsDir: join(logsDir, 'missing'),
+      nowMs: NOW,
+    });
 
     expect(metrics.available).toBe(true);
     expect(metrics.reason).toBeUndefined();
     expect(metrics.layers).toEqual([]);
     expect(metrics.gateDrops).toEqual([]);
     expect(metrics.tracesRead).toBe(0);
+    expect(metrics.recentActivity).toEqual([]);
   });
 
   it('never throws: a failing reader degrades to available: false with a reason', () => {
@@ -182,8 +218,10 @@ describe('collectLocalMetrics', () => {
           throw new Error('database is locked');
         },
         outcomeStats: () => [],
+        listRecentNotable: () => [],
       },
       briefings,
+      extractionFailures,
       logsDir,
     };
 
@@ -193,6 +231,55 @@ describe('collectLocalMetrics', () => {
     expect(metrics.available).toBe(false);
     expect(metrics.reason).toContain('database is locked');
     expect(metrics.layers).toEqual([]);
+    expect(metrics.recentActivity).toEqual([]);
+  });
+});
+
+describe('collectLocalMetrics — recent activity feed', () => {
+  it('is empty on a healthy install', () => {
+    log(1, 100, 'ok');
+    expect(collectLocalMetrics(deps()).recentActivity).toEqual([]);
+  });
+
+  it('surfaces failed model calls, template fallbacks, write-offs and gate drops, newest first', () => {
+    // A failed Layer 1 call and a benign non-write (the latter must NOT appear).
+    logAt(NOW - 60_000, 1, 'schema_fail');
+    logAt(NOW - 50_000, 2, 'not_meaningful');
+
+    // Two events Layer 1 gave up on → one aggregated row.
+    recordWriteoff('e1', NOW - 40_000);
+    recordWriteoff('e2', NOW - 30_000);
+
+    // A template-mode briefing.
+    const b = briefings.create({
+      windowStart: NOW - 86_400_000,
+      windowEnd: NOW,
+      generatedAt: NOW - 20_000,
+      mode: 'llm',
+      narrativePath: '/b.md',
+      deltaIds: [],
+      threadsStillProcessing: 0,
+    });
+    briefings.markTemplateMode(b.briefingId);
+
+    // A citation-gate injection drop, via a real trace line.
+    writeBriefingTrace({ outcome: 'ok', gateDrops: { injection_pattern: 1 } });
+
+    const feed = collectLocalMetrics(deps()).recentActivity;
+
+    expect(feed.map((e) => ({ kind: e.kind, severity: e.severity, count: e.count }))).toEqual([
+      { kind: 'template_fallback', severity: 'info', count: 1 },
+      { kind: 'extraction_writeoff', severity: 'info', count: 2 },
+      { kind: 'model_error', severity: 'info', count: 1 },
+      { kind: 'gate_injection', severity: 'attention', count: 1 },
+    ]);
+    // Descending by time.
+    expect(feed.map((e) => e.atMs)).toEqual([...feed.map((e) => e.atMs)].sort((a, b) => b - a));
+  });
+
+  it('excludes events older than the 7-day window', () => {
+    logAt(NOW - 8 * 24 * 60 * 60 * 1_000, 1, 'error');
+    expect(collectLocalMetrics(deps()).recentActivity).toEqual([]);
   });
 });
 

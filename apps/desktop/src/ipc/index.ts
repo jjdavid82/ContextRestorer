@@ -50,6 +50,7 @@ import {
 } from './slackChannels.js';
 import { registerClaimHandlers } from './claim.js';
 import { registerExternalHandlers } from './external.js';
+import { registerPollHandlers } from './poll.js';
 import {
   registerFeedbackHandlers,
   type BriefingCompletionStore,
@@ -59,6 +60,7 @@ import {
   registerMetricsHandlers,
   type AiCallStatsReader,
   type BriefingStatsReader,
+  type ExtractionFailureReader,
 } from './metrics.js';
 import {
   registerModelSettingsHandlers,
@@ -129,6 +131,15 @@ export {
   type OpenExternalResult,
 } from './external.js';
 export {
+  registerPollHandlers,
+  requestManualRefresh,
+  parsePollSource,
+  REFRESH_CHANNEL as POLL_REFRESH_CHANNEL,
+  MANUAL_REFRESH_COOLDOWN_MS,
+  type PollHandlerDeps,
+  type PollRefreshResult,
+} from './poll.js';
+export {
   registerFeedbackHandlers,
   submitFeedback,
   markBriefingCaughtUp,
@@ -160,6 +171,7 @@ export {
   type MetricsHandlerDeps,
   type AiCallStatsReader,
   type BriefingStatsReader,
+  type ExtractionFailureReader,
 } from './metrics.js';
 export {
   registerScheduleHandlers,
@@ -343,6 +355,12 @@ export interface IpcDeps {
    */
   metricsAiCalls?: AiCallStatsReader;
   metricsBriefings?: BriefingStatsReader;
+  /**
+   * `ExtractionFailuresRepo` slice for the Diagnostics "recent activity" feed —
+   * the events Layer 1 wrote off after repeated failures. Part of the same
+   * all-or-nothing group as `metricsAiCalls`/`metricsBriefings`/`logsDir`.
+   */
+  metricsExtractionFailures?: ExtractionFailureReader;
   /** Directory holding `trace-YYYY-MM-DD.jsonl`. */
   logsDir?: string;
   /**
@@ -381,6 +399,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   // conditional registration here would mean a dead link rather than a degraded
   // one.
   registerExternalHandlers();
+
+  // Per-source "refresh now" (`poll:refresh`). Registered unconditionally —
+  // `poller` is always present — and owns its own rate limit, so a renderer
+  // loop cannot walk the app into a provider throttle. See `ipc/poll.ts`.
+  registerPollHandlers({ poller: deps.poller, clock: deps.clock ?? systemClock });
 
   // OI-3 onboarding: `projects:suggest`, `projects:declare`, `onboarding:status`.
   if (deps.events !== undefined && deps.projectStore !== undefined) {
@@ -452,11 +475,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   if (
     deps.metricsAiCalls !== undefined &&
     deps.metricsBriefings !== undefined &&
+    deps.metricsExtractionFailures !== undefined &&
     deps.logsDir !== undefined
   ) {
     registerMetricsHandlers({
       aiCalls: deps.metricsAiCalls,
       briefings: deps.metricsBriefings,
+      extractionFailures: deps.metricsExtractionFailures,
       logsDir: deps.logsDir,
     });
   }

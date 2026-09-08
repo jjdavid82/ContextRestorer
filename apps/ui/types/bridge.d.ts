@@ -244,6 +244,28 @@ export interface MetricDuration {
 }
 
 /**
+ * One thing the pipeline did in the last 7 days worth surfacing to a
+ * non-technical user — a failure, a fallback, or a deliberate discard. Mirrors
+ * `ActivityEvent` in the preload. Data only; the panel owns the wording per
+ * `kind`, and an unknown `kind` renders a generic line rather than crashing.
+ */
+export interface ActivityEvent {
+  /** Epoch ms this happened. */
+  atMs: number;
+  kind:
+    | 'thread_parked'
+    | 'gate_injection'
+    | 'gate_drops'
+    | 'template_fallback'
+    | 'extraction_writeoff'
+    | 'model_error'
+    | 'noise_skipped';
+  severity: 'attention' | 'info';
+  /** Items affected, when the event aggregates several. Always >= 1. */
+  count: number;
+}
+
+/**
  * `debug:metrics` — the local metrics view (Task 4.4, step 4). Mirrors
  * `LocalMetrics` in the preload.
  *
@@ -267,6 +289,10 @@ export interface LocalMetrics {
   triggers: { total: number; byReason: MetricCount[]; byOutcome: MetricCount[] };
   tracesRead: number;
   unparseableTraceLines: number;
+  /** Recent pipeline failures / discards, newest first. Empty when healthy. */
+  recentActivity: ActivityEvent[];
+  /** Epoch ms the most recent user-facing briefing was generated; `null` if none. */
+  lastBriefingAt: number | null;
 }
 
 /** One Slack channel the connected token can see. Mirrors `SlackChannel` in the preload. */
@@ -314,6 +340,20 @@ export interface SlackChannelsResult {
   reason?: string;
 }
 
+/**
+ * `poll:refresh` — the result of forcing a source's next poll cycle now.
+ * Mirrors `PollRefreshResult` in the preload.
+ *
+ * `retryAfterMs` is the main-process cooldown: present on `ok: true` (the full
+ * window before this source may be hand-refreshed again) and on `ok: false,
+ * reason: 'cooldown'` (what remains of it).
+ */
+export interface PollRefreshResult {
+  ok: boolean;
+  reason?: string;
+  retryAfterMs?: number;
+}
+
 /** `health:sources` — per-source connector health for the status strip. */
 export interface SourceHealth {
   source: SourceId;
@@ -332,6 +372,8 @@ export interface PipelineStatus {
   synthesisDue: number;
   /** Threads Layer 2 is synthesizing at this exact moment. */
   synthesisInFlight: number;
+  /** Threads the scheduler gave up on after `maxAttempts` failures — "look at this". */
+  parkedThreads: number;
 }
 
 /** Time window a briefing should cover (epoch milliseconds), half-open. */
@@ -464,6 +506,14 @@ export interface ContextRestorerBridge {
   health: {
     /** Returns an unsubscribe fn — same effect-cleanup contract as `onChunk`. */
     onSources(cb: (h: SourceHealth[]) => void): Unsubscribe;
+  };
+  poll: {
+    /**
+     * Force `source`'s next poll cycle now. Rate-limited in the main process:
+     * a call inside the cooldown resolves `{ ok: false, reason: 'cooldown',
+     * retryAfterMs }` instead of rejecting.
+     */
+    refresh(source: SourceId): Promise<PollRefreshResult>;
   };
   pipeline: {
     /** Returns an unsubscribe fn — same effect-cleanup contract as `onChunk`. */

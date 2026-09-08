@@ -678,6 +678,60 @@ describe('DebounceScheduler — decision logging (Task 4.4, requirement 3)', () 
     expect(String(a['error'])).toContain('ollama fell over');
   });
 
+  it('writes one layer2_parked line the first time a thread is parked, not every tick', async () => {
+    const doomed = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      maxAttempts: 2,
+      onSynthesize: async () => {
+        throw new Error('poison');
+      },
+      logsDir,
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+    await doomed.tick(); // attempt 1
+    clock.advance(30_000);
+    await doomed.tick(); // attempt 2 → now at the cap
+
+    // Two more ticks while parked — these must not each add a park line.
+    clock.advance(60 * MIN);
+    await doomed.tick();
+    clock.advance(30_000);
+    await doomed.tick();
+
+    const parked = traceLines().filter((l) => annotationsOf(l)['event'] === 'layer2_parked');
+    expect(parked).toHaveLength(1);
+    expect(annotationsOf(parked[0] as Record<string, unknown>)).toMatchObject({
+      threadKey: K,
+      source: 'slack',
+      attempts: 2,
+    });
+  });
+
+  it('writes no layer2_parked line when no logsDir is configured', async () => {
+    const doomed = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      maxAttempts: 1,
+      onSynthesize: async () => {
+        throw new Error('poison');
+      },
+      // logsDir deliberately omitted — every production Layer-2 call site omits it.
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+    await doomed.tick();
+    clock.advance(60 * MIN);
+    await doomed.tick();
+
+    expect(readdirSync(logsDir)).toEqual([]);
+  });
+
   it('traces eventCount as null — not 0 — when no counter is wired', async () => {
     const sut = build(async () => 'ok');
 

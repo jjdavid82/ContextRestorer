@@ -61,6 +61,7 @@ import {
   type SourceClient,
   type SourceFetchResult,
 } from '@cr/ingest';
+import { startTrace } from '@cr/observability';
 import { registerAppProtocol, registerAppSchemePrivileges } from './protocol.js';
 import {
   installNavigationLockdown,
@@ -865,9 +866,19 @@ function createLayer12(
       else bucket.push(event);
     }
 
+    // Sweep-wide tallies for the `layer1_sweep` trace (Diagnostics feed). These
+    // are already computed per thread by `extractThread`; the only new work is
+    // summing them and writing one JSON line if anything noteworthy happened.
+    let prefiltered = 0;
+    let unclassified = 0;
+    let wroteOff = 0;
+
     for (const [threadKey, batch] of byThread) {
       try {
         const outcome = await extractor.extractThread(batch, newId());
+        prefiltered += outcome.prefiltered;
+        unclassified += outcome.unclassified;
+        wroteOff += outcome.abandoned;
         if (outcome.abandoned > 0) {
           // `failure must stay visible` (WatermarkRepo's DUE_SQL comment): the
           // model has failed these events MAX_EXTRACTION_ATTEMPTS times, so they
@@ -884,6 +895,15 @@ function createLayer12(
         // thread granularity.
         console.error('[layer1] thread extraction failed', threadKey, error);
       }
+    }
+
+    // One line per sweep, and only when there is something a user would care to
+    // see — a silent all-extracted sweep is not an event. `noise_skipped` in the
+    // Diagnostics feed reads `prefiltered`; the other two are for the raw view.
+    if (prefiltered > 0 || unclassified > 0 || wroteOff > 0) {
+      const trace = startTrace(systemClock, logsDir);
+      trace.annotate({ event: 'layer1_sweep', prefiltered, schemaFail: unclassified, wroteOff });
+      trace.finish();
     }
   };
 
@@ -1448,6 +1468,10 @@ if (!app.requestSingleInstanceLock()) {
         // separate, narrower-typed field rather than reuse.
         metricsAiCalls: aiCalls,
         metricsBriefings: briefings,
+        // Fresh repo over the shared handle (prepared statements only) — the
+        // one in `createLayer12` is not returned. Feeds the Diagnostics
+        // "recent activity" list with events Layer 1 wrote off.
+        metricsExtractionFailures: new ExtractionFailuresRepo(db!),
         logsDir,
         // OI-3 onboarding (Task 3.1): `projects:suggest` mines the event log for
         // candidates, `projects:declare` writes them, `onboarding:status` reports

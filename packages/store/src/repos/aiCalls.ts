@@ -46,6 +46,14 @@ export interface AiOutcomeStat {
   calls: number;
 }
 
+/** One notable (non-`ok`) call, for the Diagnostics "recent activity" feed. */
+export interface AiCallNotable {
+  layer: number;
+  outcome: string;
+  /** Epoch ms the call was recorded. */
+  createdAt: number;
+}
+
 function toAiCall(row: AiCallRow): AiCall {
   return {
     callId: row.call_id,
@@ -168,6 +176,33 @@ export class AiCallsRepo {
       .all() as { layer: number; outcome: string; calls: number }[];
 
     return rows.map((row) => ({ layer: row.layer, outcome: row.outcome, calls: row.calls }));
+  }
+
+  /**
+   * Model calls that did NOT succeed, newest first, within `[sinceMs, now]`
+   * (Diagnostics "recent activity").
+   *
+   * `outcome != 'ok'` is the only filter: what counts as a *failure* versus a
+   * benign non-success (`not_meaningful`) is a judgement the reader makes, for
+   * the same reason {@link outcomeStats} does not collapse an "errors" number.
+   * The panel wants a short recent list, so `limit` is mandatory and small.
+   */
+  listRecentNotable(sinceMs: number, limit: number): AiCallNotable[] {
+    const rows = this.db
+      .prepare(
+        `SELECT layer, outcome, created_at
+           FROM ai_calls
+          WHERE outcome <> 'ok' AND created_at >= ?
+          ORDER BY created_at DESC
+          LIMIT ?`,
+      )
+      .all(sinceMs, limit) as { layer: number; outcome: string; created_at: number }[];
+
+    return rows.map((row) => ({
+      layer: row.layer,
+      outcome: row.outcome,
+      createdAt: row.created_at,
+    }));
   }
 
   /** Every call recorded under one trace, oldest first. */
