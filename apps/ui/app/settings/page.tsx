@@ -4,7 +4,7 @@ import Box from '@mui/material/Box';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { PageToolbar } from '../../components/PageToolbar';
 import BriefingWindowSettings from './briefingWindow';
@@ -49,6 +49,20 @@ const PANELS: readonly PanelDef[] = [
 export default function SettingsPage(): ReactNode {
   const [active, setActive] = useState<string>(SCHEDULE_PANEL.id);
   const current = PANELS.find((p) => p.id === active) ?? SCHEDULE_PANEL;
+
+  // Deep link: `…/settings/index.html#diagnostics` opens that panel directly
+  // (the rail's "conversations stuck" warning points here). Runs after mount so
+  // the static-export prerender stays on the default panel and hydration
+  // matches; a later hash change (rare) is picked up too.
+  useEffect(() => {
+    const applyHash = (): void => {
+      const id = window.location.hash.replace(/^#/, '');
+      if (id && PANELS.some((p) => p.id === id)) setActive(id);
+    };
+    applyHash();
+    window.addEventListener('hashchange', applyHash);
+    return () => window.removeEventListener('hashchange', applyHash);
+  }, []);
 
   return (
     <>

@@ -38,6 +38,7 @@ import { registerHealthHandlers, type HealthPushOptions } from './health.js';
 import {
   registerBriefingHandlers,
   type BriefingSnapshotReader,
+  type ResolutionDeltaWriter,
   type ResumePointReader,
   type PendingReader,
   type StakesReader,
@@ -93,6 +94,7 @@ export {
   RESUME_POINT_CHANNEL,
   type BriefingHandlerDeps,
   type PendingReader,
+  type ResolutionDeltaWriter,
   type StakesReader,
   type PendingItemView,
   type BriefingSnapshot,
@@ -231,6 +233,14 @@ export interface IpcDeps {
    * "not wired yet" and "nothing pending" must not look the same.
    */
   pending?: PendingReader;
+  /**
+   * D-6 delta store (`DeltasRepo`), used only by `briefing:resolvePending` to
+   * append a `resolution` delta when the user marks an obligation done — see
+   * `ResolutionDeltaWriter`. Optional and independent of {@link IpcDeps.pending}:
+   * absent it, a manual resolve only flips `pending_items.status` and the
+   * obligation keeps being restated in the narrative until it ages out.
+   */
+  deltas?: ResolutionDeltaWriter;
   /** Stakes source for ranking (`GraphRepo`). Ranking degrades gracefully without it. */
   graph?: StakesReader;
   /**
@@ -420,6 +430,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       pending: deps.pending,
       // Spread rather than assigned: under `exactOptionalPropertyTypes` an
       // explicit `graph: undefined` is not the same as an absent `graph`.
+      ...(deps.deltas !== undefined ? { deltas: deps.deltas } : {}),
       ...(deps.graph !== undefined ? { graph: deps.graph } : {}),
       // `briefing:snapshot` (rehydration after a Settings round-trip) needs
       // all three together — see `IpcDeps.briefingSnapshots`.

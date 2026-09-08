@@ -478,6 +478,45 @@ describe('derivePendingItem — rule 5: no duplicate for the same delta', () => 
 
     expect(pending.listOpen().map((i) => i.deltaId)).toEqual([v1.deltaId, v2.deltaId]);
   });
+
+  it('does not re-mint an obligation already RESOLVED on the same thread chain', () => {
+    // The user marked this done (or a resolution delta closed it); a later
+    // noise-classified reply re-synthesises the ask under a fresh deltaId that
+    // does not supersede it. Without the closed-item check that mints a
+    // duplicate `pending_items` row for the thing the user already handled.
+    seedArtifact(A1);
+    const v1 = appendDelta();
+    const item = derivePendingItem(input({ deltaId: v1.deltaId }), pending, clock);
+    pending.resolve(item!.pendingId, clock.now());
+
+    const v2 = appendDelta({ summary: 'Same ask, restated.' });
+    const restated = derivePendingItem(
+      input({ deltaId: v2.deltaId, siblingDeltaIds: [v1.deltaId] }),
+      pending,
+      clock,
+    );
+
+    expect(restated).toBeNull();
+    expect(pending.listOpen()).toEqual([]);
+    expect(allRows()).toHaveLength(1);
+  });
+
+  it('does not re-mint an obligation already DISMISSED on the same thread chain', () => {
+    seedArtifact(A1);
+    const v1 = appendDelta();
+    const item = derivePendingItem(input({ deltaId: v1.deltaId }), pending, clock);
+    pending.dismiss(item!.pendingId, clock.now());
+
+    const v2 = appendDelta({ summary: 'Same ask, restated.' });
+    const restated = derivePendingItem(
+      input({ deltaId: v2.deltaId, siblingDeltaIds: [v1.deltaId] }),
+      pending,
+      clock,
+    );
+
+    expect(restated).toBeNull();
+    expect(allRows()).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -409,8 +409,14 @@ function ActivityRow({ event, nowMs }: { event: ActivityEvent; nowMs: number }):
   );
 }
 
+/** How many activity rows show before the "See more" toggle. A feed, not a log. */
+const ACTIVITY_PREVIEW_COUNT = 5;
+
 function RecentActivity({ events, nowMs }: { events: ActivityEvent[]; nowMs: number }): ReactNode {
   const attention = events.filter((e) => e.severity === 'attention').length;
+  const [expanded, setExpanded] = useState(false);
+  const hasMore = events.length > ACTIVITY_PREVIEW_COUNT;
+  const visible = expanded || !hasMore ? events : events.slice(0, ACTIVITY_PREVIEW_COUNT);
   return (
     <Box sx={{ mb: 3 }}>
       <Typography
@@ -445,10 +451,22 @@ function RecentActivity({ events, nowMs }: { events: ActivityEvent[]; nowMs: num
               overflow: 'hidden',
             }}
           >
-            {events.map((event, i) => (
+            {visible.map((event, i) => (
               <ActivityRow key={`${event.kind}-${event.atMs}-${i}`} event={event} nowMs={nowMs} />
             ))}
           </Box>
+          {hasMore ? (
+            <Button
+              size="small"
+              variant="text"
+              onClick={() => setExpanded((v) => !v)}
+              sx={{ mt: 0.5, px: 0.5 }}
+            >
+              {expanded
+                ? 'See fewer'
+                : `See ${events.length - ACTIVITY_PREVIEW_COUNT} more`}
+            </Button>
+          ) : null}
           <Typography sx={{ mt: 1, fontSize: '0.82rem', color: 'text.secondary' }}>
             {attention === 0
               ? 'None of this needs your attention — it’s the pipeline working as intended.'

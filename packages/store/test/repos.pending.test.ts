@@ -95,6 +95,24 @@ describe('PendingItemsRepo.resolve', () => {
   });
 });
 
+describe('PendingItemsRepo.listClosed', () => {
+  it('returns only resolved and dismissed items, oldest first', () => {
+    repo.insert(makePending({ pendingId: 'open1', createdAt: 1_000 }));
+    repo.insert(makePending({ pendingId: 'res1', createdAt: 2_000 }));
+    repo.insert(makePending({ pendingId: 'dis1', createdAt: 3_000 }));
+
+    repo.resolve('res1', 9_000);
+    repo.dismiss('dis1', 9_500);
+
+    expect(repo.listClosed().map((p) => p.pendingId)).toEqual(['res1', 'dis1']);
+  });
+
+  it('is empty while every item is still open', () => {
+    repo.insert(makePending({ pendingId: 'p1' }));
+    expect(repo.listClosed()).toEqual([]);
+  });
+});
+
 describe('PendingItemsRepo.dismiss', () => {
   it('drops the item out of listOpen and records status + resolvedAt', () => {
     const inserted = repo.insert(makePending({ pendingId: 'p1' }));
