@@ -973,7 +973,7 @@ function createLayer12(
     // tick — see its `layer1ActiveSince` parameter.
     layer1ActiveSince: systemClock.now(),
     onSynthesize: (threadKey, traceId) => synthesizer.synthesize(threadKey, traceId),
-    countThreadEvents: (threadKey) => events.listByThread(threadKey).length,
+    countThreadEvents: (threadKey) => events.countByThread(threadKey),
     logsDir,
   });
 

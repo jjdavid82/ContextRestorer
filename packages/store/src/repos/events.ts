@@ -81,6 +81,7 @@ function isUniqueViolation(err: unknown): boolean {
 export class EventsRepo {
   private readonly stmtInsert: Database.Statement<EventInsertParams>;
   private readonly stmtByThread: Database.Statement<[string]>;
+  private readonly stmtCountByThread: Database.Statement<[string]>;
   private readonly stmtWindow: Database.Statement<[number, number]>;
   private readonly stmtCountUnextracted: Database.Statement<[]>;
   private readonly stmtListUnextracted: Database.Statement<[number]>;
@@ -97,6 +98,10 @@ export class EventsRepo {
 
     this.stmtByThread = this.db.prepare(
       `SELECT * FROM events WHERE thread_key = ? ORDER BY occurred_at ASC, event_id ASC`,
+    );
+
+    this.stmtCountByThread = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM events WHERE thread_key = ?`,
     );
 
     // Half-open [start, end): `end` belongs to the *next* window, so briefings
@@ -157,6 +162,18 @@ export class EventsRepo {
   /** All events on one conversation, oldest first. */
   listByThread(threadKey: string): Event[] {
     return (this.stmtByThread.all(threadKey) as EventRow[]).map(fromRow);
+  }
+
+  /**
+   * How many events are on one conversation.
+   *
+   * The count-only counterpart of {@link listByThread}: the Layer 2 scheduler
+   * wants this number for a diagnostic trace field and nothing else, so it must
+   * not pay to materialise and JSON-parse every payload. Hits `idx_events_thread`.
+   */
+  countByThread(threadKey: string): number {
+    const row = this.stmtCountByThread.get(threadKey) as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 
   /** Events whose `occurredAt` falls in the half-open interval `[start, end)`. */

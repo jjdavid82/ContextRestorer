@@ -102,6 +102,21 @@ describe('EventsRepo.listByThread', () => {
   });
 });
 
+describe('EventsRepo.countByThread', () => {
+  it('counts only the events on the given thread', () => {
+    repo.insertIfAbsent(makeEvent({ eventId: 'e-1', sourceEventId: 's-1', threadKey: 'C1:1' }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'e-2', sourceEventId: 's-2', threadKey: 'C1:1' }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'e-3', sourceEventId: 's-3', threadKey: 'C2:2' }));
+
+    expect(repo.countByThread('C1:1')).toBe(2);
+    expect(repo.countByThread('C2:2')).toBe(1);
+  });
+
+  it('is zero for a thread with no events', () => {
+    expect(repo.countByThread('nope')).toBe(0);
+  });
+});
+
 describe('EventsRepo.listWindow', () => {
   it('treats [start, end) as half-open', () => {
     for (const t of [999, 1_000, 1_500, 2_000, 2_001]) {

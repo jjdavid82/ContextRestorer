@@ -310,6 +310,28 @@ describe('RetrievalService.forBriefing', () => {
     },
     TIMEOUT_MS,
   );
+
+  it(
+    'embeds the constant briefing query only once across calls',
+    async () => {
+      const store = await openStore();
+      artifact('art-1', 'person-1');
+      await store.upsert([chunk('c-1', { artifactId: 'art-1' })]);
+
+      let embedCalls = 0;
+      const countingEmbed = async (): Promise<number[]> => {
+        embedCalls += 1;
+        return [...QUERY];
+      };
+      const svc = new RetrievalService(store, graph, config(), countingEmbed, { clock });
+
+      await svc.forBriefing({ start: NOW - DAY_MS, end: NOW + 1 });
+      await svc.forBriefing({ start: NOW - DAY_MS, end: NOW + 1 });
+
+      expect(embedCalls).toBe(1);
+    },
+    TIMEOUT_MS,
+  );
 });
 
 /**

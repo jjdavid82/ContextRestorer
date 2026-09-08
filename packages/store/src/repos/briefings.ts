@@ -346,27 +346,6 @@ export class BriefingsRepo {
     return out;
   }
 
-  /**
-   * Delta ids on this window that ALREADY have model-written prose (P0).
-   *
-   * The synchronous path calls this once per request to decide, per delta,
-   * whether to reuse a background-written claim or render the deterministic one.
-   * Indexed by `(delta_id, produced_by)` because it is on the hot path.
-   */
-  deltasWithProse(deltaIds: readonly string[]): Set<string> {
-    if (deltaIds.length === 0) return new Set();
-
-    const placeholders = deltaIds.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare(
-        `SELECT DISTINCT delta_id FROM briefing_claims
-          WHERE produced_by = 'llm' AND delta_id IN (${placeholders})`,
-      )
-      .all(...deltaIds) as Array<{ delta_id: string }>;
-
-    return new Set(rows.map((row) => row.delta_id));
-  }
-
   /** All claims for a briefing, in narrative order (`ordinal` ascending). */
   listClaims(briefingId: string): BriefingClaim[] {
     const rows = this.db
