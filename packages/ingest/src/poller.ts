@@ -10,7 +10,8 @@
  * - It OWNS source health, including the NFR-2 lag measurement.
  * - It exposes exactly one way to change *when* a source is next fetched from
  *   outside its own clocks: `pollNow(source)`, for the moment the user connects
- *   a source — see its doc comment for why that one case earns an exception.
+ *   a source or explicitly asks to refresh it — see its doc comment for why
+ *   those cases earn an exception.
  * - It does NOT persist anything. Fetched events are handed to `onEvents`, which
  *   is the ingestion pipeline (Task 1.6).
  * - It does NOT interpret cursors. `SourceFetchResult.cursor` is stored opaquely
@@ -174,12 +175,18 @@ export class Poller {
   /**
    * Forget `source`'s backoff and poll it as soon as possible.
    *
-   * For the one moment that legitimately changes a source's prospects from
-   * outside its own clocks: the user has just connected it. On a fresh install
-   * the first cycle runs before any tokens exist, fails, and earns a backoff —
-   * ten minutes at the default interval — and nothing would cut that wait
-   * short. The user watches "Not connected" for a source they connected
-   * successfully seconds ago, with no hint that the only fix is time.
+   * For the moments that legitimately change a source's prospects from outside
+   * its own clocks:
+   *
+   *   1. The user has just connected it. On a fresh install the first cycle
+   *      runs before any tokens exist, fails, and earns a backoff — ten minutes
+   *      at the default interval — and nothing would cut that wait short. The
+   *      user watches "Not connected" for a source they connected successfully
+   *      seconds ago, with no hint that the only fix is time.
+   *   2. The user explicitly asked to refresh it (`poll:refresh`, the per-source
+   *      "refresh now" button). That path rate-limits itself in the IPC layer —
+   *      the poller stays a pure mechanism and does not know or care that the
+   *      request was throttled upstream.
    *
    * Health is deliberately NOT touched: `status` and `lastSyncAt` describe what
    * the last cycle actually observed, and only the cycle this schedules may

@@ -171,6 +171,9 @@ function installBridge(
     shell: { openExternal },
     feedback: { submit, claimVerdicts },
     health: { onSources: () => () => undefined },
+    // `poll:refresh` — present only to satisfy the bridge contract; the briefing
+    // view never forces a poll, same reasoning as `debug.metrics` below.
+    poll: { refresh: vi.fn(async () => ({ ok: true })) },
     // `pipeline:status` — present only to satisfy the bridge contract; nothing
     // in the briefing view reads it, same reasoning as `debug.metrics` below.
     pipeline: { onStatus: () => () => undefined },
@@ -191,6 +194,8 @@ function installBridge(
         triggers: { total: 0, byReason: [], byOutcome: [] },
         tracesRead: 0,
         unparseableTraceLines: 0,
+        recentActivity: [],
+        lastBriefingAt: null,
       })),
     },
     // FR-3 recurring briefings. Present only to satisfy the bridge contract:

@@ -33,6 +33,7 @@ export type {
   OkResult,
   OnboardingStatus,
   PendingItemView,
+  PollRefreshResult,
   ProjectCandidate,
   ProjectSuggestions,
   SourceHealth,

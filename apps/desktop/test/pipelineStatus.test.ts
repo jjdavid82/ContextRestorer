@@ -30,7 +30,12 @@ describe('computePipelineStatus', () => {
       maxAttempts: MAX_ATTEMPTS,
       clock: CLOCK,
     });
-    expect(status).toEqual({ extractionBacklog: 0, synthesisDue: 0, synthesisInFlight: 0 });
+    expect(status).toEqual({
+      extractionBacklog: 0,
+      synthesisDue: 0,
+      synthesisInFlight: 0,
+      parkedThreads: 0,
+    });
   });
 
   it('passes the extraction backlog count through verbatim', () => {
@@ -72,6 +77,22 @@ describe('computePipelineStatus', () => {
     // the scheduler will skip and park it rather than synthesize it — it must
     // not read as "queued for summarizing" alongside genuinely-due threads.
     expect(status.synthesisDue).toBe(1);
+    // …it reads as parked instead — the "look at this" number.
+    expect(status.parkedThreads).toBe(1);
+  });
+
+  it('does not count a parked thread as parked while it is being synthesized', () => {
+    const status = computePipelineStatus({
+      events: { countUnextracted: () => 0 },
+      watermarks: { due: () => [due('retrying', MAX_ATTEMPTS)] },
+      scheduler: { pending: ['retrying'] },
+      debounce: DEBOUNCE,
+      maxAttempts: MAX_ATTEMPTS,
+      clock: CLOCK,
+    });
+    // A fresh event reset nothing yet, but the scheduler picked it up this tick:
+    // in-flight wins, and it is neither "queued" nor "parked" right now.
+    expect(status).toMatchObject({ synthesisInFlight: 1, synthesisDue: 0, parkedThreads: 0 });
   });
 
   it('passes the debounce config and current time through to watermarks.due', () => {

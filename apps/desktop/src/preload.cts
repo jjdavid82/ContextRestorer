@@ -62,6 +62,21 @@ export interface OkResult {
   reason?: string;
 }
 
+/**
+ * `poll:refresh` result — forcing a source's next poll cycle now.
+ *
+ * Widens nothing; a small envelope of its own. `retryAfterMs` is the
+ * main-process cooldown talking: present on `ok: true` (the full window before
+ * this source may be refreshed by hand again) and on `ok: false, reason:
+ * 'cooldown'` (what is left of it), absent for `invalid_source` /
+ * `internal_error`.
+ */
+export interface PollRefreshResult {
+  ok: boolean;
+  reason?: string;
+  retryAfterMs?: number;
+}
+
 export interface ProjectCandidate {
   name: string;
   /** Where the candidate was inferred from, e.g. a Slack channel or Gmail label. */
@@ -276,6 +291,32 @@ export interface MetricDuration {
 }
 
 /**
+ * One thing the pipeline did in the last 7 days that a non-technical user might
+ * want to know about — a failure, a fallback, or a deliberate discard.
+ *
+ * Data only: a timestamp, a kind, a severity, and a count. The renderer owns the
+ * plain-language sentence for each `kind`; an unknown kind gets a generic line
+ * rather than a crash, so adding a kind here is not a breaking change for an
+ * older renderer.
+ */
+export interface ActivityEvent {
+  /** Epoch ms this happened (trace start, row `created_at`, or `last_at`). */
+  atMs: number;
+  kind:
+    | 'thread_parked'
+    | 'gate_injection'
+    | 'gate_drops'
+    | 'template_fallback'
+    | 'extraction_writeoff'
+    | 'model_error'
+    | 'noise_skipped';
+  /** `attention` = worth a look; `info` = the safety net working as intended. */
+  severity: 'attention' | 'info';
+  /** Items affected, when the event aggregates several. Always >= 1. */
+  count: number;
+}
+
+/**
  * `debug:metrics` — the whole local metrics view (Task 4.4, step 4).
  *
  * A debugging surface, deliberately raw: every field is a count or a
@@ -311,6 +352,13 @@ export interface LocalMetrics {
   /** Trace lines successfully parsed, and lines that could not be. */
   tracesRead: number;
   unparseableTraceLines: number;
+  /**
+   * Recent pipeline failures / discards for the Diagnostics "recent activity"
+   * feed, newest first. Empty on a healthy or idle install.
+   */
+  recentActivity: ActivityEvent[];
+  /** Epoch ms the most recent user-facing briefing was generated; `null` if none. */
+  lastBriefingAt: number | null;
 }
 
 /** Recurrence vocabulary for a recurring briefing (FR-3). No cron, ever. */
@@ -401,6 +449,12 @@ export interface PipelineStatus {
   synthesisDue: number;
   /** Threads Layer 2 is synthesizing at this exact moment. */
   synthesisInFlight: number;
+  /**
+   * Threads the scheduler has stopped retrying after `maxAttempts` failed
+   * synthesis attempts. Unlike the others this does not clear on its own — it is
+   * the "a human should look" number, surfaced on the rail and in Diagnostics.
+   */
+  parkedThreads: number;
 }
 
 /** Detaches a `send`-style listener. Always call this on component teardown. */
@@ -625,6 +679,15 @@ export interface ContextRestorerBridge {
   health: {
     onSources(cb: (health: SourceHealth[]) => void): Unsubscribe;
   };
+  /**
+   * Force a source's next poll cycle now, bypassing the poll interval and any
+   * backoff. Rate-limited in the main process (~once per minute per source): a
+   * call inside the cooldown resolves `{ ok: false, reason: 'cooldown',
+   * retryAfterMs }` rather than rejecting.
+   */
+  poll: {
+    refresh(source: Source): Promise<PollRefreshResult>;
+  };
   pipeline: {
     onStatus(cb: (status: PipelineStatus) => void): Unsubscribe;
   };
@@ -762,6 +825,12 @@ const bridge: ContextRestorerBridge = {
   },
   health: {
     onSources: (cb) => subscribe<SourceHealth[]>('health:sources', cb),
+  },
+  poll: {
+    refresh: (source) => {
+      assertSource(source);
+      return ipcRenderer.invoke('poll:refresh', { source }) as Promise<PollRefreshResult>;
+    },
   },
   pipeline: {
     onStatus: (cb) => subscribe<PipelineStatus>('pipeline:status', cb),

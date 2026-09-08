@@ -271,6 +271,78 @@ describe('AiCallsRepo aggregates', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Diagnostics redesign — the recent-activity feed's store reads
+// ---------------------------------------------------------------------------
+
+describe('AiCallsRepo.listRecentNotable', () => {
+  /** Insert one call with an explicit `created_at`, bypassing `log()`'s clock. */
+  const at = (createdAt: number, layer: number, outcome: string): void => {
+    db.prepare(
+      `INSERT INTO ai_calls
+         (call_id, trace_id, layer, model, prompt_version, latency_ms,
+          tokens_in, tokens_out, outcome, created_at)
+       VALUES (?, ?, ?, 'm', 'v1', 1, NULL, NULL, ?, ?)`,
+    ).run(`c-${createdAt}`, `t-${createdAt}`, layer, outcome, createdAt);
+  };
+
+  it('returns only non-ok calls in the window, newest first', () => {
+    at(1_000, 1, 'ok');
+    at(2_000, 1, 'schema_fail');
+    at(3_000, 3, 'stream_error');
+    at(500, 2, 'error'); // before the window
+
+    expect(aiCalls.listRecentNotable(1_000, 10)).toEqual([
+      { layer: 3, outcome: 'stream_error', createdAt: 3_000 },
+      { layer: 1, outcome: 'schema_fail', createdAt: 2_000 },
+    ]);
+  });
+
+  it('honours the limit', () => {
+    for (let i = 1; i <= 5; i += 1) at(i * 1_000, 2, 'error');
+
+    const rows = aiCalls.listRecentNotable(0, 2);
+    expect(rows.map((r) => r.createdAt)).toEqual([5_000, 4_000]);
+  });
+
+  it('is empty on an untouched database', () => {
+    expect(aiCalls.listRecentNotable(0, 10)).toEqual([]);
+  });
+});
+
+describe('BriefingsRepo.recentTemplateFallbacks', () => {
+  it('returns delivered template-mode briefings in the window, newest first', () => {
+    const a = createBriefing(GENERATED_AT + 1_000);
+    const b = createBriefing(GENERATED_AT + 2_000);
+    createBriefing(GENERATED_AT + 3_000); // stays llm
+    const old = createBriefing(GENERATED_AT - 10_000);
+
+    briefings.markTemplateMode(a.briefingId);
+    briefings.markTemplateMode(b.briefingId);
+    briefings.markTemplateMode(old.briefingId);
+
+    expect(briefings.recentTemplateFallbacks(GENERATED_AT, 10)).toEqual([
+      { briefingId: b.briefingId, generatedAt: GENERATED_AT + 2_000 },
+      { briefingId: a.briefingId, generatedAt: GENERATED_AT + 1_000 },
+    ]);
+  });
+
+  it('is empty when every briefing is llm-mode', () => {
+    createBriefing();
+    expect(briefings.recentTemplateFallbacks(0, 10)).toEqual([]);
+  });
+});
+
+describe('BriefingsRepo.lastDeliveredAt', () => {
+  it('is null with no briefings, then tracks the newest generated_at', () => {
+    expect(briefings.lastDeliveredAt()).toBeNull();
+    createBriefing(GENERATED_AT);
+    createBriefing(GENERATED_AT + 5_000);
+    createBriefing(GENERATED_AT + 1_000);
+    expect(briefings.lastDeliveredAt()).toBe(GENERATED_AT + 5_000);
+  });
+});
+
 describe('BriefingsRepo aggregates', () => {
   /** One briefing with a recorded total latency. */
   const withLatency = (generatedAt: number, totalMs: number): string => {

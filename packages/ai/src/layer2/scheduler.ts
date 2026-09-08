@@ -206,6 +206,15 @@ export class DebounceScheduler {
    */
   private readonly inFlight = new Set<string>();
 
+  /**
+   * Threads this instance has already written a `layer2_parked` trace line for,
+   * so the Diagnostics feed sees one park event per thread — not one every 30s
+   * for as long as the thread stays stuck. Reset when the instance is (it lives
+   * only as long as the process); a thread still parked after a relaunch earns
+   * one fresh line, which reads as "still stuck" rather than as noise.
+   */
+  private readonly parked = new Set<string>();
+
   private readonly maxAttempts: number;
 
   private readonly layer1ActiveSince: number;
@@ -244,15 +253,35 @@ export class DebounceScheduler {
       if (this.inFlight.has(threadKey)) continue;
 
       const wm = this.deps.watermarks.get(threadKey);
-      if (wm === undefined) continue; // Deleted between the two reads.
+      if (wm === undefined) {
+        this.parked.delete(threadKey); // Deleted between the two reads.
+        continue;
+      }
 
       if (wm.attempts >= this.maxAttempts) {
         // Parked, not forgotten: it stays due in the database, and health
-        // reporting (a later task) surfaces it. Retrying forever would burn the
-        // whole synthesis budget on a thread that cannot succeed.
+        // reporting surfaces it. Retrying forever would burn the whole synthesis
+        // budget on a thread that cannot succeed.
         this.deps.onTrace?.({ event: 'degraded', threadKey, attempts: wm.attempts });
+        if (!this.parked.has(threadKey)) {
+          this.parked.add(threadKey);
+          if (this.deps.logsDir !== undefined) {
+            const t = startTrace(this.deps.clock, this.deps.logsDir);
+            t.annotate({
+              event: 'layer2_parked',
+              threadKey,
+              source: wm.source,
+              attempts: wm.attempts,
+            });
+            t.finish();
+          }
+        }
         continue;
       }
+
+      // Below the cap again (a fresh burst reset the count via `resetAttempts`):
+      // drop the park mark so a later relapse is reported anew.
+      this.parked.delete(threadKey);
 
       const reason: FireReason =
         now - wm.lastEventAt >= this.deps.config[wm.source].quietWindowMs ? 'quiet' : 'hard_cap';
