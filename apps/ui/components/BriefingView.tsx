@@ -3,6 +3,8 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Collapse from '@mui/material/Collapse';
+import MenuItem from '@mui/material/MenuItem';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
@@ -11,6 +13,7 @@ import type {
   BriefingDone,
   BriefingWindow,
   ClaimChunk,
+  DeclaredProject,
   FeedbackInput,
   PendingItemView,
   Unsubscribe,
@@ -229,6 +232,18 @@ export function BriefingView({
   // comes back with NO verdict does not get re-queried on every re-render.
   const requestedVerdictIds = useRef<Set<string>>(new Set());
 
+  /**
+   * Per-claim project labels (migration 010) — a LABEL only. Choosing a project
+   * here records how the user files this row for later filtering; it writes no
+   * `belongs_to` edge and changes no ranking, unlike tagging a channel in
+   * Settings. Empty list = no declared projects, which hides the control
+   * entirely rather than offering a dropdown with nothing in it.
+   */
+  const [declaredProjects, setDeclaredProjects] = useState<DeclaredProject[]>([]);
+  /** `claimId -> projectId`; a claim absent from the map is unlabelled. */
+  const [claimProjects, setClaimProjects] = useState<ReadonlyMap<string, string>>(new Map());
+  const [labelError, setLabelError] = useState<string | null>(null);
+
   // Frozen on first render so the effect's dependency array stays stable; a
   // window recomputed every render would re-request the briefing in a loop.
   const [defaultWindow] = useState<BriefingWindow>(() => {
@@ -358,6 +373,108 @@ export function BriefingView({
     setOpenClaimId((current) => (current === claimId ? null : claimId));
   }, []);
 
+  /**
+   * The declared projects the dropdown offers. Read once — the list changes only
+   * from the onboarding page, which is a full page load away.
+   *
+   * Best-effort: a failed read leaves the list empty, which hides the control.
+   * A briefing that renders without labelling beats one that does not render.
+   */
+  useEffect(() => {
+    let active = true;
+    try {
+      getBridge()
+        .projects.list()
+        .then((declared) => {
+          if (active) setDeclaredProjects(declared);
+        })
+        .catch(() => undefined);
+    } catch {
+      // No bridge (plain browser / static export) — no labelling, no crash.
+    }
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  /**
+   * Labels already on this briefing, so re-opening it shows what was chosen.
+   *
+   * Keyed on `briefingId` rather than run once: Home can swap the briefing under
+   * this component (a refresh mints a new id), and labels are per briefing.
+   */
+  useEffect(() => {
+    if (briefingId === null) return;
+    let active = true;
+
+    try {
+      getBridge()
+        .claim.projects(briefingId)
+        .then((tags) => {
+          if (!active) return;
+          setClaimProjects(
+            new Map(
+              tags.flatMap((tag) =>
+                tag.projectId === null ? [] : [[tag.claimId, tag.projectId] as const],
+              ),
+            ),
+          );
+        })
+        .catch(() => undefined);
+    } catch {
+      // Unreachable in practice — a briefingId implies a working bridge.
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [briefingId]);
+
+  /**
+   * Label one claim, or clear it with `''` (the "No project" option's value).
+   *
+   * Optimistic: the dropdown moves immediately and rolls back if the write
+   * fails, because a select that visibly lags a click reads as broken. The
+   * rollback restores the PREVIOUS value rather than clearing, so a failed
+   * re-label does not look like a successful un-label.
+   */
+  const labelClaim = useCallback(
+    (claimId: string, projectId: string): void => {
+      if (briefingId === null) return;
+      setLabelError(null);
+
+      const previous = claimProjects.get(claimId);
+      setClaimProjects((current) => {
+        const next = new Map(current);
+        if (projectId === '') next.delete(claimId);
+        else next.set(claimId, projectId);
+        return next;
+      });
+
+      const rollback = (reason: string): void => {
+        setLabelError(reason);
+        setClaimProjects((current) => {
+          const next = new Map(current);
+          if (previous === undefined) next.delete(claimId);
+          else next.set(claimId, previous);
+          return next;
+        });
+      };
+
+      try {
+        getBridge()
+          .claim.setProject(briefingId, claimId, projectId === '' ? null : projectId)
+          .then((result) => {
+            if (!result.ok) rollback(result.reason ?? 'could not save this project');
+          })
+          .catch((cause: unknown) => rollback(describe(cause)));
+      } catch (cause) {
+        rollback(describe(cause));
+      }
+    },
+    [briefingId, claimProjects],
+  );
+
   // Replays feedback already on file (FR-12) as claim ids appear, so a restart
   // — or a still-open pending item resurfacing under a new `briefingId` — does
   // not ask the user to re-judge a claim they already answered. Runs off
@@ -467,6 +584,36 @@ export function BriefingView({
       );
       if (briefingId !== null) {
         const verdict = claimVerdicts[claimId];
+        // The project label sits on the same row as the verdict buttons and the
+        // resolve action, per this function's contract above. Rendered only when
+        // projects exist: an empty dropdown is a dead control, and the place to
+        // declare a project is onboarding, not here.
+        const projectLabel =
+          declaredProjects.length === 0 ? null : (
+            <TextField
+              key="project"
+              select
+              size="small"
+              variant="standard"
+              label="Project"
+              value={claimProjects.get(claimId) ?? ''}
+              aria-label="Project for this item"
+              onChange={(e) => labelClaim(claimId, e.target.value)}
+              sx={{ minWidth: 150, ml: 'auto' }}
+            >
+              {/* Explicitly selectable, not just an empty initial state: clearing
+                  a label the user set has to be reachable from the same control. */}
+              <MenuItem value="">
+                <em>No project</em>
+              </MenuItem>
+              {declaredProjects.map((project) => (
+                <MenuItem key={project.projectId} value={project.projectId}>
+                  {project.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          );
+
         detail.push(
           <FeedbackControls
             key="feedback"
@@ -475,6 +622,7 @@ export function BriefingView({
             {...(verdict === undefined ? {} : { initialVerdict: verdict })}
           >
             {resolveAction}
+            {projectLabel}
           </FeedbackControls>,
         );
       } else if (resolveAction !== undefined) {
@@ -485,7 +633,7 @@ export function BriefingView({
       }
       return detail.length === 0 ? null : detail;
     },
-    [briefingId, openClaimId, claimVerdicts],
+    [briefingId, openClaimId, claimVerdicts, declaredProjects, claimProjects, labelClaim],
   );
 
   const bulletsForChunks = (chunks: readonly ClaimChunk[]): ReactNode[] =>
@@ -570,6 +718,11 @@ export function BriefingView({
         {resolveError !== null ? (
           <Typography role="alert" sx={{ color: 'error.main', mb: 1 }}>
             Could not mark resolved: {resolveError}
+          </Typography>
+        ) : null}
+        {labelError !== null ? (
+          <Typography role="alert" sx={{ color: 'error.main', mb: 1 }}>
+            Could not save the project: {labelError}
           </Typography>
         ) : null}
         <PendingSection

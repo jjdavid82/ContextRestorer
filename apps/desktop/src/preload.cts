@@ -372,6 +372,17 @@ export interface SelectedSlackChannel {
 }
 
 /**
+ * One per-claim project label (migration 010).
+ *
+ * `claimId` is an artifact id, matching `Drilldown.claimId` — the renderer has
+ * no `briefing_claims.claim_id`, as `ipc/claim.ts` documents.
+ */
+export interface ClaimProjectSelection {
+  claimId: string;
+  projectId: string | null;
+}
+
+/**
  * `slack:listAvailable` result.
  *
  * `ok: false, reason: 'not_connected'` is the expected shape before Slack has
@@ -597,6 +608,15 @@ export interface ContextRestorerBridge {
   };
   claim: {
     drilldown(claimId: string): Promise<Drilldown>;
+    /**
+     * Label one briefing row with a declared project, or clear it with `null`.
+     *
+     * `claimId` is the same artifact-backed handle {@link drilldown} takes —
+     * see `ipc/claim.ts`'s header for why the wire field is named this way.
+     */
+    setProject(briefingId: string, claimId: string, projectId: string | null): Promise<OkResult>;
+    /** Every label already on one briefing, for restoring the dropdowns on load. */
+    projects(briefingId: string): Promise<ClaimProjectSelection[]>;
   };
   /**
    * The one sanctioned way out of the app (Task 4.6).
@@ -730,6 +750,25 @@ const bridge: ContextRestorerBridge = {
     drilldown: (claimId) => {
       assertNonEmptyString(claimId, 'claimId');
       return ipcRenderer.invoke('claim:drilldown', { claimId }) as Promise<Drilldown>;
+    },
+    setProject: (briefingId, claimId, projectId) => {
+      assertNonEmptyString(briefingId, 'briefingId');
+      assertNonEmptyString(claimId, 'claimId');
+      // `null` clears the label; anything else must be a real project id. The
+      // main process re-checks this — the renderer is not trusted — but failing
+      // here gives the caller a stack pointing at the bad call site.
+      if (projectId !== null) assertNonEmptyString(projectId, 'projectId');
+      return ipcRenderer.invoke('claim:setProject', {
+        briefingId,
+        claimId,
+        projectId,
+      }) as Promise<OkResult>;
+    },
+    projects: (briefingId) => {
+      assertNonEmptyString(briefingId, 'briefingId');
+      return ipcRenderer.invoke('claim:projects', { briefingId }) as Promise<
+        ClaimProjectSelection[]
+      >;
     },
   },
   shell: {

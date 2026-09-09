@@ -48,7 +48,7 @@ import {
   type RelinkProjects,
   type SlackChannelStore,
 } from './slackChannels.js';
-import { registerClaimHandlers } from './claim.js';
+import { registerClaimHandlers, type ClaimProjectStore } from './claim.js';
 import { registerExternalHandlers } from './external.js';
 import {
   registerFeedbackHandlers,
@@ -103,6 +103,12 @@ export {
 export {
   registerClaimHandlers,
   drilldown,
+  setClaimProject,
+  listClaimProjects,
+  parseSetProjectArg,
+  parseClaimProjectsArg,
+  SET_PROJECT_CHANNEL,
+  PROJECTS_CHANNEL,
   resolveEvents,
   parseDrilldownArg,
   toDrilldownEvent,
@@ -117,6 +123,8 @@ export {
   type ClaimHandlerDeps,
   type ArtifactReader,
   type ThreadEventReader,
+  type ClaimProjectStore,
+  type ClaimProjectSelection,
 } from './claim.js';
 export {
   registerExternalHandlers,
@@ -242,6 +250,16 @@ export interface IpcDeps {
    * actually holds the whole repo, so it is what gets passed in.
    */
   projectStore?: GraphRepo;
+  /**
+   * Per-claim project label store (`ClaimProjectsRepo`, migration 010) behind
+   * `claim:setProject` / `claim:projects`.
+   *
+   * Optional like every other repo here. Absent leaves both label channels
+   * unregistered, which the briefing view reads as "labelling is not available"
+   * — an unhandled channel rejects, whereas a handler with no store would
+   * silently accept labels and drop them.
+   */
+  claimLabels?: ClaimProjectStore;
   /**
    * Layer-3 hand-off invoked after `briefing:request` has already returned its
    * handle. `main.ts` supplies an adapter over `BriefingGenerator` that threads
@@ -432,7 +450,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   // the same `EventsRepo` the project suggester reads; no new instances, since
   // each repo prepares its whole statement set in its constructor.
   if (deps.events !== undefined && deps.projectStore !== undefined) {
-    registerClaimHandlers({ artifacts: deps.projectStore, events: deps.events });
+    registerClaimHandlers({
+      artifacts: deps.projectStore,
+      events: deps.events,
+      // Per-claim project labels (migration 010). Passed through unconditionally:
+      // `registerClaimHandlers` itself skips the two label channels when this is
+      // absent, so a host without the repo keeps `claim:drilldown` and nothing else.
+      ...(deps.claimLabels !== undefined
+        ? { labels: deps.claimLabels, clock: deps.clock ?? systemClock }
+        : {}),
+    });
   }
 
   // FR-11 completion signal + FR-12 verdict capture: `briefing:caughtUp`,

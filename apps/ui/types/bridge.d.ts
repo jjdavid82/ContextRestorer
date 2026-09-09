@@ -168,6 +168,17 @@ export interface DrillDown {
   events: DrilldownEvent[];
 }
 
+/**
+ * One per-claim project label. Mirrors `ClaimProjectSelection` in the preload.
+ *
+ * `claimId` is the artifact-backed handle the briefing rows already use, not a
+ * `briefing_claims.claim_id` — see `apps/desktop/src/ipc/claim.ts`.
+ */
+export interface ClaimProjectSelection {
+  claimId: string;
+  projectId: string | null;
+}
+
 /** `feedback:submit` — user judgement used to tune relevance. */
 export interface FeedbackInput {
   briefingId: string;
@@ -438,6 +449,10 @@ export interface ContextRestorerBridge {
   };
   claim: {
     drilldown(claimId: string): Promise<DrillDown>;
+    /** Label one briefing row with a declared project, or clear it with `null`. */
+    setProject(briefingId: string, claimId: string, projectId: string | null): Promise<OkResult>;
+    /** Every label already on one briefing, for restoring the dropdowns on load. */
+    projects(briefingId: string): Promise<ClaimProjectSelection[]>;
   };
   /**
    * The one sanctioned way out of the app (Task 4.6).

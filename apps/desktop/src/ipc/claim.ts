@@ -62,6 +62,12 @@ export type { Drilldown, DrilldownEvent };
 /** Invoke channel serving claim provenance. */
 export const DRILLDOWN_CHANNEL = 'claim:drilldown';
 
+/** Invoke channel writing one per-claim project label (migration 010). */
+export const SET_PROJECT_CHANNEL = 'claim:setProject';
+
+/** Invoke channel reading back every label on one briefing. */
+export const PROJECTS_CHANNEL = 'claim:projects';
+
 /**
  * Maximum events returned for one drill-down.
  *
@@ -105,6 +111,22 @@ export interface ThreadEventReader {
   listByThread(threadKey: string): Event[];
 }
 
+/**
+ * The slice of `ClaimProjectsRepo` the label channels use.
+ *
+ * Structural for the same reason as {@link ArtifactReader}: the real repo
+ * satisfies it with no adapter, and a test can pass a hand-rolled store.
+ */
+export interface ClaimProjectStore {
+  listForBriefing(briefingId: string): ReadonlyArray<{ artifactId: string; projectId: string }>;
+  setProject(
+    briefingId: string,
+    artifactId: string,
+    projectId: string | null,
+    now: number,
+  ): void;
+}
+
 /** Everything the drill-down handler needs. Note the absence of any model client. */
 export interface ClaimHandlerDeps {
   /** Artifact + person source; `GraphRepo` in production. */
@@ -113,6 +135,16 @@ export interface ClaimHandlerDeps {
   events: ThreadEventReader;
   /** Override for {@link MAX_DRILLDOWN_EVENTS}; tests use it to keep fixtures small. */
   maxEvents?: number;
+  /**
+   * Per-claim project labels (`ClaimProjectsRepo`). Optional and paired with
+   * {@link ClaimHandlerDeps.clock}: the two label channels are registered only
+   * when both are present, so a partially-wired host leaves them unhandled
+   * rather than accepting labels and dropping them — the same reasoning
+   * `projects:*` and `claim:drilldown` already use in `ipc/index.ts`.
+   */
+  labels?: ClaimProjectStore;
+  /** Injected clock stamping `tagged_at`. Required alongside `labels`. */
+  clock?: { now(): number };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -371,13 +403,99 @@ export function drilldown(arg: unknown, deps: ClaimHandlerDeps): Drilldown {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Per-claim project labels (migration 010)                                   */
+/* -------------------------------------------------------------------------- */
+
+/** One label as it crosses the bridge. `projectId: null` means "untagged". */
+export interface ClaimProjectSelection {
+  claimId: string;
+  projectId: string | null;
+}
+
 /**
- * Register the drill-down channel.
+ * Narrow `{ briefingId, claimId, projectId }` off the wire.
  *
- * Safe to call before any window exists — the handler needs no `BrowserWindow`.
- * The callback is a thin wrapper over {@link drilldown}, which is where the
- * tests aim.
+ * `projectId` is tri-state on the renderer's side but only bi-state here:
+ * a non-empty string tags, `null` clears. `undefined` is rejected rather than
+ * treated as a clear — a dropdown that failed to send its value must not read
+ * as the user choosing "None".
+ */
+export function parseSetProjectArg(
+  arg: unknown,
+): { briefingId: string; claimId: string; projectId: string | null } | null {
+  const row = arg as { briefingId?: unknown; claimId?: unknown; projectId?: unknown } | null;
+  if (row === null || typeof row !== 'object') return null;
+  if (typeof row.briefingId !== 'string' || row.briefingId === '') return null;
+  if (typeof row.claimId !== 'string' || row.claimId === '') return null;
+  if (row.projectId === null) return { briefingId: row.briefingId, claimId: row.claimId, projectId: null };
+  if (typeof row.projectId !== 'string' || row.projectId === '') return null;
+  return { briefingId: row.briefingId, claimId: row.claimId, projectId: row.projectId };
+}
+
+/** Narrow `{ briefingId }` off the wire. */
+export function parseClaimProjectsArg(arg: unknown): string | null {
+  const id = (arg as { briefingId?: unknown } | null)?.briefingId;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
+/**
+ * `claim:setProject` body.
+ *
+ * Never throws: a failed label write degrades to `{ ok: false }`, which the
+ * briefing view reports inline and rolls its optimistic selection back from.
+ * Losing a label must not take down the briefing the user is reading.
+ */
+export function setClaimProject(arg: unknown, deps: ClaimHandlerDeps): { ok: boolean; reason?: string } {
+  const parsed = parseSetProjectArg(arg);
+  if (parsed === null) return { ok: false, reason: 'invalid_selection' };
+  if (deps.labels === undefined || deps.clock === undefined) {
+    return { ok: false, reason: 'not_wired' };
+  }
+
+  try {
+    deps.labels.setProject(parsed.briefingId, parsed.claimId, parsed.projectId, deps.clock.now());
+    return { ok: true };
+  } catch (error) {
+    console.error('[claim] setProject failed', parsed.briefingId, parsed.claimId, error);
+    return { ok: false, reason: 'internal_error' };
+  }
+}
+
+/**
+ * `claim:projects` body — every label on one briefing.
+ *
+ * Degrades a failed read to an empty list, the same way `getSelectedChannels`
+ * does: unlabelled and unreadable both render as "no project chosen", and the
+ * distinction is a job for the main-process log.
+ */
+export function listClaimProjects(arg: unknown, deps: ClaimHandlerDeps): ClaimProjectSelection[] {
+  const briefingId = parseClaimProjectsArg(arg);
+  if (briefingId === null || deps.labels === undefined) return [];
+
+  try {
+    return deps.labels
+      .listForBriefing(briefingId)
+      .map((tag) => ({ claimId: tag.artifactId, projectId: tag.projectId }));
+  } catch (error) {
+    console.error('[claim] listProjects failed', briefingId, error);
+    return [];
+  }
+}
+
+/**
+ * Register the drill-down channel, plus the two label channels when a label
+ * store and clock are wired.
+ *
+ * Safe to call before any window exists — none of the handlers needs a
+ * `BrowserWindow`. Each callback is a thin wrapper over an exported function,
+ * which is where the tests aim.
  */
 export function registerClaimHandlers(deps: ClaimHandlerDeps): void {
   ipcMain.handle(DRILLDOWN_CHANNEL, (_event, arg: unknown): Drilldown => drilldown(arg, deps));
+
+  if (deps.labels === undefined || deps.clock === undefined) return;
+
+  ipcMain.handle(SET_PROJECT_CHANNEL, (_event, arg: unknown) => setClaimProject(arg, deps));
+  ipcMain.handle(PROJECTS_CHANNEL, (_event, arg: unknown) => listClaimProjects(arg, deps));
 }
