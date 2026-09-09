@@ -105,10 +105,15 @@ export {
   drilldown,
   setClaimProject,
   listClaimProjects,
+  detectClaimProjects,
+  detectionText,
   parseSetProjectArg,
   parseClaimProjectsArg,
+  parseDetectArg,
   SET_PROJECT_CHANNEL,
   PROJECTS_CHANNEL,
+  DETECT_PROJECTS_CHANNEL,
+  MAX_DETECTION_CHARS,
   resolveEvents,
   parseDrilldownArg,
   toDrilldownEvent,
@@ -125,6 +130,7 @@ export {
   type ThreadEventReader,
   type ClaimProjectStore,
   type ClaimProjectSelection,
+  type ProjectLister,
 } from './claim.js';
 export {
   registerExternalHandlers,
@@ -457,7 +463,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       // `registerClaimHandlers` itself skips the two label channels when this is
       // absent, so a host without the repo keeps `claim:drilldown` and nothing else.
       ...(deps.claimLabels !== undefined
-        ? { labels: deps.claimLabels, clock: deps.clock ?? systemClock }
+        ? {
+            labels: deps.claimLabels,
+            clock: deps.clock ?? systemClock,
+            // Auto-detection reads the declared project names out of the same
+            // `GraphRepo` instance the artifact lookup above uses.
+            projects: deps.projectStore,
+          }
         : {}),
     });
   }

@@ -617,6 +617,12 @@ export interface ContextRestorerBridge {
     setProject(briefingId: string, claimId: string, projectId: string | null): Promise<OkResult>;
     /** Every label already on one briefing, for restoring the dropdowns on load. */
     projects(briefingId: string): Promise<ClaimProjectSelection[]>;
+    /**
+     * Auto-file the given rows whose source text names exactly one declared
+     * project, leaving every other row blank, and return the briefing's labels
+     * afterwards. Never overwrites a label already on a row.
+     */
+    detectProjects(briefingId: string, claimIds: string[]): Promise<ClaimProjectSelection[]>;
   };
   /**
    * The one sanctioned way out of the app (Task 4.6).
@@ -767,6 +773,13 @@ const bridge: ContextRestorerBridge = {
     projects: (briefingId) => {
       assertNonEmptyString(briefingId, 'briefingId');
       return ipcRenderer.invoke('claim:projects', { briefingId }) as Promise<
+        ClaimProjectSelection[]
+      >;
+    },
+    detectProjects: (briefingId, claimIds) => {
+      assertNonEmptyString(briefingId, 'briefingId');
+      if (!Array.isArray(claimIds)) throw new TypeError('claimIds must be an array');
+      return ipcRenderer.invoke('claim:detectProjects', { briefingId, claimIds }) as Promise<
         ClaimProjectSelection[]
       >;
     },

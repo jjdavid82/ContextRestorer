@@ -23,10 +23,13 @@ const handle = vi.fn();
 vi.mock('electron', () => ({ ipcMain: { handle } }));
 
 const {
+  DETECT_PROJECTS_CHANNEL,
   PROJECTS_CHANNEL,
   SET_PROJECT_CHANNEL,
+  detectClaimProjects,
   listClaimProjects,
   parseClaimProjectsArg,
+  parseDetectArg,
   parseSetProjectArg,
   registerClaimHandlers,
   setClaimProject,
@@ -43,26 +46,64 @@ function makeStore(seed: ReadonlyArray<{ artifactId: string; projectId: string }
   const rows = new Map(seed.map((row) => [row.artifactId, row.projectId]));
   return {
     rows,
-    listForBriefing: vi.fn(() =>
-      [...rows].map(([artifactId, projectId]) => ({ artifactId, projectId })),
-    ),
-    setProject: vi.fn((_briefingId: string, artifactId: string, projectId: string | null) => {
+    // Keyed on the artifact since migration 012, so labels span briefings.
+    listAll: vi.fn(() => [...rows].map(([artifactId, projectId]) => ({ artifactId, projectId }))),
+    setProject: vi.fn((artifactId: string, projectId: string | null) => {
       if (projectId === null) rows.delete(artifactId);
       else rows.set(artifactId, projectId);
+    }),
+    // Mirrors the repo's `INSERT … WHERE NOT EXISTS`: writes only where absent.
+    suggestProject: vi.fn((artifactId: string, projectId: string) => {
+      if (rows.has(artifactId)) return false;
+      rows.set(artifactId, projectId);
+      return true;
     }),
   };
 }
 
-/** Deps with labelling wired. `artifacts`/`events` are unreachable from these handlers. */
-function makeDeps(store = makeStore()): Deps & { labels: ReturnType<typeof makeStore> } {
+const PROJECTS = [
+  { projectId: 'p-dsp', name: 'DSP' },
+  { projectId: 'p-academy', name: 'AI Academy' },
+];
+
+/**
+ * Deps with labelling wired.
+ *
+ * `artifacts`/`events` are unreachable from the label handlers but ARE reachable
+ * from detection, which resolves a claim's thread the same way `claim:drilldown`
+ * does — so `threadTexts` seeds a thread's message bodies per artifact id.
+ */
+function makeDeps(
+  store = makeStore(),
+  options: {
+    projects?: ReadonlyArray<{ projectId: string; name: string }>;
+    threadTexts?: Record<string, string[]>;
+  } = {},
+): Deps & { labels: ReturnType<typeof makeStore> } {
+  const threadTexts = options.threadTexts ?? {};
   return {
+    // Detection resolves artifact → `externalRef` (the thread key) → events.
+    // Keying the fake thread on the artifact id keeps the fixtures readable.
     artifacts: {
-      getArtifact: vi.fn(() => undefined),
+      getArtifact: vi.fn((id: string) =>
+        threadTexts[id] === undefined ? undefined : { artifactId: id, externalRef: id },
+      ),
       getPerson: vi.fn(() => undefined),
     },
-    events: { listByThread: vi.fn(() => []) },
+    events: {
+      listByThread: vi.fn((threadKey: string) =>
+        (threadTexts[threadKey] ?? []).map((text, index) => ({
+          eventId: `${threadKey}-${index}`,
+          source: 'slack',
+          threadKey,
+          occurredAt: CLOCK_NOW,
+          payload: { text },
+        })),
+      ),
+    },
     labels: store,
     clock: { now: () => CLOCK_NOW },
+    ...(options.projects === undefined ? {} : { projects: { listProjects: () => options.projects } }),
   } as unknown as Deps & { labels: ReturnType<typeof makeStore> };
 }
 
@@ -130,7 +171,14 @@ describe('setClaimProject', () => {
     expect(
       setClaimProject({ briefingId: BRIEFING_ID, claimId: 'a1', projectId: 'p1' }, deps),
     ).toEqual({ ok: true });
-    expect(deps.labels.setProject).toHaveBeenCalledWith(BRIEFING_ID, 'a1', 'p1', CLOCK_NOW);
+    // Artifact first: the briefing id is provenance, not identity (012).
+    expect(deps.labels.setProject).toHaveBeenCalledWith(
+      'a1',
+      'p1',
+      CLOCK_NOW,
+      'user',
+      BRIEFING_ID,
+    );
   });
 
   it('passes a null through as a clear', () => {
@@ -198,11 +246,142 @@ describe('listClaimProjects', () => {
   it('degrades a failed read to an empty list rather than throwing', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const store = makeStore();
-    store.listForBriefing.mockImplementation(() => {
+    store.listAll.mockImplementation(() => {
       throw new Error('database is locked');
     });
 
     expect(listClaimProjects({ briefingId: BRIEFING_ID }, makeDeps(store))).toEqual([]);
+  });
+});
+
+describe('parseDetectArg', () => {
+  it('accepts a briefing id with a claim list', () => {
+    expect(parseDetectArg({ briefingId: 'b1', claimIds: ['a1', 'a2'] })).toEqual({
+      briefingId: 'b1',
+      claimIds: ['a1', 'a2'],
+    });
+  });
+
+  it('drops malformed entries rather than failing the whole batch', () => {
+    // One bad id costs that row its suggestion; the others are still worth having.
+    expect(parseDetectArg({ briefingId: 'b1', claimIds: ['a1', '', 42, null, 'a2'] })).toEqual({
+      briefingId: 'b1',
+      claimIds: ['a1', 'a2'],
+    });
+  });
+
+  it('rejects a missing briefing id or a non-array claim list', () => {
+    expect(parseDetectArg({ claimIds: ['a1'] })).toBeNull();
+    expect(parseDetectArg({ briefingId: 'b1' })).toBeNull();
+    expect(parseDetectArg({ briefingId: 'b1', claimIds: 'a1' })).toBeNull();
+    expect(parseDetectArg(null)).toBeNull();
+  });
+});
+
+describe('detectClaimProjects', () => {
+  it('files a claim whose SOURCE TEXT names exactly one project', () => {
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      threadTexts: { a1: ['Morning all', 'Can you review the DSP dashboard today?'] },
+    });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([
+      { claimId: 'a1', projectId: 'p-dsp' },
+    ]);
+    expect(deps.labels.suggestProject).toHaveBeenCalledWith('a1', 'p-dsp', CLOCK_NOW, BRIEFING_ID);
+  });
+
+  it('leaves a claim BLANK when the text names no project', () => {
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      threadTexts: { a1: ['Lunch is at noon.'] },
+    });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([]);
+    expect(deps.labels.suggestProject).not.toHaveBeenCalled();
+  });
+
+  it('leaves a claim BLANK when the text names two projects', () => {
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      threadTexts: { a1: ['The DSP work blocks the AI Academy launch.'] },
+    });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([]);
+    expect(deps.labels.suggestProject).not.toHaveBeenCalled();
+  });
+
+  it('NEVER overwrites a label the user already set', () => {
+    // The single most important guarantee here: detection re-runs on every
+    // briefing load, so a row the user filed (or deliberately re-filed) must
+    // survive a suggestion that disagrees with it.
+    const store = makeStore([{ artifactId: 'a1', projectId: 'p-academy' }]);
+    const deps = makeDeps(store, {
+      projects: PROJECTS,
+      threadTexts: { a1: ['All about DSP.'] },
+    });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([
+      { claimId: 'a1', projectId: 'p-academy' },
+    ]);
+    // Skipped before the text was even read.
+    expect(deps.labels.suggestProject).not.toHaveBeenCalled();
+    expect(store.rows.get('a1')).toBe('p-academy');
+  });
+
+  it('files what it can and leaves the rest, across a batch', () => {
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      threadTexts: {
+        a1: ['DSP rollout is done.'],
+        a2: ['Nothing identifying here.'],
+        a3: ['Notes from the AI Academy cohort.'],
+      },
+    });
+
+    expect(
+      detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1', 'a2', 'a3'] }, deps),
+    ).toEqual([
+      { claimId: 'a1', projectId: 'p-dsp' },
+      { claimId: 'a3', projectId: 'p-academy' },
+    ]);
+  });
+
+  it('suggests nothing when no projects are declared', () => {
+    const deps = makeDeps(makeStore(), { threadTexts: { a1: ['All about DSP.'] } });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([]);
+    expect(deps.labels.suggestProject).not.toHaveBeenCalled();
+  });
+
+  it('keeps going when one claim cannot be read', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      threadTexts: { a2: ['DSP again.'] },
+    });
+    deps.events.listByThread = vi.fn((threadKey: string) => {
+      if (threadKey === 'a1') throw new Error('thread read failed');
+      return [{ eventId: 'e', source: 'slack', threadKey, occurredAt: CLOCK_NOW, payload: { text: 'DSP again.' } }];
+    }) as unknown as typeof deps.events.listByThread;
+    deps.artifacts.getArtifact = vi.fn((id: string) => ({
+      artifactId: id,
+      externalRef: id,
+    })) as unknown as typeof deps.artifacts.getArtifact;
+
+    expect(
+      detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1', 'a2'] }, deps),
+    ).toEqual([{ claimId: 'a2', projectId: 'p-dsp' }]);
+  });
+
+  it('returns an empty list for a malformed argument or an unwired store', () => {
+    expect(detectClaimProjects({}, makeDeps())).toEqual([]);
+    expect(
+      detectClaimProjects(
+        { briefingId: BRIEFING_ID, claimIds: ['a1'] },
+        { artifacts: {}, events: {} } as unknown as Deps,
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -213,6 +392,7 @@ describe('registerClaimHandlers', () => {
     const channels = handle.mock.calls.map((call) => call[0] as string);
     expect(channels).toContain(SET_PROJECT_CHANNEL);
     expect(channels).toContain(PROJECTS_CHANNEL);
+    expect(channels).toContain(DETECT_PROJECTS_CHANNEL);
   });
 
   it('leaves them UNREGISTERED without a store, so the renderer sees an unhandled channel', () => {
@@ -226,5 +406,6 @@ describe('registerClaimHandlers', () => {
     const channels = handle.mock.calls.map((call) => call[0] as string);
     expect(channels).not.toContain(SET_PROJECT_CHANNEL);
     expect(channels).not.toContain(PROJECTS_CHANNEL);
+    expect(channels).not.toContain(DETECT_PROJECTS_CHANNEL);
   });
 });

@@ -1,42 +1,64 @@
 /**
- * Persistence for per-claim project labels (migration 010).
+ * Persistence for per-claim project labels (migrations 010-012).
  *
  * A label store and nothing more: no `belongs_to` edge is written here, so
  * nothing in `ranker.ts` or `retrieval.ts` changes weight because a row landed
- * in this table. See the migration header for why that separation is deliberate.
+ * in this table. See the migration headers for why that separation is
+ * deliberate.
  *
- * `artifactId` is the identifier the renderer actually holds for a briefing row
- * — `citation.artifactId`, the same value `claim:drilldown` resolves — not a
+ * ## The key is the ARTIFACT
+ *
+ * A label says "this thread is about project X", so it is keyed on the artifact
+ * and survives every re-render of the briefing it was set in. Migration 012
+ * moved it there after the original `(briefing_id, artifact_id)` key made every
+ * "Refresh" blank the dropdowns — see that file for the full account.
+ *
+ * `artifactId` is also the identifier the renderer actually holds for a briefing
+ * row — `citation.artifactId`, the same value `claim:drilldown` resolves — not a
  * `briefing_claims.claim_id`. That is documented at length in
- * `apps/desktop/src/ipc/claim.ts`; the naming here matches it rather than
- * pretending to a claim id the wire does not carry.
+ * `apps/desktop/src/ipc/claim.ts`.
  */
 import type { Database, Statement } from 'better-sqlite3';
 
-/** One user-authored label: this briefing row belongs to this project. */
+/**
+ * Who filed a claim under a project (migration 011).
+ *
+ * `'auto'` is a name match, not a judgement — see `detectProject()` in
+ * `apps/desktop/src/ipc/projectMatch.ts`. Kept distinct from `'user'` so a
+ * suggestion is never reported back as the user's own stated declaration (X-2).
+ */
+export type ClaimProjectOrigin = 'user' | 'auto';
+
+/** One label: this thread belongs to this project. */
 export interface ClaimProjectTag {
-  briefingId: string;
   /** An `artifacts.artifact_id` — see the module header. */
   artifactId: string;
   projectId: string;
+  /** The briefing it was last set in. Provenance only; `null` once purged. */
+  briefingId: string | null;
   taggedAt: number;
+  origin: ClaimProjectOrigin;
 }
 
 interface TagRow {
-  briefing_id: string;
   artifact_id: string;
   project_id: string;
+  briefing_id: string | null;
   tagged_at: number;
+  origin: ClaimProjectOrigin;
 }
 
 function toDomain(row: TagRow): ClaimProjectTag {
   return {
-    briefingId: row.briefing_id,
     artifactId: row.artifact_id,
     projectId: row.project_id,
+    briefingId: row.briefing_id,
     taggedAt: row.tagged_at,
+    origin: row.origin,
   };
 }
+
+const COLUMNS = 'artifact_id, project_id, briefing_id, tagged_at, origin';
 
 /**
  * CRUD over `claim_projects`. Same shape as every other repository here:
@@ -44,61 +66,104 @@ function toDomain(row: TagRow): ClaimProjectTag {
  * domain objects.
  */
 export class ClaimProjectsRepo {
-  private readonly stmtListForBriefing: Statement<[string], TagRow>;
+  private readonly stmtListAll: Statement<unknown[], TagRow>;
   private readonly stmtListForProject: Statement<[string], TagRow>;
   private readonly stmtUpsert: Statement<unknown[], unknown>;
-  private readonly stmtDelete: Statement<[string, string], unknown>;
+  private readonly stmtInsertIfAbsent: Statement<unknown[], unknown>;
+  private readonly stmtDelete: Statement<[string], unknown>;
 
   constructor(private readonly db: Database) {
-    this.stmtListForBriefing = this.db.prepare<[string], TagRow>(
-      `SELECT briefing_id, artifact_id, project_id, tagged_at FROM claim_projects
-        WHERE briefing_id = ? ORDER BY tagged_at ASC, artifact_id ASC`,
+    this.stmtListAll = this.db.prepare<unknown[], TagRow>(
+      `SELECT ${COLUMNS} FROM claim_projects ORDER BY tagged_at DESC, artifact_id ASC`,
     );
     this.stmtListForProject = this.db.prepare<[string], TagRow>(
-      `SELECT briefing_id, artifact_id, project_id, tagged_at FROM claim_projects
-        WHERE project_id = ? ORDER BY tagged_at DESC, artifact_id ASC`,
+      `SELECT ${COLUMNS} FROM claim_projects WHERE project_id = ?
+        ORDER BY tagged_at DESC, artifact_id ASC`,
     );
-    // Re-tagging a row is an edit, not a second label: the primary key collapses
-    // it, and `tagged_at` moves to when the user last said it.
+    // Re-filing a thread is an edit, not a second label: the primary key
+    // collapses it, and `tagged_at` moves to when the user last said it.
     this.stmtUpsert = this.db.prepare(
-      `INSERT INTO claim_projects (briefing_id, artifact_id, project_id, tagged_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(briefing_id, artifact_id)
-       DO UPDATE SET project_id = excluded.project_id, tagged_at = excluded.tagged_at`,
+      `INSERT INTO claim_projects (artifact_id, project_id, briefing_id, tagged_at, origin)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(artifact_id)
+       DO UPDATE SET project_id  = excluded.project_id,
+                     briefing_id = excluded.briefing_id,
+                     tagged_at   = excluded.tagged_at,
+                     origin      = excluded.origin`,
     );
-    this.stmtDelete = this.db.prepare<[string, string], unknown>(
-      `DELETE FROM claim_projects WHERE briefing_id = ? AND artifact_id = ?`,
+    // The auto-labeller's write. `WHERE NOT EXISTS` rather than an upsert: a
+    // suggestion must never overwrite a label already on the row — not the
+    // user's own filing, and not an earlier suggestion. Detection runs on every
+    // briefing load, so "only if absent" is what stops it re-asserting itself
+    // over a human decision.
+    this.stmtInsertIfAbsent = this.db.prepare(
+      `INSERT INTO claim_projects (artifact_id, project_id, briefing_id, tagged_at, origin)
+       SELECT ?, ?, ?, ?, 'auto'
+        WHERE NOT EXISTS (SELECT 1 FROM claim_projects WHERE artifact_id = ?)`,
     );
-  }
-
-  /** Every label on one briefing — what the briefing view reads on load. */
-  listForBriefing(briefingId: string): ClaimProjectTag[] {
-    return this.stmtListForBriefing.all(briefingId).map(toDomain);
+    this.stmtDelete = this.db.prepare<[string], unknown>(
+      `DELETE FROM claim_projects WHERE artifact_id = ?`,
+    );
   }
 
   /**
-   * Every claim ever labelled with one project, newest first.
+   * Every label on file, newest first.
    *
-   * Unused by the current UI: this is the read the "filter results by project"
-   * follow-up needs, and it is here so the index in migration 010 has the query
-   * it was created for rather than being speculative.
+   * Returned whole rather than filtered per briefing: labels are per artifact
+   * now, and a briefing's rows are only known once its claims have streamed in.
+   * Handing the renderer the full map once is simpler than reconciling a
+   * per-claim lookup against an arriving stream, and the table holds one row
+   * per FILED thread — bounded by how much the user has actually categorised,
+   * not by corpus size.
    */
+  listAll(): ClaimProjectTag[] {
+    return this.stmtListAll.all().map(toDomain);
+  }
+
+  /** Every claim filed under one project, newest first — the filter's read. */
   listForProject(projectId: string): ClaimProjectTag[] {
     return this.stmtListForProject.all(projectId).map(toDomain);
   }
 
   /**
-   * Tag one briefing row, or with `null` clear its tag.
+   * File one thread under a project, or with `null` clear it.
    *
    * Tri-state at the call site collapses to two statements here: a project id
-   * upserts, `null` deletes. Clearing a row that was never tagged is a no-op,
-   * not an error — the dropdown's "None" option must be idempotent.
+   * upserts, `null` deletes. Clearing a thread that was never filed is a no-op,
+   * not an error — the dropdown's "No project" option must be idempotent.
    */
-  setProject(briefingId: string, artifactId: string, projectId: string | null, now: number): void {
+  setProject(
+    artifactId: string,
+    projectId: string | null,
+    now: number,
+    origin: ClaimProjectOrigin = 'user',
+    briefingId: string | null = null,
+  ): void {
     if (projectId === null) {
-      this.stmtDelete.run(briefingId, artifactId);
+      this.stmtDelete.run(artifactId);
       return;
     }
-    this.stmtUpsert.run(briefingId, artifactId, projectId, now);
+    this.stmtUpsert.run(artifactId, projectId, briefingId, now, origin);
+  }
+
+  /**
+   * Record an auto-detected label, but only where the thread has none.
+   *
+   * Detection re-runs every time a briefing is opened, so this must be a no-op
+   * against any row that already carries a decision — otherwise a suggestion
+   * would silently overwrite the user's own filing on the next load, which is
+   * the single worst thing this feature could do.
+   *
+   * @returns whether a row was actually written, so the caller can report only
+   * the labels it really applied rather than assuming its own suggestions took.
+   */
+  suggestProject(
+    artifactId: string,
+    projectId: string,
+    now: number,
+    briefingId: string | null = null,
+  ): boolean {
+    const result = this.stmtInsertIfAbsent.run(artifactId, projectId, briefingId, now, artifactId);
+    return result.changes > 0;
   }
 }

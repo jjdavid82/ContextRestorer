@@ -453,6 +453,12 @@ export interface ContextRestorerBridge {
     setProject(briefingId: string, claimId: string, projectId: string | null): Promise<OkResult>;
     /** Every label already on one briefing, for restoring the dropdowns on load. */
     projects(briefingId: string): Promise<ClaimProjectSelection[]>;
+    /**
+     * Auto-file rows whose source text names exactly one declared project,
+     * leaving the rest blank. Returns the briefing's labels afterwards, and
+     * never overwrites one already there.
+     */
+    detectProjects(briefingId: string, claimIds: string[]): Promise<ClaimProjectSelection[]>;
   };
   /**
    * The one sanctioned way out of the app (Task 4.6).

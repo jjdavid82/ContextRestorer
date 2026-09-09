@@ -57,4 +57,4 @@ export { AppSettingsRepo } from './repos/appSettings.js';
 // `projectLinks` write path above: these tag briefing rows for later filtering
 // and write no `belongs_to` edge, so nothing here re-weights ranking.
 export { ClaimProjectsRepo } from './repos/claimProjects.js';
-export type { ClaimProjectTag } from './repos/claimProjects.js';
+export type { ClaimProjectTag, ClaimProjectOrigin } from './repos/claimProjects.js';

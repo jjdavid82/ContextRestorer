@@ -106,6 +106,16 @@ const CHANGED_SECTIONS = STREAMED_SECTIONS;
  */
 const DEFAULT_MAX_CHANGED_ITEMS = 7;
 
+/**
+ * Filter sentinel for "rows carrying no project label".
+ *
+ * A sentinel rather than `null`, because MUI's `Select` uses `''` for its own
+ * empty state and the two mean opposite things here: `''` shows everything,
+ * this shows only what has NOT been filed. Prefixed so it can never collide
+ * with a real `projectId` (a uuid).
+ */
+export const UNFILED_FILTER = '@unfiled';
+
 /** Tooltip for the merged changed group — the union of the three sections it replaces. */
 const CHANGED_GROUP_MEANING =
   'Decisions, progress, things that closed without you, and context worth knowing';
@@ -243,6 +253,15 @@ export function BriefingView({
   /** `claimId -> projectId`; a claim absent from the map is unlabelled. */
   const [claimProjects, setClaimProjects] = useState<ReadonlyMap<string, string>>(new Map());
   const [labelError, setLabelError] = useState<string | null>(null);
+  /**
+   * Which project the changed list is filtered to: a project id, the
+   * {@link UNFILED_FILTER} sentinel, or `''` for "everything".
+   *
+   * Deliberately NOT persisted. A filter that survives a restart is a filter
+   * the user eventually forgets is on, and this one hides briefing content —
+   * the failure mode is believing nothing changed when something did.
+   */
+  const [projectFilter, setProjectFilter] = useState<string>('');
 
   // Frozen on first render so the effect's dependency array stays stable; a
   // window recomputed every render would re-request the briefing in a loop.
@@ -429,6 +448,51 @@ export function BriefingView({
       active = false;
     };
   }, [briefingId]);
+
+  /**
+   * Auto-detection (migration 011): file the rows whose SOURCE TEXT names
+   * exactly one declared project, and leave every other row blank.
+   *
+   * Runs once the stream has ended, not per chunk: the claim set is stable by
+   * then, so this is one round trip for the whole briefing instead of one per
+   * bullet. Deliberately after `claim.projects` has populated the map — the
+   * main process skips any row already filed, and re-running is harmless.
+   *
+   * Best-effort throughout: detection failing leaves every dropdown exactly as
+   * the user left it, which is the same state as declaring no projects.
+   */
+  useEffect(() => {
+    if (done === null || briefingId === null || declaredProjects.length === 0) return;
+    const claimIds = claims.map((c) => claimIdOf(c));
+    if (claimIds.length === 0) return;
+
+    let active = true;
+    try {
+      getBridge()
+        .claim.detectProjects(briefingId, claimIds)
+        .then((tags) => {
+          if (!active) return;
+          setClaimProjects(
+            new Map(
+              tags.flatMap((tag) =>
+                tag.projectId === null ? [] : [[tag.claimId, tag.projectId] as const],
+              ),
+            ),
+          );
+        })
+        .catch(() => undefined);
+    } catch {
+      // No bridge — nothing to detect against.
+    }
+
+    return () => {
+      active = false;
+    };
+    // `claims` is intentionally read but not depended on: it grows chunk by
+    // chunk, and re-running detection on every arrival would fire a round trip
+    // per bullet. `done` flipping is the signal that the set is final.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done, briefingId, declaredProjects.length]);
 
   /**
    * Label one claim, or clear it with `''` (the "No project" option's value).
@@ -662,16 +726,54 @@ export function BriefingView({
   const pendingArtifactIds = new Set(
     pending.flatMap((item) => (item.citationArtifactId !== null ? [item.citationArtifactId] : [])),
   );
-  const waitingOnYouClaims = claims.filter(
+  const allWaitingOnYouClaims = claims.filter(
     (chunk) => sectionOf(chunk) === 'Waiting on you' && !pendingArtifactIds.has(claimIdOf(chunk)),
   );
+
+  /**
+   * Does one artifact pass the project filter?
+   *
+   * `''` shows everything; {@link UNFILED_FILTER} shows only rows carrying no
+   * label; anything else is a `projectId`.
+   *
+   * Applied to EVERY section of the panel, obligations included, by explicit
+   * user decision. The risk that motivated exempting them still exists — a
+   * filter left on can hide something that is genuinely waiting on you — so it
+   * is answered by disclosure instead of by exemption: `filteredOutCount`
+   * counts across all three lists and is stated next to the control, with a
+   * one-click way out. AC-3's cap exemption for obligations is untouched; that
+   * is about the display cap, not about this filter.
+   */
+  const artifactPassesFilter = (artifactId: string | null): boolean => {
+    if (projectFilter === '') return true;
+    const filed = artifactId === null ? undefined : claimProjects.get(artifactId);
+    return projectFilter === UNFILED_FILTER ? filed === undefined : filed === projectFilter;
+  };
+
+  const matchesFilter = (chunk: ClaimChunk): boolean => artifactPassesFilter(claimIdOf(chunk));
 
   // P2: every non-obligation claim, in canonical section order. Sorted rather
   // than concatenated per section so one flat list still reads in the order the
   // four-section layout would have shown.
-  const changedClaims = CHANGED_SECTIONS.flatMap((section) =>
+  const allChangedClaims = CHANGED_SECTIONS.flatMap((section) =>
     claims.filter((chunk) => sectionOf(chunk) === section),
   );
+
+  // Each section filtered independently, so the counts each heading reports
+  // stay true to what is under it.
+  const changedClaims = allChangedClaims.filter(matchesFilter);
+  const waitingOnYouClaims = allWaitingOnYouClaims.filter(matchesFilter);
+  const filteredPending = pending.filter((item) =>
+    artifactPassesFilter(item.citationArtifactId),
+  );
+
+  /** Everything the filter is hiding, across all three lists. Disclosed, never silent. */
+  const filteredOutCount =
+    allChangedClaims.length -
+    changedClaims.length +
+    (allWaitingOnYouClaims.length - waitingOnYouClaims.length) +
+    (pending.length - filteredPending.length);
+
   const visibleChanged = showAllChanged ? changedClaims : changedClaims.slice(0, maxChangedItems);
   const hiddenChangedCount = changedClaims.length - visibleChanged.length;
 
@@ -691,6 +793,78 @@ export function BriefingView({
         Ranked by the projects you declared — nothing is learned from what you click. Early
         briefings will be rough; flagging a wrong item helps us fix the model offline.
       </Typography>
+
+      {/*
+        Panel-level filter: it governs every section below, so it sits above all
+        of them rather than inside one. Only offered once there is something to
+        filter BY — an empty dropdown is a dead control, and projects are
+        declared during onboarding, not here.
+      */}
+      {declaredProjects.length > 0 ? (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            flexWrap: 'wrap',
+            mb: 2,
+            pb: 2,
+            borderBottom: 1,
+            borderColor: 'divider',
+          }}
+        >
+          <TextField
+            select
+            size="small"
+            variant="standard"
+            label="Filter by project"
+            value={projectFilter}
+            aria-label="Filter this briefing by project"
+            onChange={(e) => setProjectFilter(e.target.value)}
+            sx={{ minWidth: 190 }}
+          >
+            <MenuItem value="">All projects</MenuItem>
+            <MenuItem value={UNFILED_FILTER}>
+              <em>Not filed</em>
+            </MenuItem>
+            {declaredProjects.map((project) => (
+              <MenuItem key={project.projectId} value={project.projectId}>
+                {project.name}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          {/*
+            Every section's heading reports its FILTERED count, so the hidden
+            remainder has to be stated outright — otherwise a filter left on
+            reads as "nothing changed" and, now that obligations are filtered
+            too, as "nothing needs you". That false reassurance is the one thing
+            this panel must never produce.
+          */}
+          {filteredOutCount > 0 ? (
+            <Typography role="status" sx={{ color: 'text.secondary', fontSize: '0.85rem' }}>
+              {filteredOutCount} item{filteredOutCount === 1 ? '' : 's'} hidden by this filter,
+              including anything waiting on you.{' '}
+              <Box
+                component="button"
+                type="button"
+                onClick={() => setProjectFilter('')}
+                sx={{
+                  background: 'none',
+                  border: 0,
+                  p: 0,
+                  font: 'inherit',
+                  color: 'primary.main',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                Show all
+              </Box>
+            </Typography>
+          ) : null}
+        </Box>
+      ) : null}
 
       {error !== null ? (
         <Typography role="alert" sx={{ color: 'error.main', mb: 1 }}>
@@ -726,7 +900,7 @@ export function BriefingView({
           </Typography>
         ) : null}
         <PendingSection
-          items={pending}
+          items={filteredPending}
           loading={pendingLoading}
           onCitationClick={toggleDrilldown}
           renderDetail={renderDetail}
