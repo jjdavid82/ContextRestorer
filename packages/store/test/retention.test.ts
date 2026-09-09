@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Database } from 'better-sqlite3';
 import { openDb, migrate } from '../src/index.js';
-import { purgeRawEventsOlderThan, deleteEverything } from '../src/retention.js';
+import { purgeRawEventsOlderThan, deleteEverything, userDataSummary } from '../src/retention.js';
 
 let db: Database;
 
@@ -68,7 +68,11 @@ describe('purgeRawEventsOlderThan — 90-day retention (NFR)', () => {
 
     const purged = purgeRawEventsOlderThan(db, 3_000);
 
-    expect(purged).toBe(1);
+    expect(purged.rowsDeleted).toBe(1);
+    // The manifest the caller needs for `VectorStore.deleteByEventIds`: named
+    // inside the same transaction, because after the DELETE there is nothing
+    // left to enumerate.
+    expect(purged.vectorEventIds).toEqual(['old']);
     const remaining = db.prepare(`SELECT event_id FROM events`).all() as { event_id: string }[];
     expect(remaining.map((r) => r.event_id)).toEqual(['new']);
   });
@@ -76,7 +80,7 @@ describe('purgeRawEventsOlderThan — 90-day retention (NFR)', () => {
   it('treats the cutoff as exclusive — an event exactly at the cutoff is kept', () => {
     insertEvent('at-cutoff', 3_000);
 
-    expect(purgeRawEventsOlderThan(db, 3_000)).toBe(0);
+    expect(purgeRawEventsOlderThan(db, 3_000).rowsDeleted).toBe(0);
     expect(countRows('events')).toBe(1);
   });
 
@@ -91,7 +95,7 @@ describe('purgeRawEventsOlderThan — 90-day retention (NFR)', () => {
               ('x-new', 'new', 'decision', 0.9, '[]', '[]', 'm', 'v1', 5000)`,
     ).run();
 
-    expect(purgeRawEventsOlderThan(db, 3_000)).toBe(1);
+    expect(purgeRawEventsOlderThan(db, 3_000).rowsDeleted).toBe(1);
 
     const kept = db.prepare(`SELECT extraction_id FROM extractions`).all() as {
       extraction_id: string;
@@ -178,7 +182,7 @@ describe('purgeRawEventsOlderThan — 90-day retention (NFR)', () => {
     expectAppendOnlyEnforced('new');
 
     // …and the very next purge still works normally.
-    expect(purgeRawEventsOlderThan(db, 3_000)).toBe(1);
+    expect(purgeRawEventsOlderThan(db, 3_000).rowsDeleted).toBe(1);
     expectAppendOnlyEnforced('new');
   });
 });
@@ -352,5 +356,59 @@ describe('deleteEverything — right to delete (SEC-8)', () => {
 
     expect(result).toEqual({ vectorEventIds: [], narrativePaths: [] });
     expect(triggerNames()).toEqual(APPEND_ONLY_TRIGGERS);
+  });
+});
+
+describe('userDataSummary — the read-only half of SEC-8', () => {
+  it('counts every table a wipe would empty, including the empty ones', () => {
+    insertArtifact('a-1');
+    insertEvent('e-1', 1_000);
+    insertEvent('e-2', 5_000);
+
+    const summary = userDataSummary(db, 3_000);
+
+    expect(summary.rowsByTable['events']).toBe(2);
+    expect(summary.rowsByTable['artifacts']).toBe(1);
+    // A table at zero must be PRESENT at zero, not absent: the panel renders
+    // the whole scope of a wipe, and a missing key reads as "not covered".
+    expect(summary.rowsByTable['briefings']).toBe(0);
+    expect(summary.rowsByTable['state_deltas']).toBe(0);
+    expect(summary.totalRows).toBe(3);
+  });
+
+  it('never counts schema_version — a wipe does not erase the migration ledger', () => {
+    expect(Object.keys(userDataSummary(db, 0).rowsByTable)).not.toContain('schema_version');
+  });
+
+  it('reports the oldest stored event, and null when nothing is stored', () => {
+    expect(userDataSummary(db, 0).oldestEventAt).toBeNull();
+
+    insertEvent('e-late', 9_000);
+    insertEvent('e-early', 2_000);
+
+    expect(userDataSummary(db, 0).oldestEventAt).toBe(2_000);
+  });
+
+  it('counts exactly what a purge at the same cutoff would remove', () => {
+    insertEvent('e-1', 1_000);
+    insertEvent('e-2', 2_000);
+    insertEvent('at-cutoff', 3_000);
+    insertEvent('e-4', 9_000);
+
+    // The whole point of reporting this number is that the panel's promise and
+    // the purge's behaviour are the same rule, so they are asserted together
+    // rather than as two independent constants.
+    expect(userDataSummary(db, 3_000).expiredRawEvents).toBe(2);
+    expect(purgeRawEventsOlderThan(db, 3_000).rowsDeleted).toBe(2);
+    expect(userDataSummary(db, 3_000).expiredRawEvents).toBe(0);
+  });
+
+  it('changes nothing — it is a read, and the guards stay live', () => {
+    insertEvent('e-1', 1_000);
+
+    userDataSummary(db, 5_000);
+
+    expect(countRows('events')).toBe(1);
+    expectAppendOnlyEnforced('e-1');
   });
 });

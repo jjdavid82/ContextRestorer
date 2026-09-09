@@ -30,8 +30,13 @@ export type { DueThread } from './repos/watermark.js';
 // Privileged writers (retention NFR + SEC-8 right-to-delete). These are the only
 // functions allowed to drop the append-only triggers; do not import them to
 // delete rows from anywhere else.
-export { purgeRawEventsOlderThan, deleteEverything } from './retention.js';
-export type { DeleteEverythingResult } from './retention.js';
+export {
+  purgeRawEventsOlderThan,
+  deleteEverything,
+  userDataSummary,
+  retentionCutoffMs,
+} from './retention.js';
+export type { DeleteEverythingResult, RawEventPurge, UserDataSummary } from './retention.js';
 // Recurring briefing schedules (FR-3 time-based half, OI-4). Additive: the
 // `briefing_schedules` table ships with migration 001.
 export { BriefingSchedulesRepo, BRIEFING_CADENCES } from './repos/briefingSchedules.js';
