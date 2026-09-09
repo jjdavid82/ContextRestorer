@@ -116,10 +116,14 @@ export class EventsRepo {
     // Same predicate as the count above, returning the rows themselves. SQLite
     // treats a negative LIMIT as "no limit", which is how the unbounded call is
     // expressed without a second prepared statement.
+    //
+    // NEWEST first, which reverses the original ordering. See
+    // {@link listUnextracted} for why: draining oldest-first is the right shape
+    // for a queue and the wrong shape for this product.
     this.stmtListUnextracted = this.db.prepare(
       `SELECT * FROM events e
        WHERE NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
-       ORDER BY occurred_at ASC, event_id ASC
+       ORDER BY occurred_at DESC, event_id DESC
        LIMIT ?`,
     );
 
@@ -257,15 +261,29 @@ export class EventsRepo {
   }
 
   /**
-   * The events behind {@link countUnextracted}, oldest first — the work list for
-   * Layer 1 and for the periodic recovery sweep.
+   * The events behind {@link countUnextracted}, **newest first** — the work list
+   * for Layer 1 and for the periodic recovery sweep.
    *
    * "Needs extraction" is defined solely as "has no row in `extractions`". That
    * is what makes the sweep self-healing: an event whose extraction failed the
    * schema check (no row written) or whose worker crashed mid-flight is
    * indistinguishable from one that was never attempted, and both are correctly
-   * re-queued. Ordering is oldest-first so a backlog drains in the order the
-   * user experienced it.
+   * re-queued.
+   *
+   * ### Why newest-first, against the obvious instinct
+   *
+   * This used to be oldest-first, "so a backlog drains in the order the user
+   * experienced it" — the right shape for a queue, and the wrong one for this
+   * product. Layer 1 costs ~21s per event of backfill on the shipped model, so a
+   * first connect with a real mailbox behind it takes HOURS before anything is
+   * briefable, and oldest-first spends every one of those hours on the mail the
+   * user cares about least. A returning user asks "what happened while I was
+   * out"; newest-first is what makes that window answerable in minutes.
+   *
+   * Nothing downstream depends on extraction order. Each event is classified
+   * independently, and `WatermarkRepo`'s `DUE_SQL` holds a thread out of
+   * synthesis until EVERY event on it has a row — so a thread cannot be
+   * summarized from a partial, out-of-order read of itself.
    *
    * @param limit - Maximum rows to return. Omit for all of them.
    */

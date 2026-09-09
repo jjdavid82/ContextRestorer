@@ -802,12 +802,19 @@ export class Layer1Extractor {
  * `@cr/store`.
  */
 export interface UnextractedEventSource {
-  /** Events with no `extractions` row, oldest first. */
+  /** Events with no `extractions` row, newest first (see {@link findUnextractedEvents}). */
   listUnextracted(limit?: number): Event[];
 }
 
 /**
- * Events that still need Layer-1 extraction, oldest first.
+ * Events that still need Layer-1 extraction, **newest first**.
+ *
+ * The ordering is the store's (`EventsRepo.listUnextracted`) and it is
+ * deliberate (F2): extraction costs roughly 21s per backfilled event, so a
+ * bounded sweep must spend its budget on the window a returning user is asking
+ * about rather than on the oldest mail in the mailbox. Nothing here depends on
+ * order — each event is classified independently, and `WatermarkRepo`'s
+ * `DUE_SQL` holds a thread out of synthesis until every event on it has a row.
  *
  * This is the recovery half of Task 2.2 Step 4. It is the *only* definition of
  * "needs extraction" in the system: an event is outstanding exactly when no

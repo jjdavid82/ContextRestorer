@@ -177,7 +177,9 @@ describe('Layer1Extractor.extractThread', () => {
     expect(result.unclassified).toBe(2);
     // Still visible to the recovery sweep — the same behaviour a single-event
     // schema failure has always had.
-    expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-2', 'evt-3']);
+    // Newest first (F2) — the queue order reversed deliberately; still exactly
+    // the two events the model declined to classify.
+    expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-3', 'evt-2']);
   });
 
   describe('writing off an event the model can never classify', () => {
@@ -217,7 +219,7 @@ describe('Layer1Extractor.extractThread', () => {
 
       // Nothing written off: the model never actually responded.
       expect(failures.attempts('evt-2')).toBe(0);
-      expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-1', 'evt-2']);
+      expect(events.listUnextracted().map((e) => e.eventId)).toEqual(['evt-2', 'evt-1']);
     });
 
     it('is inert without an ExtractionFailuresRepo (retry-forever, as before)', async () => {
