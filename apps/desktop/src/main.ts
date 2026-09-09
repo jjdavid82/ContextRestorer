@@ -72,6 +72,7 @@ import { registerAutostart } from './autostart.js';
 import { CHAT_MODEL_SETTING_KEY, registerIpcHandlers, startHealthPush } from './ipc/index.js';
 import { backfillMissingResolutionDeltas } from './ipc/briefing.js';
 import { deepLinkFor, resolveEvents } from './ipc/claim.js';
+import { projectNameFor } from './ipc/briefing.js';
 import { ensureFreshTokens } from './ipc/oauth.js';
 import { registerPipelineStatusPush } from './ipc/pipelineStatus.js';
 import { BriefingScheduleRunner } from './scheduler/briefingSchedule.js';
@@ -1041,12 +1042,18 @@ function citationFor(
   const externalUrl =
     latest === undefined ? undefined : deepLinkFor(latest.source, latest.sourceEventId);
 
+  // The declared project behind this item, for its label. Resolved through the
+  // SAME helper `briefing:snapshot` uses, so a claim carries the same project
+  // whether it arrived live or was rehydrated after a page navigation.
+  const projectName = projectNameFor(graph, artifactId);
+
   return {
     eventId: latest?.eventId ?? '',
     artifactId,
     source: latest?.source ?? artifact.source,
     // `exactOptionalPropertyTypes`: an absent link is an absent KEY.
     ...(externalUrl !== undefined ? { externalUrl } : {}),
+    ...(projectName === undefined ? {} : { projectName }),
   };
 }
 
@@ -1446,6 +1453,11 @@ if (!app.requestSingleInstanceLock()) {
       // Read by the poller every Slack cycle and by `slack:*` IPC — one
       // instance, since each repo prepares its whole statement set in its
       // constructor.
+      // One instance: the sink behind `feedback:submit`, the reader behind
+      // `feedback:export`, and the counter behind Diagnostics are the same
+      // table, and a second repo over the same handle would re-prepare every
+      // statement for no benefit.
+      const feedbackRepo = new FeedbackRepo(db!);
       const slackChannels = new SlackChannelsRepo(db!);
 
       /**
@@ -1536,7 +1548,13 @@ if (!app.requestSingleInstanceLock()) {
         // the SAME instance Layer 3 persists through and the schedule runner
         // reads `getMostRecent()` from — one prepared statement set, and no way
         // for two views of "the briefings table" to disagree.
-        feedback: new FeedbackRepo(db!),
+        feedback: feedbackRepo,
+        // FR-7's reader half: the export that finally makes recorded verdicts
+        // legible to something other than the button that wrote them, and the
+        // verdict counts the Diagnostics panel shows.
+        feedbackReader: feedbackRepo,
+        exportDir: app.getPath('userData'),
+        metricsFeedback: feedbackRepo,
         briefings,
         // `briefing:snapshot` rehydration (same `BriefingsRepo` instance as
         // `briefings` above, narrowed differently — see the field's own doc

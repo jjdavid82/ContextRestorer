@@ -105,6 +105,16 @@ export interface PendingItemView {
    * Source text, never model output. `null` when unresolvable.
    */
   sourceQuote: string | null;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** A citation anchoring a claim to a concrete ingested event. */
@@ -114,6 +124,16 @@ export interface Citation {
   source: SourceId;
   /** Deep link back into Slack/Gmail; absent when the source exposes no permalink. */
   externalUrl?: string;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** `briefing:chunk` — one streamed, already-validated claim of the briefing. */
@@ -294,6 +314,16 @@ export interface LocalMetrics {
   /** Citation-gate drops by reason. `injection_pattern` is the T-1 detector. */
   gateDrops: MetricCount[];
   redactedClaims: number;
+  /**
+   * Verdicts recorded per kind (`relevant` / `irrelevant` / `wrong` /
+   * `missed`), all time. Empty when nothing has been judged.
+   *
+   * Shown so the user can see their feedback was stored. It deliberately does
+   * NOT claim the ranking changed — nothing learns from these (X-2); they
+   * exist to be exported as labelled data for the offline eval.
+   */
+  feedbackCounts: Record<string, number>;
+
   redactionCount: number;
   /** Detector kinds only — never any part of a redacted value. */
   redactionKinds: string[];
@@ -454,6 +484,24 @@ export interface BriefingScheduleResult {
   schedule?: BriefingScheduleView;
 }
 
+
+/**
+ * `feedback:export` — every recorded verdict written to a local JSON file.
+ *
+ * A LOCAL file on the same machine; nothing is uploaded. The `wrong` verdicts
+ * come out as `unsupportedClaims`, which is the exact shape a fixture's
+ * `ground_truth.unsupported_claims` takes — real, user-confirmed negatives for
+ * the offline eval.
+ */
+export interface FeedbackExportResult {
+  ok: boolean;
+  reason?: string;
+  /** Absolute path written. Present only when `ok`. */
+  path?: string;
+  total?: number;
+  counts?: Record<string, number>;
+}
+
 /** The full surface exposed on `window.contextRestorer`. */
 export interface ContextRestorerBridge {
   onboarding: {
@@ -524,12 +572,18 @@ export interface ContextRestorerBridge {
     /** Resolves with `{ ok }` once the verdict is persisted (design §5, <=1s). */
     submit(f: FeedbackInput): Promise<OkResult>;
     /**
-     * The verdict already on file for each claim id — across every briefing,
-     * not just the current one — keyed by claim id. A claim absent from the
-     * result has no verdict yet. Lets the UI seed "✓ recorded" after a
-     * restart instead of asking the user to re-judge an unchanged claim.
+     * The verdict already on file for each claim key (`<artifact id><U+001F>
+     * <claim sentence>`, the key `submit` records) — across every briefing, not
+     * just the current one. A key absent from the result has no verdict yet;
+     * a reworded claim is a different key and comes back unanswered. Lets the
+     * UI seed "✓ recorded" after a restart without re-judging an unchanged claim.
      */
-    claimVerdicts(claimIds: string[]): Promise<Record<string, FeedbackInput['verdict']>>;
+    claimVerdicts(claimKeys: string[]): Promise<Record<string, FeedbackInput['verdict']>>;
+    /**
+     * Write every recorded verdict to a local JSON file (FR-7), and report the
+     * path. Nothing leaves the machine.
+     */
+    export(): Promise<FeedbackExportResult>;
   };
   health: {
     /** Returns an unsubscribe fn — same effect-cleanup contract as `onChunk`. */

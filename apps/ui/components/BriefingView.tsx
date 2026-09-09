@@ -149,6 +149,26 @@ function claimIdOf(chunk: ClaimChunk): string {
 }
 
 /**
+ * The key a user verdict (FR-12) is recorded against:
+ * `<artifact id><U+001F><claim sentence>`.
+ *
+ * NOT just the artifact id. One thread's artifact backs a different claim in
+ * every briefing it recurs in ("reply to Sarah" one week, "Sarah escalated" the
+ * next), and `feedback.claimVerdicts` replays verdicts across every briefing —
+ * so an artifact-only key means marking one week's claim "not relevant"
+ * silently hides next week's, and every future development on that thread. The
+ * sentence in the key scopes the verdict to the claim it was given on.
+ *
+ * Mirrors `@cr/core`'s `feedbackClaimKey` and the store's `char(31)` join
+ * expression; kept as a local copy because the renderer takes no `@cr/core`
+ * dependency (it talks only through the bridge).
+ */
+const FEEDBACK_KEY_SEP = String.fromCharCode(31);
+function feedbackKeyOf(artifactId: string, claimText: string): string {
+  return `${artifactId}${FEEDBACK_KEY_SEP}${claimText}`;
+}
+
+/**
  * Identity for "is this the same bullet". `citation.artifactId` alone is not
  * enough — one thread's artifact can legitimately back several distinct
  * claims (see `bulletsForChunks`'s key comment) — so the claim text is part
@@ -230,6 +250,15 @@ export function BriefingView({
    */
   const [resolvedArtifactIds, setResolvedArtifactIds] = useState<Set<string>>(() => new Set());
   const [claimVerdicts, setClaimVerdicts] = useState<Record<string, FeedbackInput['verdict']>>({});
+  /**
+   * Whether to show the items the user judged away.
+   *
+   * A dismissal must be reversible and must never be silent: the count below
+   * the list says how many are hidden, and this reveals them — the same
+   * discipline the `+N more` overflow follows. Something that vanishes with no
+   * trace is indistinguishable from a bug.
+   */
+  const [showDismissed, setShowDismissed] = useState(false);
   /** A-4 cap for the changed list; replaced by the config value once known. */
   const [maxChangedItems, setMaxChangedItems] = useState(DEFAULT_MAX_CHANGED_ITEMS);
   /** True once the user has expanded past the cap. Never collapses again. */
@@ -367,35 +396,41 @@ export function BriefingView({
     setOpenClaimId((current) => (current === claimId ? null : claimId));
   }, []);
 
-  // Replays feedback already on file (FR-12) as claim ids appear, so a restart
+  // Replays feedback already on file (FR-12) as claims appear, so a restart
   // — or a still-open pending item resurfacing under a new `briefingId` — does
   // not ask the user to re-judge a claim they already answered. Runs off
   // `pending`/`claims` rather than once on mount: streamed claims arrive one
-  // chunk at a time, each with a claim id nothing has looked up yet.
+  // chunk at a time, each with a key nothing has looked up yet.
+  //
+  // Keyed by `feedbackKeyOf` (artifact + sentence), not the bare artifact id: a
+  // reworded claim about the same thread is a different key, so it correctly
+  // gets no verdict back and is shown rather than pre-dismissed.
   useEffect(() => {
-    const ids = new Set<string>();
+    const keys = new Set<string>();
     for (const item of pending) {
-      if (item.citationArtifactId !== null) ids.add(item.citationArtifactId);
+      if (item.citationArtifactId !== null) {
+        keys.add(feedbackKeyOf(item.citationArtifactId, item.description));
+      }
     }
-    for (const c of claims) ids.add(claimIdOf(c));
+    for (const c of claims) keys.add(feedbackKeyOf(claimIdOf(c), c.claim));
 
-    const newIds = [...ids].filter((id) => !requestedVerdictIds.current.has(id));
-    if (newIds.length === 0) return;
-    for (const id of newIds) requestedVerdictIds.current.add(id);
+    const newKeys = [...keys].filter((k) => !requestedVerdictIds.current.has(k));
+    if (newKeys.length === 0) return;
+    for (const k of newKeys) requestedVerdictIds.current.add(k);
 
     try {
       getBridge()
-        .feedback.claimVerdicts(newIds)
+        .feedback.claimVerdicts(newKeys)
         .then((result) => {
           setClaimVerdicts((current) => ({ ...current, ...result }));
         })
         .catch(() => {
           // Best-effort: a failed lookup just leaves those claims seeded as
           // unanswered, same as before this feature existed.
-          for (const id of newIds) requestedVerdictIds.current.delete(id);
+          for (const k of newKeys) requestedVerdictIds.current.delete(k);
         });
     } catch {
-      for (const id of newIds) requestedVerdictIds.current.delete(id);
+      for (const k of newKeys) requestedVerdictIds.current.delete(k);
     }
   }, [pending, claims]);
 
@@ -469,27 +504,38 @@ export function BriefingView({
    * INSIDE `FeedbackControls`' row (same line as Relevant/Not relevant/Wrong),
    * and only this function has the `FeedbackControls` element to put it in.
    * `bulletsForChunks` (streamed claims, no pending item behind them) calls
-   * this with no second argument, so nothing extra renders there.
+   * this with no `resolveAction`, so nothing extra renders there.
+   *
+   * `artifactId` drives the drill-down (`claim:drilldown` resolves provenance
+   * from it); `claimText` is only used to build the verdict key, which is
+   * scoped to the exact sentence so a verdict cannot leak onto a sibling or a
+   * later reworded claim about the same thread.
    */
   const renderDetail = useCallback(
-    (claimId: string, resolveAction?: ReactNode): ReactNode => {
+    (artifactId: string, claimText: string, resolveAction?: ReactNode): ReactNode => {
+      const feedbackKey = feedbackKeyOf(artifactId, claimText);
       const detail: ReactNode[] = [];
       // `unmountOnExit` keeps `DrillDownPanel` unmounted while closed, so its
       // `claim:drilldown` fetch only fires when the user actually opens it —
       // same as the previous conditional mount, now with a slide animation.
       detail.push(
-        <Collapse key="drilldown" in={openClaimId === claimId} unmountOnExit>
-          <DrillDownPanel claimId={claimId} onClose={() => setOpenClaimId(null)} />
+        <Collapse key="drilldown" in={openClaimId === artifactId} unmountOnExit>
+          <DrillDownPanel claimId={artifactId} onClose={() => setOpenClaimId(null)} />
         </Collapse>,
       );
       if (briefingId !== null) {
-        const verdict = claimVerdicts[claimId];
+        const verdict = claimVerdicts[feedbackKey];
         detail.push(
           <FeedbackControls
             key="feedback"
             briefingId={briefingId}
-            claimId={claimId}
+            claimId={feedbackKey}
             {...(verdict === undefined ? {} : { initialVerdict: verdict })}
+            // Recorded locally the moment the store confirms, so a dismissed
+            // item leaves the list immediately instead of on the next refresh.
+            onVerdict={(next) =>
+              setClaimVerdicts((current) => ({ ...current, [feedbackKey]: next }))
+            }
           >
             {resolveAction}
           </FeedbackControls>,
@@ -517,9 +563,13 @@ export function BriefingView({
           text={chunk.claim}
           claimId={claimId}
           citationLabel={CITATION_CHIP_LABEL} // standardized across every claim, see ClaimBullet.tsx
+          // The declared project behind this claim, resolved in the main
+          // process from the `belongs_to` edge (`ipc/briefing.ts`). Absent for
+          // an untagged thread, which renders no badge at all.
+          projectName={chunk.citation.projectName}
           onCitationClick={toggleDrilldown}
         >
-          {renderDetail(claimId)}
+          {renderDetail(claimId, chunk.claim)}
         </ClaimBullet>
       );
     });
@@ -545,9 +595,41 @@ export function BriefingView({
   // P2: every non-obligation claim, in canonical section order. Sorted rather
   // than concatenated per section so one flat list still reads in the order the
   // four-section layout would have shown.
-  const changedClaims = CHANGED_SECTIONS.flatMap((section) =>
+  const allChangedClaims = CHANGED_SECTIONS.flatMap((section) =>
     claims.filter((chunk) => sectionOf(chunk) === section && isLive(chunk)),
   );
+
+  /**
+   * Claims the user has judged out of the way.
+   *
+   * `wrong` and `irrelevant` both mean "get this off my screen" — one says the
+   * line is not true, the other that it does not matter — so both dismiss.
+   * `relevant` does NOT: hiding what somebody just called useful, on a list
+   * they are in the middle of reading, would punish the one positive judgement
+   * the controls offer.
+   *
+   * Separate from `isLive` above, which drops what the user RESOLVED in this
+   * view. Both remove a bullet; they answer different questions, and a
+   * resolution is not a judgement about the claim.
+   *
+   * DURABLE, not just until the next refresh. `feedback.claimVerdicts` returns
+   * verdicts across every briefing, so a dismissal survives Refresh and a
+   * restart — which is what makes it a decision rather than a gesture.
+   *
+   * Scoped by `feedbackKeyOf` (artifact + exact sentence), NOT the bare
+   * artifact id: a thread recurs with a differently-worded claim in each
+   * briefing, and an artifact-scoped dismissal would silently hide every future
+   * development on that thread once one of its claims was marked away.
+   */
+  const isDismissed = (chunk: ClaimChunk): boolean => {
+    const verdict = claimVerdicts[feedbackKeyOf(claimIdOf(chunk), chunk.claim)];
+    return verdict === 'wrong' || verdict === 'irrelevant';
+  };
+
+  const dismissedCount = allChangedClaims.filter(isDismissed).length;
+  const changedClaims = showDismissed
+    ? allChangedClaims
+    : allChangedClaims.filter((chunk) => !isDismissed(chunk));
   const visibleChanged = showAllChanged ? changedClaims : changedClaims.slice(0, maxChangedItems);
   const hiddenChangedCount = changedClaims.length - visibleChanged.length;
 
@@ -647,6 +729,20 @@ export function BriefingView({
             <Box sx={{ mt: 1.5 }}>
               <Button size="small" onClick={() => setShowAllChanged(true)}>
                 Show {hiddenChangedCount} more
+              </Button>
+            </Box>
+          ) : null}
+
+          {/* Dismissals are disclosed and reversible. Same rule as the overflow
+              above and as the OI-1 still-processing note: a count stays
+              visible, because something that disappears with no trace is
+              indistinguishable from a bug. */}
+          {dismissedCount > 0 ? (
+            <Box sx={{ mt: 1 }}>
+              <Button size="small" color="inherit" onClick={() => setShowDismissed((v) => !v)}>
+                {showDismissed
+                  ? 'Hide what you marked'
+                  : `${dismissedCount} hidden by your feedback — show`}
               </Button>
             </Box>
           ) : null}

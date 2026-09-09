@@ -43,6 +43,7 @@ const {
   MAX_SOURCE_QUOTE_CHARS,
   DEFAULT_MAX_CHANGED_ITEMS,
   listPending,
+  projectNameFor,
   parseBriefingWindow,
   rankPendingItems,
   registerBriefingHandlers,
@@ -1167,5 +1168,84 @@ describe('briefing:resumePoint carries the A-4 cap', () => {
         getResumePoint({ pending, maxChangedItems, startGeneration: () => {} } as Deps),
       ).toEqual({ windowStart: null, maxChangedItems: DEFAULT_MAX_CHANGED_ITEMS });
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The project label                                                          */
+/* -------------------------------------------------------------------------- */
+
+describe('projectNameFor — the badge behind every item', () => {
+  /** A graph double: artifact → projects, and project → {stakesWeight, name}. */
+  const fakeGraph = (
+    edges: Record<string, string[]>,
+    projects: Record<string, { stakesWeight: number; name?: string }>,
+  ) => ({
+    relatedIds: (fromId: string) => edges[fromId] ?? [],
+    getProject: (projectId: string) => projects[projectId],
+  });
+
+  it('names the project an artifact belongs to', () => {
+    const graphDouble = fakeGraph({ 'art-1': ['p-1'] }, { 'p-1': { stakesWeight: 3, name: 'Migration' } });
+
+    expect(projectNameFor(graphDouble, 'art-1')).toBe('Migration');
+  });
+
+  it('picks the HIGHEST-stakes project when an artifact belongs to several', () => {
+    // Deliberately the same rule the ranker applies. The label has to name the
+    // project that actually moved this item up the list; naming a different one
+    // would be worse than naming none.
+    const graphDouble = fakeGraph(
+      { 'art-1': ['p-low', 'p-high'] },
+      { 'p-low': { stakesWeight: 1, name: 'Housekeeping' }, 'p-high': { stakesWeight: 5, name: 'Migration' } },
+    );
+
+    expect(projectNameFor(graphDouble, 'art-1')).toBe('Migration');
+  });
+
+  it('is undefined for an untagged artifact — the ordinary case', () => {
+    expect(projectNameFor(fakeGraph({}, {}), 'art-1')).toBeUndefined();
+  });
+
+  it('is undefined with no graph, and for a null artifact', () => {
+    expect(projectNameFor(undefined, 'art-1')).toBeUndefined();
+    expect(projectNameFor(fakeGraph({ 'art-1': ['p-1'] }, { 'p-1': { stakesWeight: 3, name: 'X' } }), null)).toBeUndefined();
+  });
+
+  it('ignores an edge pointing at a project that no longer exists', () => {
+    expect(projectNameFor(fakeGraph({ 'art-1': ['ghost'] }, {}), 'art-1')).toBeUndefined();
+  });
+
+  it('ignores a blank or missing name rather than rendering an empty badge', () => {
+    const blank = fakeGraph({ 'art-1': ['p-1'] }, { 'p-1': { stakesWeight: 3, name: '   ' } });
+    const nameless = fakeGraph({ 'art-1': ['p-1'] }, { 'p-1': { stakesWeight: 3 } });
+
+    expect(projectNameFor(blank, 'art-1')).toBeUndefined();
+    expect(projectNameFor(nameless, 'art-1')).toBeUndefined();
+  });
+});
+
+describe('the project label on pending items', () => {
+  it('attaches the project name to a tagged obligation', () => {
+    const artifact = 'art-tagged';
+    seedArtifact(artifact);
+    seedProject('Vendor SOW', 4, [artifact]);
+    seedPending({ pendingId: 'p1', confidence: 0.9, createdAt: 1_000, artifactId: artifact });
+
+    const [item] = listPending(makeDeps());
+
+    expect(item?.projectName).toBe('Vendor SOW');
+  });
+
+  it('omits the key entirely for an untagged obligation', () => {
+    const artifact = 'art-untagged';
+    seedArtifact(artifact);
+    seedPending({ pendingId: 'p1', confidence: 0.9, createdAt: 1_000, artifactId: artifact });
+
+    const [item] = listPending(makeDeps());
+
+    // Absent, not `undefined`-valued: `exactOptionalPropertyTypes` is the rule
+    // this codebase holds every optional payload field to.
+    expect(item).not.toHaveProperty('projectName');
   });
 });

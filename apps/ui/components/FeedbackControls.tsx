@@ -38,6 +38,14 @@ export interface FeedbackControlsProps {
    * resurfaces under a new `briefingId`.
    */
   initialVerdict?: FeedbackInput['verdict'];
+  /**
+   * Called with the verdict once it is PERSISTED, so the list can act on it.
+   *
+   * After the write, deliberately: `wrong`/`irrelevant` dismiss the item from
+   * the changed list, and removing something from the screen before the store
+   * confirmed it would be a lie the next refresh exposes.
+   */
+  onVerdict?: (verdict: FeedbackInput['verdict']) => void;
   /** Extra controls on the SAME row as the verdict buttons — today, "Mark resolved". */
   children?: ReactNode;
 }
@@ -53,6 +61,7 @@ export function FeedbackControls({
   briefingId,
   claimId,
   initialVerdict,
+  onVerdict,
   children,
 }: FeedbackControlsProps): ReactNode {
   const [recorded, setRecorded] = useState<FeedbackInput['verdict'] | null>(initialVerdict ?? null);
@@ -76,6 +85,7 @@ export function FeedbackControls({
           .then((result) => {
             if (result.ok) {
               setRecorded(verdict);
+              onVerdict?.(verdict);
             } else {
               setError(result.reason ?? 'feedback was rejected');
             }
@@ -85,7 +95,7 @@ export function FeedbackControls({
         setError(describe(cause));
       }
     },
-    [briefingId, claimId],
+    [briefingId, claimId, onVerdict],
   );
 
   return (

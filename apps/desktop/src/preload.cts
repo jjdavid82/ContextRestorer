@@ -151,6 +151,16 @@ export interface PendingItem {
    * list does not. `null` when it could not be resolved.
    */
   sourceQuote: string | null;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** A citation anchoring a claim to a concrete ingested event. */
@@ -160,6 +170,16 @@ export interface Citation {
   source: Source;
   /** Deep link back into Slack/Gmail. */
   externalUrl?: string;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** One validated claim, streamed as it is produced. */
@@ -354,6 +374,16 @@ export interface LocalMetrics {
   gateDrops: MetricCount[];
   /** SEC-5: accepted claims that had something redacted. */
   redactedClaims: number;
+  /**
+   * Verdicts recorded per kind (`relevant` / `irrelevant` / `wrong` /
+   * `missed`), all time. Empty when nothing has been judged.
+   *
+   * Shown so the user can see their feedback was stored. It deliberately does
+   * NOT claim the ranking changed — nothing learns from these (X-2); they
+   * exist to be exported as labelled data for the offline eval.
+   */
+  feedbackCounts: Record<string, number>;
+
   /** SEC-5: total values redacted. */
   redactionCount: number;
   /** SEC-5: detector kinds that fired. Kinds only — never a redacted value. */
@@ -705,13 +735,20 @@ export interface ContextRestorerBridge {
   feedback: {
     submit(feedback: FeedbackSubmission): Promise<OkResult>;
     /**
-     * The verdict already on file for each of `claimIds`, keyed by claim id —
-     * across every briefing, not just the current one. Seeds "✓ recorded" so a
-     * restarted app (or a still-open pending item resurfacing under a new
-     * `briefingId`) does not ask the user to re-judge something already
-     * answered. A claim with no key in the result has no verdict yet.
+     * The verdict already on file for each claim key — `<artifact id><U+001F>
+     * <claim sentence>`, the same key `feedback.submit` records — across every
+     * briefing, not just the current one. Seeds "✓ recorded" so a restarted app
+     * (or a still-open pending item resurfacing under a new `briefingId`) does
+     * not ask the user to re-judge something already answered. A key absent
+     * from the result has no verdict yet; a reworded claim is a different key
+     * and correctly comes back unanswered.
      */
-    claimVerdicts(claimIds: string[]): Promise<Record<string, FeedbackVerdict>>;
+    claimVerdicts(claimKeys: string[]): Promise<Record<string, FeedbackVerdict>>;
+    /**
+     * Write every recorded verdict to a local JSON file (FR-7), and report the
+     * path. Nothing leaves the machine.
+     */
+    export(): Promise<FeedbackExportResult>;
   };
   health: {
     onSources(cb: (health: SourceHealth[]) => void): Unsubscribe;
@@ -767,6 +804,24 @@ export interface ContextRestorerBridge {
     get(): Promise<ModelInfo>;
     setChat(model: string): Promise<OkResult>;
   };
+}
+
+
+/**
+ * `feedback:export` — every recorded verdict written to a local JSON file.
+ *
+ * A LOCAL file on the same machine; nothing is uploaded. The `wrong` verdicts
+ * come out as `unsupportedClaims`, which is the exact shape a fixture's
+ * `ground_truth.unsupported_claims` takes — real, user-confirmed negatives for
+ * the offline eval.
+ */
+export interface FeedbackExportResult {
+  ok: boolean;
+  reason?: string;
+  /** Absolute path written. Present only when `ok`. */
+  path?: string;
+  total?: number;
+  counts?: Record<string, number>;
 }
 
 const bridge: ContextRestorerBridge = {
@@ -869,6 +924,7 @@ const bridge: ContextRestorerBridge = {
         claimIds: claimIds.map(String),
       }) as Promise<Record<string, FeedbackVerdict>>;
     },
+    export: () => ipcRenderer.invoke('feedback:export') as Promise<FeedbackExportResult>,
   },
   health: {
     onSources: (cb) => subscribe<SourceHealth[]>('health:sources', cb),

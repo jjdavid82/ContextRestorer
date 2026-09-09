@@ -36,6 +36,15 @@ import type {
 
 const BRIEFING_ID = 'brief-1';
 
+/**
+ * The key a verdict is recorded against — mirrors `BriefingView.feedbackKeyOf`
+ * (`<artifact id><U+001F><claim sentence>`). Verdicts are scoped to the exact
+ * sentence, not the bare artifact id, so a reworded claim about the same thread
+ * is not pre-dismissed.
+ */
+const fbKey = (artifactId: string, claimText: string): string =>
+  `${artifactId}${String.fromCharCode(31)}${claimText}`;
+
 /** Listener registries, exposed so tests can emit and inspect leak state. */
 interface MockBridge {
   bridge: ContextRestorerBridge;
@@ -176,7 +185,9 @@ function installBridge(
     },
     claim: { drilldown },
     shell: { openExternal },
-    feedback: { submit, claimVerdicts },
+    // `export` is bridge-contract only here: the briefing view never exports,
+    // that is the Diagnostics panel's button.
+    feedback: { submit, claimVerdicts, export: vi.fn(async () => ({ ok: true })) },
     health: { onSources: () => () => undefined },
     // `poll:refresh` — present only to satisfy the bridge contract; the briefing
     // view never forces a poll, same reasoning as `debug.metrics` below.
@@ -196,6 +207,7 @@ function installBridge(
         reEntry: { count: 0, p50Ms: null, p95Ms: null },
         gateDrops: [],
         redactedClaims: 0,
+        feedbackCounts: {},
         redactionCount: 0,
         redactionKinds: [],
         triggers: { total: 0, byReason: [], byOutcome: [] },
@@ -438,12 +450,14 @@ describe('BriefingView — pending then stream', () => {
       // Simulates feedback given in an EARLIER run of the app (or a prior
       // briefing that surfaced the same still-open item) — nothing is clicked
       // in this test.
-      claimVerdicts: { 'art-p1': 'relevant' },
+      claimVerdicts: { [fbKey('art-p1', 'Sign off on the two SRE reqs.')]: 'relevant' },
     });
     await renderBriefing(mock);
 
     await screen.findByText('Sign off on the two SRE reqs.');
-    expect(mock.claimVerdicts).toHaveBeenCalledWith(['art-p1']);
+    expect(mock.claimVerdicts).toHaveBeenCalledWith([
+      fbKey('art-p1', 'Sign off on the two SRE reqs.'),
+    ]);
 
     const relevant = await screen.findByRole('button', { name: 'Relevant' });
     await waitFor(() => expect(relevant.getAttribute('aria-pressed')).toBe('true'));
@@ -845,25 +859,29 @@ describe('FeedbackControls — verdicts (FR-7)', () => {
     await waitFor(() => expect(mock.submit).toHaveBeenCalledTimes(1));
     expect(mock.submit).toHaveBeenCalledWith({
       briefingId: BRIEFING_ID,
-      claimId: 'art-1',
+      claimId: fbKey('art-1', 'Auth refactor shipped to staging.'),
       verdict: 'relevant',
     });
     // The clicked button itself reads as active — no separate "recorded" note.
     await waitFor(() => expect(relevant.getAttribute('aria-pressed')).toBe('true'));
 
-    // Changing one's mind must still work: the pressed state does not disable
-    // the other verdicts.
+    // Changing one's mind must still work: a recorded verdict does not disable
+    // the other buttons. Switching to `irrelevant` also DISMISSES the item now
+    // (see "judging an item out of the way"), so the assertion is that the
+    // second verdict was written and the bullet left — not that a button which
+    // has since unmounted still reads as pressed.
     const notRelevant = screen.getByRole('button', { name: 'Not relevant' });
     fireEvent.click(notRelevant);
 
     await waitFor(() => expect(mock.submit).toHaveBeenCalledTimes(2));
     expect(mock.submit).toHaveBeenLastCalledWith({
       briefingId: BRIEFING_ID,
-      claimId: 'art-1',
+      claimId: fbKey('art-1', 'Auth refactor shipped to staging.'),
       verdict: 'irrelevant',
     });
-    await waitFor(() => expect(notRelevant.getAttribute('aria-pressed')).toBe('true'));
-    expect(relevant.getAttribute('aria-pressed')).toBe('false');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Not relevant' })).toBeNull(),
+    );
   });
 
   it('offers the three claim verdicts, and only those, on a claim', async () => {
@@ -1001,5 +1019,157 @@ describe('BriefingView — subscription lifecycle', () => {
     mock.emitChunk(chunk({ claim: 'Only once, please.' }));
     await screen.findByText('Only once, please.');
     expect(screen.getAllByText('Only once, please.')).toHaveLength(1);
+  });
+});
+
+describe('the project badge', () => {
+  it('labels a changed item with the project its thread belongs to', async () => {
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+
+    h.emitChunk(
+      chunk({
+        claim: 'The team postponed the migration to Q4.',
+        citation: citation({ projectName: 'Platform Migration' }),
+      }),
+    );
+
+    const badge = await screen.findByTestId('project-badge');
+    expect(badge.textContent).toBe('Platform Migration');
+    // NFR-9: the name is the whole signal and it is plain text, so the badge
+    // survives greyscale and a screen reader. The label says what it IS,
+    // because "Platform Migration" alone does not read as a project.
+    expect(badge.getAttribute('aria-label')).toBe('Project: Platform Migration');
+  });
+
+  it('labels an obligation with its project too', async () => {
+    const h = installBridge({
+      pending: [
+        {
+          pendingId: 'p-1',
+          description: 'Approve the vendor SOW.',
+          confidence: 0.9,
+          citationArtifactId: 'art-1',
+          sourceQuote: null,
+          projectName: 'Vendor SOW',
+        },
+      ],
+    });
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    await waitFor(() => expect(h.pending).toHaveBeenCalled());
+
+    const badge = await screen.findByTestId('project-badge');
+    expect(badge.textContent).toBe('Vendor SOW');
+  });
+
+  it('renders NO badge for an untagged item', async () => {
+    // The ordinary case: most threads carry no `belongs_to` edge, and an empty
+    // or placeholder badge on every one of them would be noise.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+
+    h.emitChunk(chunk({ claim: 'Priya shipped the retry logic.' }));
+
+    await screen.findByText('Priya shipped the retry logic.');
+    expect(screen.queryByTestId('project-badge')).toBeNull();
+  });
+});
+
+describe('judging an item out of the way (option 2)', () => {
+  const ARTIFACT = 'art-changed';
+  const CLAIM_TEXT = 'Q4 headcount is frozen.';
+  /** The verdict key: artifact id + the exact sentence — see `feedbackKeyOf`. */
+  const KEY = fbKey(ARTIFACT, CLAIM_TEXT);
+
+  const changed = () =>
+    chunk({
+      section: 'Worth knowing',
+      claim: CLAIM_TEXT,
+      citation: citation({ artifactId: ARTIFACT }),
+    });
+
+  it('removes a claim the user marks Wrong, without waiting for a refresh', async () => {
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wrong' }));
+
+    // Gone once the store confirms — not before, and not only after a reload.
+    await waitFor(() => expect(screen.queryByText('Q4 headcount is frozen.')).toBeNull());
+    expect(h.submit).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'wrong', claimId: KEY }),
+    );
+  });
+
+  it('removes a claim the user marks Not relevant', async () => {
+    // Both verdicts mean "get this off my screen": one says the line is not
+    // true, the other that it does not matter.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not relevant' }));
+
+    await waitFor(() => expect(screen.queryByText('Q4 headcount is frozen.')).toBeNull());
+  });
+
+  it('KEEPS a claim the user marks Relevant', async () => {
+    // Hiding what somebody just called useful, on a list they are reading,
+    // would punish the one positive judgement the controls offer.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Relevant' }));
+
+    await waitFor(() => expect(h.submit).toHaveBeenCalled());
+    expect(screen.getByText('Q4 headcount is frozen.')).toBeTruthy();
+  });
+
+  it('discloses the count and can bring them back', async () => {
+    // A dismissal must never be silent: something that disappears with no
+    // trace is indistinguishable from a bug.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wrong' }));
+    const reveal = await screen.findByRole('button', { name: /1 hidden by your feedback/i });
+
+    fireEvent.click(reveal);
+
+    expect(screen.getByText('Q4 headcount is frozen.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /hide what you marked/i })).toBeTruthy();
+  });
+
+  it('stays dismissed across a reload, from the stored verdict', async () => {
+    // `claimVerdicts` reads verdicts across every briefing, keyed by the
+    // artifact + exact sentence — so the dismissal is a decision, not a gesture
+    // that a refresh undoes, and it does not leak onto a reworded claim.
+    const h = installBridge({ claimVerdicts: { [KEY]: 'wrong' } });
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+
+    await waitFor(() => expect(h.claimVerdicts).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText(CLAIM_TEXT)).toBeNull());
+    expect(await screen.findByRole('button', { name: /1 hidden by your feedback/i })).toBeTruthy();
+  });
+
+  it('does not hide a differently-worded claim from the same thread', async () => {
+    // The finding this guards: one thread's artifact backs a new claim in each
+    // briefing. A stored verdict on last week's wording must not pre-dismiss
+    // this week's development.
+    const h = installBridge({ claimVerdicts: { [fbKey(ARTIFACT, 'Old wording nobody cares about.')]: 'wrong' } });
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+
+    await waitFor(() => expect(h.claimVerdicts).toHaveBeenCalled());
+    expect(await screen.findByText(CLAIM_TEXT)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /hidden by your feedback/i })).toBeNull();
   });
 });

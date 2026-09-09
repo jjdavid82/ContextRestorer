@@ -1,5 +1,5 @@
 import type { Database } from 'better-sqlite3';
-import { newId, type Feedback, type FeedbackVerdict } from '@cr/core';
+import { newId, parseFeedbackClaimKey, type Feedback, type FeedbackVerdict } from '@cr/core';
 
 /** Raw `feedback` row shape as returned by better-sqlite3. */
 interface FeedbackRow {
@@ -49,6 +49,40 @@ function toFeedback(row: FeedbackRow): Feedback {
  * signal outlives any single briefing. Validation therefore has to happen in
  * this layer; the database will not do it for us.
  */
+/**
+ * One recorded verdict with the claim it judged (FR-7's exportable shape).
+ *
+ * `claimText`/`section`/`citationArtifactId` are `null` when the claim itself
+ * is gone — a briefing-level verdict (`missed` carries no `claimId`), or a
+ * claim aged out by retention. Null rather than omitted, so a consumer must
+ * decide what to do about it rather than silently seeing a shorter list.
+ */
+export interface LabeledVerdict {
+  feedbackId: string;
+  briefingId: string;
+  claimId: string | null;
+  verdict: FeedbackVerdict;
+  note: string | null;
+  createdAt: number;
+  /** The sentence the user judged. */
+  claimText: string | null;
+  section: string | null;
+  citationArtifactId: string | null;
+}
+
+/** Raw join row backing {@link LabeledVerdict}. */
+interface LabeledRow {
+  feedback_id: string;
+  briefing_id: string;
+  claim_id: string | null;
+  verdict: string;
+  note: string | null;
+  created_at: number;
+  claim_text: string | null;
+  section: string | null;
+  citation_artifact_id: string | null;
+}
+
 export class FeedbackRepo {
   constructor(private db: Database) {}
 
@@ -104,23 +138,106 @@ export class FeedbackRepo {
   }
 
   /**
-   * The most recent verdict recorded for each of `claimIds`, across EVERY
+   * Every verdict the user has recorded, joined to the claim it judged.
+   *
+   * The `feedback` table alone is close to useless outside the UI: it stores a
+   * `claim_id` and a word, and the sentence that was judged lives in
+   * `briefing_claims`. Without the join, a verdict cannot be read by anything
+   * that was not already looking at that briefing — which is why FR-7's
+   * "feeds offline eval" had no reader at all: there was nothing legible to
+   * feed it.
+   *
+   * ### What `feedback.claim_id` actually holds
+   *
+   * The renderer has no `briefing_claims.claim_id` on the wire — `briefing:chunk`
+   * carries a `Citation`, not a claim row — so `FeedbackControls` submits a
+   * `` (U+001F)-joined `<citation artifact id><sep><claim sentence>` key
+   * (see `@cr/core`'s `feedbackClaimKey`). Joining `c.claim_id = f.claim_id`
+   * therefore matched nothing in production: `briefing_claims.claim_id` is a
+   * random `newId()`. The join reconstructs the same key from `briefing_claims`
+   * with `citation_artifact_id || char(31) || text`, so it matches the exact
+   * claim the verdict was given on — not merely the thread, which would fold a
+   * "not relevant" onto every later, differently-worded claim about it.
+   *
+   * A LEFT JOIN, deliberately. Feedback carries no foreign key (it must outlive
+   * the briefing it refers to, and the 90-day purge does not spare claims), so
+   * a verdict whose claim has since been deleted — or a briefing-level `missed`
+   * verdict with no `claim_id` at all — still comes back. Its sentence is
+   * recovered from the key itself when the `briefing_claims` row is gone, so a
+   * `wrong` verdict stays exportable past a retention sweep.
+   *
+   * @param sinceMs - Epoch ms lower bound (inclusive). Omit for everything.
+   */
+  listLabeled(sinceMs = 0): LabeledVerdict[] {
+    const rows = this.db
+      .prepare(
+        `SELECT f.feedback_id, f.briefing_id, f.claim_id, f.verdict, f.note, f.created_at,
+                c.text AS claim_text, c.section, c.citation_artifact_id
+           FROM feedback f
+           LEFT JOIN briefing_claims c
+             ON c.briefing_id = f.briefing_id
+            AND f.claim_id = c.citation_artifact_id || char(31) || c.text
+          WHERE f.created_at >= ?
+          ORDER BY f.created_at ASC`,
+      )
+      .all(sinceMs) as LabeledRow[];
+
+    return rows.map((row) => {
+      const fromKey = parseFeedbackClaimKey(row.claim_id);
+      return {
+        feedbackId: row.feedback_id,
+        briefingId: row.briefing_id,
+        claimId: row.claim_id,
+        verdict: row.verdict as FeedbackVerdict,
+        note: row.note,
+        createdAt: row.created_at,
+        // Prefer the live claim row; fall back to the sentence embedded in the
+        // key so the export survives the briefing being purged.
+        claimText: row.claim_text ?? fromKey?.claimText ?? null,
+        section: row.section,
+        citationArtifactId: row.citation_artifact_id ?? fromKey?.artifactId ?? null,
+      };
+    });
+  }
+
+  /**
+   * How many verdicts of each kind were recorded since `sinceMs`.
+   *
+   * Feeds the Diagnostics panel, so the user can see that pressing those
+   * buttons produced something. A verdict count is the smallest honest answer
+   * to "did that do anything" — it does not claim the ranking changed, because
+   * it did not (X-2).
+   */
+  countByVerdict(sinceMs = 0): Record<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT verdict, COUNT(*) AS n FROM feedback WHERE created_at >= ? GROUP BY verdict`,
+      )
+      .all(sinceMs) as Array<{ verdict: string; n: number }>;
+
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[row.verdict] = row.n;
+    return counts;
+  }
+
+  /**
+   * The most recent verdict recorded for each of `claimKeys`, across EVERY
    * briefing — not just one.
    *
-   * A still-open pending item resurfaces in every briefing generated before it
-   * is resolved, each under a fresh `briefingId`; the verdict the user gave it
-   * is a fact about the claim, not about which briefing happened to show it.
-   * Scoping this to one `briefingId` (as `listForBriefing` does) would forget
-   * that fact on the very next briefing, and the user would see "Relevant" ask
-   * to be answered again for something they already judged.
+   * Each key is a `feedbackClaimKey(artifactId, sentence)` (see `@cr/core`): a
+   * still-open obligation resurfaces in every briefing until it is resolved,
+   * each under a fresh `briefingId`, and the verdict is a fact about that claim
+   * — but only while its wording is unchanged. A reworded claim about the same
+   * thread is a different key and correctly gets no verdict back, so the user
+   * sees the new development instead of it being silently pre-dismissed.
    *
-   * A claim absent from the result has no feedback on file yet — the caller
+   * A key absent from the result has no feedback on file yet — the caller
    * treats that the same as "never asked", not as an error.
    */
-  verdictsForClaims(claimIds: string[]): Record<string, FeedbackVerdict> {
-    if (claimIds.length === 0) return {};
+  verdictsForClaims(claimKeys: string[]): Record<string, FeedbackVerdict> {
+    if (claimKeys.length === 0) return {};
 
-    const placeholders = claimIds.map(() => '?').join(', ');
+    const placeholders = claimKeys.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         `SELECT claim_id, verdict, created_at
@@ -128,7 +245,7 @@ export class FeedbackRepo {
           WHERE claim_id IN (${placeholders})
           ORDER BY created_at ASC`,
       )
-      .all(...claimIds) as Array<Pick<FeedbackRow, 'claim_id' | 'verdict' | 'created_at'>>;
+      .all(...claimKeys) as Array<Pick<FeedbackRow, 'claim_id' | 'verdict' | 'created_at'>>;
 
     const result: Record<string, FeedbackVerdict> = {};
     for (const row of rows) {

@@ -51,6 +51,16 @@ export interface ClaimBulletProps {
   claimId?: string | null;
   /** Chip label — every caller passes {@link CITATION_CHIP_LABEL}. Null hides the chip. */
   citationLabel?: string | null;
+  /**
+   * Declared project this item belongs to, rendered as its most prominent
+   * badge. Absent for an untagged item — the ordinary case.
+   *
+   * Deliberately louder than the citation chip and the confidence flag, and
+   * placed FIRST: the project is the largest ranking weight after obligation,
+   * and until it appeared here the user had no way to see that the declaration
+   * they made at onboarding was doing anything at all.
+   */
+  projectName?: string | undefined;
   /** Model confidence in [0, 1]. Omitted for claims that carry no score. */
   confidence?: number;
   /** Advisory shown after `LOW_CONFIDENCE_PREFIX` when the flag fires (Task 4.5). */
@@ -74,10 +84,27 @@ const META_SX = {
   mt: 0.75,
 } as const;
 
+/**
+ * The project badge: filled, not outlined, so it reads before the quieter
+ * `sources` chip beside it.
+ *
+ * NFR-9: colour is reinforcement, never the message. The project's NAME is the
+ * whole signal and it is plain text inside the chip, so the badge survives
+ * greyscale, a colour-blind reader and a screen reader identically — the
+ * `aria-label` restates what it is, because "Migration" alone does not say
+ * "project" to somebody who cannot see the styling.
+ */
+const PROJECT_CHIP_SX = {
+  fontWeight: 700,
+  letterSpacing: '0.01em',
+  maxWidth: '22ch',
+} as const;
+
 export function ClaimBullet({
   text,
   claimId = null,
   citationLabel = null,
+  projectName,
   confidence,
   lowConfidenceNote = DEFAULT_LOW_CONFIDENCE_NOTE,
   onCitationClick,
@@ -85,7 +112,9 @@ export function ClaimBullet({
 }: ClaimBulletProps): ReactNode {
   const lowConfidence = confidence !== undefined && confidence < LOW_CONFIDENCE_FLAG_THRESHOLD;
   const chipVisible = claimId !== null && citationLabel !== null;
-  const hasMeta = chipVisible || lowConfidence;
+  const project = projectName?.trim() ?? '';
+  const projectVisible = project !== '';
+  const hasMeta = chipVisible || lowConfidence || projectVisible;
 
   return (
     <Box component="li" sx={LI_SX}>
@@ -93,6 +122,16 @@ export function ClaimBullet({
 
       {hasMeta ? (
         <Box sx={META_SX}>
+          {projectVisible ? (
+            <Chip
+              size="small"
+              color="primary"
+              label={project}
+              aria-label={`Project: ${project}`}
+              data-testid="project-badge"
+              sx={PROJECT_CHIP_SX}
+            />
+          ) : null}
           {chipVisible ? (
             <Chip
               component="button"

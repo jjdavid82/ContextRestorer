@@ -117,14 +117,38 @@ export interface ExtractionFailureReader {
   listRecent(sinceMs: number, limit: number): { eventId: string; attempts: number; lastAt: number }[];
 }
 
+/** The one `FeedbackRepo` method the Diagnostics panel needs. */
+export interface FeedbackCountReader {
+  countByVerdict(sinceMs?: number): Record<string, number>;
+}
+
 export interface MetricsHandlerDeps {
   aiCalls: AiCallStatsReader;
   briefings: BriefingStatsReader;
   extractionFailures: ExtractionFailureReader;
+  /**
+   * Verdict counts, so the panel can show that pressing Relevant / Not
+   * relevant / Wrong produced something.
+   *
+   * Optional: absent, the panel reports zeroes for it rather than failing the
+   * whole view — the other numbers are still worth showing.
+   */
+  feedback?: FeedbackCountReader;
   /** Directory holding `trace-YYYY-MM-DD.jsonl`; `<userData>/logs` in production. */
   logsDir: string;
   /** Wall-clock now, for the activity window's lower bound. Injectable for tests. */
   nowMs?: number;
+}
+
+/** Verdict counts, degraded to empty rather than failing the whole panel. */
+function readFeedbackCounts(reader: FeedbackCountReader | undefined): Record<string, number> {
+  if (reader === undefined) return {};
+  try {
+    return reader.countByVerdict();
+  } catch (error) {
+    console.error('[metrics] feedback counts failed', error);
+    return {};
+  }
 }
 
 /** An empty view, used when a read fails. `available: false` says so honestly. */
@@ -137,6 +161,7 @@ const unavailable = (reason: string): LocalMetrics => ({
   reEntry: { count: 0, p50Ms: null, p95Ms: null },
   gateDrops: [],
   redactedClaims: 0,
+  feedbackCounts: {},
   redactionCount: 0,
   redactionKinds: [],
   triggers: { total: 0, byReason: [], byOutcome: [] },
@@ -237,6 +262,11 @@ export function collectLocalMetrics(deps: MetricsHandlerDeps): LocalMetrics {
       reEntry: deps.briefings.reEntryStats(),
       gateDrops: asRows(trace.gateDropsByReason),
       redactedClaims: trace.redactedClaims,
+      // All-time, not windowed like `recentActivity`: the question this answers
+      // is "have my verdicts been recorded at all", and a 7-day window would
+      // show zero to somebody who judged a briefing last month and is checking
+      // precisely because they suspect nothing was saved.
+      feedbackCounts: readFeedbackCounts(deps.feedback),
       redactionCount: trace.redactionCount,
       redactionKinds: trace.redactionKinds,
       triggers: {
