@@ -55,26 +55,41 @@ interface StoreOptions {
   expiredRawEvents?: number;
   vectorEventIds?: string[];
   narrativePaths?: string[];
+  /** Rows the wipe reports removing. Defaults to the sum of `rows`. */
+  rowsDeleted?: number;
   /** Make `deleteEverything` throw, standing in for a failed transaction. */
   deleteThrows?: boolean;
 }
 
 function makeStore(options: StoreOptions = {}): Deps['store'] {
   const rows = options.rows ?? summaryRows();
+  const rowTotal = Object.values(rows).reduce((sum, n) => sum + n, 0);
   return {
     summary: () => ({
       rowsByTable: rows,
-      totalRows: Object.values(rows).reduce((sum, n) => sum + n, 0),
+      totalRows: rowTotal,
       oldestEventAt: options.oldestEventAt ?? null,
       expiredRawEvents: options.expiredRawEvents ?? 0,
     }),
     deleteEverything: () => {
       if (options.deleteThrows === true) throw new Error('simulated disk failure');
       return {
+        // The real `deleteEverything` returns the DELETEs' own row count.
+        rowsDeleted: options.rowsDeleted ?? rowTotal,
         vectorEventIds: options.vectorEventIds ?? [],
         narrativePaths: options.narrativePaths ?? [],
       };
     },
+  };
+}
+
+/** A vector-store double whose `deleteAll` returns `n` (or throws). */
+function makeVectors(n: number | Error): { deleteAll: ReturnType<typeof vi.fn> } {
+  return {
+    deleteAll: vi.fn(async () => {
+      if (n instanceof Error) throw n;
+      return n;
+    }),
   };
 }
 
@@ -217,7 +232,7 @@ describe('deleteEverythingNow', () => {
       ...makeStore(),
       deleteEverything: () => {
         deleted = true;
-        return { vectorEventIds: [], narrativePaths: [] };
+        return { rowsDeleted: 0, vectorEventIds: [], narrativePaths: [] };
       },
     };
     const { vault, revoked } = makeVault(['slack', 'gmail']);
@@ -232,13 +247,13 @@ describe('deleteEverythingNow', () => {
   it('runs all four steps and reports each one', async () => {
     const unlinked: string[] = [];
     const { vault, revoked } = makeVault(['slack', 'gmail']);
+    const vectors = makeVectors(3);
     const deps = makeDeps({
       store: makeStore({
         rows: summaryRows({ events: 40, state_deltas: 2 }),
-        vectorEventIds: ['e-1', 'e-2', 'e-3'],
         narrativePaths: ['/data/briefings/b1.md', '/data/briefings/b2.md'],
       }),
-      vectors: { deleteByEventIds: vi.fn(async (ids: string[]) => ids.length) },
+      vectors,
       unlink: async (path: string) => {
         unlinked.push(path);
       },
@@ -248,10 +263,11 @@ describe('deleteEverythingNow', () => {
     const result = await deleteEverythingNow({ confirm: CONFIRM_PHRASE }, deps);
 
     expect(result.ok).toBe(true);
-    // Counted BEFORE the wipe — afterwards every table is empty and this
-    // number would always be 0.
+    // Straight from the wipe's own DELETE counts, not a pre-scan.
     expect(result.rowsDeleted).toBe(42);
     expect(result.vectorsDeleted).toBe(3);
+    // The whole table goes — `deleteAll` takes no event ids.
+    expect(vectors.deleteAll).toHaveBeenCalledWith();
     expect(result.filesDeleted).toBe(2);
     expect(result.filesFailed).toBe(0);
     expect(result.credentialsRevoked).toEqual(['slack', 'gmail']);
@@ -260,19 +276,39 @@ describe('deleteEverythingNow', () => {
     expect(revoked).toEqual(['slack', 'gmail']);
   });
 
-  it('revokes BOTH sources even when only one was connected (SEC-8)', async () => {
-    // A revoked-but-still-present vault entry is exactly the state a wipe has
-    // to clear, so the erase does not consult connectivity first.
-    const { vault, revoked } = makeVault([]);
+  it('does not claim to have disconnected a source that was never connected', async () => {
+    // `vault.revoke` is a silent no-op on an absent entry, so revoking blindly
+    // and reporting every attempt would tell a fresh install "disconnected
+    // slack and gmail".
+    const { vault, revoked } = makeVault(['slack']);
 
-    await deleteEverythingNow({ confirm: CONFIRM_PHRASE }, makeDeps({ vault }));
+    const result = await deleteEverythingNow(
+      { confirm: CONFIRM_PHRASE },
+      makeDeps({ vectors: makeVectors(0), vault }),
+    );
 
+    // Revoke is still attempted on both (it clears a stale/unreadable blob)…
     expect(revoked).toEqual(['slack', 'gmail']);
+    // …but only the one that actually held a credential is reported.
+    expect(result.credentialsRevoked).toEqual(['slack']);
+    expect(result.incomplete).toEqual([]);
+  });
+
+  it('reports no credentials revoked on an install with none connected', async () => {
+    const { vault } = makeVault([]);
+
+    const result = await deleteEverythingNow(
+      { confirm: CONFIRM_PHRASE },
+      makeDeps({ vectors: makeVectors(0), vault }),
+    );
+
+    expect(result.credentialsRevoked).toEqual([]);
+    expect(result.incomplete).toEqual([]);
   });
 
   it('fails closed when the SQLite wipe throws, and skips every later step', async () => {
     const { vault, revoked } = makeVault(['slack']);
-    const vectors = { deleteByEventIds: vi.fn(async () => 0) };
+    const vectors = makeVectors(0);
 
     const result = await deleteEverythingNow(
       { confirm: CONFIRM_PHRASE },
@@ -282,25 +318,21 @@ describe('deleteEverythingNow', () => {
     expect(result).toEqual({ ok: false, reason: 'store_error' });
     // Nothing outside SQLite may be erased on this path: the transaction rolled
     // back, so the database still holds the events those vectors belong to.
-    expect(vectors.deleteByEventIds).not.toHaveBeenCalled();
+    expect(vectors.deleteAll).not.toHaveBeenCalled();
     expect(revoked).toEqual([]);
   });
 
   it('still reports ok when the vector eviction fails, and names it as incomplete', async () => {
     const deps = makeDeps({
-      store: makeStore({ rows: summaryRows({ events: 5 }), vectorEventIds: ['e-1'] }),
-      vectors: {
-        deleteByEventIds: async () => {
-          throw new Error('lance table locked');
-        },
-      },
+      store: makeStore({ rows: summaryRows({ events: 5 }) }),
+      vectors: makeVectors(new Error('lance table locked')),
     });
 
     const result = await deleteEverythingNow({ confirm: CONFIRM_PHRASE }, deps);
 
     // Both halves matter: the user's messages ARE gone (ok), and the leftover
-    // index IS disclosed (incomplete). Either assertion alone would let the
-    // panel tell a half-truth.
+    // index IS disclosed (incomplete). A retry can still finish it — `deleteAll`
+    // needs no ids, and those are gone from SQLite by now.
     expect(result.ok).toBe(true);
     expect(result.vectorsDeleted).toBeNull();
     expect(result.incomplete).toEqual(['vectors']);
@@ -309,7 +341,7 @@ describe('deleteEverythingNow', () => {
   it('distinguishes "no vector store wired" from "nothing to evict"', async () => {
     const wired = await deleteEverythingNow(
       { confirm: CONFIRM_PHRASE },
-      makeDeps({ vectors: { deleteByEventIds: async () => 0 } }),
+      makeDeps({ vectors: makeVectors(0) }),
     );
     expect(wired.vectorsDeleted).toBe(0);
     expect(wired.incomplete).toEqual([]);
@@ -355,17 +387,30 @@ describe('deleteEverythingNow', () => {
     expect(result.incomplete).toEqual(['vectors', 'files']);
   });
 
-  it('discloses a credential that could not be revoked', async () => {
+  it('discloses a connected credential that could not be revoked', async () => {
     const { vault } = makeVault(['slack', 'gmail'], 'gmail');
 
     const result = await deleteEverythingNow(
       { confirm: CONFIRM_PHRASE },
-      makeDeps({ vectors: { deleteByEventIds: async () => 0 }, vault }),
+      makeDeps({ vectors: makeVectors(0), vault }),
     );
 
     expect(result.ok).toBe(true);
     expect(result.credentialsRevoked).toEqual(['slack']);
     expect(result.incomplete).toEqual(['credentials']);
+  });
+
+  it('does not flag credentials incomplete when only a never-connected source failed', async () => {
+    // gmail's revoke throws, but gmail held no credential — nothing was lost.
+    const { vault } = makeVault(['slack'], 'gmail');
+
+    const result = await deleteEverythingNow(
+      { confirm: CONFIRM_PHRASE },
+      makeDeps({ vectors: makeVectors(0), vault }),
+    );
+
+    expect(result.credentialsRevoked).toEqual(['slack']);
+    expect(result.incomplete).toEqual([]);
   });
 
   it('runs the afterDelete hook, and survives it throwing', async () => {

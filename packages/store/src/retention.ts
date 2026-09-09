@@ -167,10 +167,16 @@ export function purgeRawEventsOlderThan(db: Database, cutoffMs: number): RawEven
  * manifest the caller must act on to complete a right-to-delete request.
  */
 export interface DeleteEverythingResult {
+  /** Total rows removed across every table — the DELETEs' own `.changes`, not
+   * a separate COUNT(*) pass (which would race a concurrent insert). */
+  rowsDeleted: number;
   /**
-   * Every `events.event_id` that existed immediately before the wipe. Pass to
-   * `VectorStore.deleteByEventIds` to evict the embedded chunks; the vectors
-   * are derived from raw payloads and are just as identifying.
+   * Every `events.event_id` that existed immediately before the wipe. The
+   * retention purge pairs this with `VectorStore.deleteByEventIds`; a full
+   * right-to-delete instead clears the vector table outright
+   * (`VectorStore.deleteAll`), since these ids are gone from SQLite the moment
+   * this returns and an id-by-id eviction that fails partway would strand
+   * embeddings nothing can ever name again.
    */
   vectorEventIds: string[];
   /**
@@ -199,7 +205,8 @@ export interface DeleteEverythingResult {
  * The manifest is collected *before* any DELETE runs — afterwards the rows are
  * gone and there is nothing left to enumerate.
  *
- * @returns event ids for the vector store and narrative paths for the filesystem.
+ * @returns the total rows removed, plus event ids for the vector store and
+ *   narrative paths for the filesystem.
  */
 export function deleteEverything(db: Database): DeleteEverythingResult {
   const tx = db.transaction((): DeleteEverythingResult => {
@@ -209,22 +216,24 @@ export function deleteEverything(db: Database): DeleteEverythingResult {
       .prepare('SELECT DISTINCT narrative_path FROM briefings')
       .all() as { narrative_path: string }[];
 
-    const manifest: DeleteEverythingResult = {
-      vectorEventIds: eventRows.map((row) => row.event_id),
-      narrativePaths: pathRows.map((row) => row.narrative_path),
-    };
-
     // 2. Stand down the append-only guards for the duration of the wipe.
     db.exec('DROP TRIGGER IF EXISTS events_no_update');
     db.exec('DROP TRIGGER IF EXISTS events_no_delete');
     db.exec('DROP TRIGGER IF EXISTS deltas_no_update');
 
     try {
-      // 3. Empty every table, children before parents (see DELETE_ORDER).
+      // 3. Empty every table, children before parents (see DELETE_ORDER),
+      //    summing the DELETEs' own row counts — no second COUNT(*) pass, and
+      //    no TOCTOU gap against a row the poller inserts mid-wipe.
+      let rowsDeleted = 0;
       for (const table of DELETE_ORDER) {
-        db.prepare(`DELETE FROM ${table}`).run();
+        rowsDeleted += db.prepare(`DELETE FROM ${table}`).run().changes;
       }
-      return manifest;
+      return {
+        rowsDeleted,
+        vectorEventIds: eventRows.map((row) => row.event_id),
+        narrativePaths: pathRows.map((row) => row.narrative_path),
+      };
     } finally {
       // 4. Restore the guards unconditionally — same reasoning as the purge:
       //    on commit these CREATEs are what the schema ends up with, and on

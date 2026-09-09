@@ -407,7 +407,6 @@ export interface SourceHealth {
   retryAfter?: number;
 }
 
-/** `pipeline:status` — a live "what is the pipeline doing right now" snapshot. */
 /** `privacy:stats` — what the app is currently holding (SEC-8's read-only half). */
 export interface DataSummary {
   /** Raw source messages stored. */
@@ -452,6 +451,7 @@ export interface DeleteEverythingReport {
   incomplete?: string[];
 }
 
+/** `pipeline:status` — a live "what is the pipeline doing right now" snapshot. */
 export interface PipelineStatus {
   /** Ingested events with no `extractions` row yet. */
   extractionBacklog: number;

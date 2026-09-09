@@ -97,6 +97,10 @@ class FakeVectors implements VectorStore {
     return Promise.resolve(0);
   }
 
+  deleteAll(): Promise<number> {
+    return Promise.resolve(0);
+  }
+
   close(): Promise<void> {
     return Promise.resolve();
   }

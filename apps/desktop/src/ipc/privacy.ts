@@ -17,9 +17,9 @@
  * go together, so completing the request means four steps, in this order:
  *
  *   1. wipe SQLite and take the manifest;
- *   2. evict the manifest's event ids from LanceDB;
+ *   2. clear the LanceDB table entirely (`VectorStore.deleteAll`);
  *   3. unlink the manifest's narrative `.md` files;
- *   4. revoke every credential in the vault.
+ *   4. revoke every stored credential in the vault.
  *
  * SQLite goes first because it is the only atomic step: if the process dies
  * between 1 and 4 the user is left with orphaned vectors and tokens rather than
@@ -28,6 +28,12 @@
  * step actually managed, and a step that fails does not stop the ones after it.
  * A "deleted" claim this module cannot substantiate is worse than a partial
  * result the panel can show honestly.
+ *
+ * Step 2 clears the whole table rather than evicting the manifest's event ids
+ * one batch at a time: by the time it runs those ids are already gone from
+ * SQLite, so an id-by-id eviction that failed partway would leave identifying
+ * embeddings that nothing could ever name again. `deleteAll` needs no ids, so
+ * the "restart and try again" the panel offers can actually finish the job.
  *
  * ### Why the confirmation phrase crosses the bridge
  *
@@ -41,6 +47,7 @@ import { ipcMain } from 'electron';
 import type { SourceId } from '@cr/core';
 import { retentionCutoffMs } from '@cr/store';
 import type { DeleteEverythingResult, UserDataSummary } from '@cr/store';
+import { VAULT_SOURCES, connectedSources } from './vaultSources.js';
 
 /** Invoke channel reporting what is stored (read-only). */
 export const PRIVACY_STATS_CHANNEL = 'privacy:stats';
@@ -55,9 +62,6 @@ export const PRIVACY_DELETE_CHANNEL = 'privacy:deleteEverything';
  * panel shows the user which word to type; nothing derives it from locale.
  */
 export const CONFIRM_PHRASE = 'DELETE';
-
-/** The sources whose credentials a wipe must revoke (SEC-8 covers the vault). */
-const VAULT_SOURCES: readonly SourceId[] = ['slack', 'gmail'];
 
 /**
  * The `retention.ts` surface this module drives, as a structural type.
@@ -74,9 +78,9 @@ export interface PrivacyStore {
   deleteEverything(): DeleteEverythingResult;
 }
 
-/** The one `VectorStore` method a wipe needs. */
+/** The one `VectorStore` method a full wipe needs (SEC-8). */
 export interface VectorEvictor {
-  deleteByEventIds(eventIds: string[]): Promise<number>;
+  deleteAll(): Promise<number>;
 }
 
 /**
@@ -203,11 +207,6 @@ export function retentionCutoff(deps: Pick<PrivacyDeps, 'rawEventDays' | 'clock'
 export async function dataSummary(deps: PrivacyDeps): Promise<DataSummary> {
   const summary = deps.store.summary(retentionCutoff(deps));
 
-  const connected: SourceId[] = [];
-  for (const source of VAULT_SOURCES) {
-    if (await isConnected(deps.vault, source)) connected.push(source);
-  }
-
   return {
     messages: summary.rowsByTable['events'] ?? 0,
     summaries: summary.rowsByTable['state_deltas'] ?? 0,
@@ -217,19 +216,8 @@ export async function dataSummary(deps: PrivacyDeps): Promise<DataSummary> {
     oldestEventAt: summary.oldestEventAt,
     expiredRawEvents: summary.expiredRawEvents,
     retentionDays: deps.rawEventDays,
-    connectedSources: connected,
+    connectedSources: await connectedSources(deps.vault),
   };
-}
-
-/** Whether a source holds a credential a wipe would revoke. */
-async function isConnected(vault: CredentialPurger, source: SourceId): Promise<boolean> {
-  try {
-    return (await vault.load(source)) !== undefined;
-  } catch {
-    // A vault whose file is unreadable is not a connected source, and the
-    // summary must not fail over one line item of it.
-    return false;
-  }
 }
 
 /**
@@ -247,12 +235,18 @@ export async function deleteEverythingNow(
 ): Promise<DeleteEverythingReport> {
   if (!isConfirmed(arg)) return { ok: false, reason: 'not_confirmed' };
 
-  let manifest: DeleteEverythingResult;
-  let rowsDeleted: number;
+  // Captured before the wipe so the report can name which sources were really
+  // disconnected: `vault.revoke` is a silent no-op on a source that holds no
+  // credential, so revoking blindly would claim "slack and gmail" every time.
+  let connectedBefore: SourceId[];
   try {
-    // Counted BEFORE the wipe: afterwards every table is empty and there is
-    // nothing left to total.
-    rowsDeleted = deps.store.summary(retentionCutoff(deps)).totalRows;
+    connectedBefore = await connectedSources(deps.vault);
+  } catch {
+    connectedBefore = [];
+  }
+
+  let manifest: DeleteEverythingResult;
+  try {
     manifest = deps.store.deleteEverything();
   } catch (error) {
     // The transaction rolled back and the append-only triggers are back on
@@ -260,13 +254,18 @@ export async function deleteEverythingNow(
     console.error('[privacy] deleteEverything failed; nothing was erased', error);
     return { ok: false, reason: 'store_error' };
   }
+  // The DELETEs' own row counts — no separate COUNT(*) pass, no TOCTOU gap.
+  const rowsDeleted = manifest.rowsDeleted;
 
   const incomplete: string[] = [];
 
   let vectorsDeleted: number | null = null;
   if (deps.vectors !== undefined) {
     try {
-      vectorsDeleted = await deps.vectors.deleteByEventIds(manifest.vectorEventIds);
+      // The whole table, not `manifest.vectorEventIds`: those ids are already
+      // gone from SQLite, so a partial id-by-id eviction that failed could
+      // never be finished. `deleteAll` needs no ids, so a retry can.
+      vectorsDeleted = await deps.vectors.deleteAll();
     } catch (error) {
       console.error('[privacy] vector eviction failed after the SQLite wipe', error);
       incomplete.push('vectors');
@@ -292,16 +291,21 @@ export async function deleteEverythingNow(
   }
   if (filesFailed > 0) incomplete.push('files');
 
+  // Revoke is attempted on every source (harmless no-op on an absent entry,
+  // and it clears an unreadable blob), but only a source that actually held a
+  // credential is reported as revoked — or, if its revoke threw, as incomplete.
   const credentialsRevoked: SourceId[] = [];
+  let credentialRevokeFailed = false;
   for (const source of VAULT_SOURCES) {
     try {
       await deps.vault.revoke(source);
-      credentialsRevoked.push(source);
+      if (connectedBefore.includes(source)) credentialsRevoked.push(source);
     } catch (error) {
       console.error(`[privacy] could not revoke ${source} credentials`, error);
+      if (connectedBefore.includes(source)) credentialRevokeFailed = true;
     }
   }
-  if (credentialsRevoked.length < VAULT_SOURCES.length) incomplete.push('credentials');
+  if (credentialRevokeFailed) incomplete.push('credentials');
 
   try {
     deps.afterDelete?.();

@@ -283,17 +283,20 @@ function seedEverything(): void {
 }
 
 describe('deleteEverything — right to delete (SEC-8)', () => {
-  it('empties every user-data table', () => {
+  it('empties every user-data table and reports the row count it removed', () => {
     seedEverything();
     for (const table of USER_DATA_TABLES) {
       expect(countRows(table), `${table} should be seeded`).toBeGreaterThan(0);
     }
+    const seeded = USER_DATA_TABLES.reduce((sum, t) => sum + countRows(t), 0);
 
-    deleteEverything(db);
+    const { rowsDeleted } = deleteEverything(db);
 
     for (const table of USER_DATA_TABLES) {
       expect(countRows(table), `${table} should be empty after deleteEverything`).toBe(0);
     }
+    // The DELETEs' own `.changes`, summed — not a separate COUNT(*) pass.
+    expect(rowsDeleted).toBe(seeded);
   });
 
   it('returns the event ids the caller must evict from the vector store', () => {
@@ -354,7 +357,7 @@ describe('deleteEverything — right to delete (SEC-8)', () => {
   it('is a no-op that still reports an empty manifest on an already-empty database', () => {
     const result = deleteEverything(db);
 
-    expect(result).toEqual({ vectorEventIds: [], narrativePaths: [] });
+    expect(result).toEqual({ rowsDeleted: 0, vectorEventIds: [], narrativePaths: [] });
     expect(triggerNames()).toEqual(APPEND_ONLY_TRIGGERS);
   });
 });

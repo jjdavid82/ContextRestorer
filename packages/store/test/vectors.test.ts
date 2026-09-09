@@ -310,3 +310,37 @@ describe('deleteByEventIds', () => {
     TIMEOUT_MS,
   );
 });
+
+describe('deleteAll', () => {
+  it(
+    'removes every chunk and returns the count; a second call removes nothing',
+    async () => {
+      const store = await open();
+      await store.upsert([
+        chunk('c1', { eventId: 'e1' }),
+        chunk('c2', { eventId: 'e2' }),
+        chunk('c3', { eventId: 'e3' }),
+      ]);
+
+      await expect(store.deleteAll()).resolves.toBe(3);
+      await expect(store.search(QUERY, 100)).resolves.toEqual([]);
+      await expect(store.deleteAll()).resolves.toBe(0);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'is durable across a reopen and the store still accepts new writes after',
+    async () => {
+      const first = await open();
+      await first.upsert([chunk('c1', { eventId: 'e1' })]);
+      await first.deleteAll();
+      await first.upsert([chunk('c2', { eventId: 'e2' })]);
+      await first.close();
+
+      const second = await open();
+      expect((await second.search(QUERY, 10)).map((h) => h.id)).toEqual(['c2']);
+    },
+    TIMEOUT_MS,
+  );
+});
