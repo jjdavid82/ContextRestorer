@@ -36,6 +36,17 @@ export interface OnboardingStatus {
   projectsDeclared: string[];
   /** Whether the local Ollama endpoint answered a health probe. */
   ollamaReady: boolean;
+  /**
+   * How many projects `projects:declare` will actually accept
+   * (`config.onboarding.minDeclaredProjects`, OI-3).
+   *
+   * Reported rather than hardcoded in the renderer because the two had already
+   * drifted once: the config said 3 while the onboarding screen called the
+   * step optional and offered a "Skip for now" button that could only fail.
+   * The number the UI states and the number the handler enforces are now the
+   * same value, read from one place.
+   */
+  minDeclaredProjects: number;
 }
 
 /** `model:get` — the chat-model picker (Settings page). */

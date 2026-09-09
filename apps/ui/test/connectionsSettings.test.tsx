@@ -34,6 +34,10 @@ const status = (connected: SourceId[]): OnboardingStatus => ({
   sourcesConnected: connected,
   projectsDeclared: [],
   ollamaReady: true,
+  // The floor `projects:declare` enforces, reported so the onboarding screen
+  // states the same number it is held to. Irrelevant to this panel; present
+  // because the payload carries it.
+  minDeclaredProjects: 3,
 });
 
 afterEach(() => {
