@@ -21,11 +21,28 @@
 /* MUI's `<CssBaseline>` would give us these, but it is a runtime `<GlobalStyles>`
    `<style>` element the shell CSP blocks — so the two rules the layout actually
    depends on are here instead. `box-sizing` in particular: without it every
-   `maxWidth` in an `sx` is content-box and panels render 48px wide of intent. */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+   `maxWidth` in an `sx` is content-box and panels render 48px wide of intent.
+
+   The reset MUST live in a cascade layer ordered *below* Pigment's `@layer
+   pigment` (the `@layer` statement just below pins that order regardless of
+   which stylesheet the browser happens to load first). An unlayered `*` rule
+   beats every rule inside a named layer no matter the specificity, so an
+   unlayered `box-sizing: border-box` silently overrode MUI's
+   `.MuiInputBase-input { box-sizing: content-box }` — and MUI's outlined
+   `<input>` reaches its 40px height as `height: 1.4375em` *plus* 8.5px×2
+   padding under content-box. Forced to border-box it collapsed to ~23px and
+   every outlined field's floating label struck through the top border. Keeping
+   the reset in `cr-reset` lets MUI's layered component rules win where they set
+   `box-sizing` explicitly, while bare elements and `Box`/`sx` layouts still
+   default to border-box. */
+@layer cr-reset, pigment;
+
+@layer cr-reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
 }
 body {
   margin: 0;
@@ -79,6 +96,21 @@ summary:focus-visible,
     animation-duration: 1.4s !important;
     animation-iteration-count: infinite !important;
   }
+}
+
+/* components/RailStatus.tsx — the per-source "refresh now" icon spins while its
+   poll request is in flight. A keyframe rather than an `sx` value because
+   Pigment only extracts static `sx`, and the class is applied conditionally.
+   Frozen by the reduced-motion block above, which is fine: the button also
+   disables while busy, so "working" still reads without the motion. */
+@keyframes cr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cr-spin {
+  display: inline-flex;
+  animation: cr-spin 0.8s linear infinite;
 }
 
 /* -------------------------------------------------------------------------- */

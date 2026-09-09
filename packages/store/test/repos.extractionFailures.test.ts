@@ -54,4 +54,23 @@ describe('ExtractionFailuresRepo', () => {
       .get() as { first_at: number; last_at: number };
     expect(row).toEqual({ first_at: 100, last_at: 500 });
   });
+
+  describe('listRecent', () => {
+    it('returns events failed in the window, most-recent last_at first', () => {
+      repo.record('e1', 1_000);
+      repo.record('e2', 2_000);
+      repo.record('e2', 3_000); // e2's last_at advances to 3_000
+
+      expect(repo.listRecent(1_500, 10)).toEqual([
+        { eventId: 'e2', attempts: 2, lastAt: 3_000 },
+      ]);
+    });
+
+    it('honours the limit and is empty on a clean table', () => {
+      expect(repo.listRecent(0, 10)).toEqual([]);
+      repo.record('e1', 100);
+      repo.record('e2', 200);
+      expect(repo.listRecent(0, 1)).toEqual([{ eventId: 'e2', attempts: 1, lastAt: 200 }]);
+    });
+  });
 });

@@ -14,7 +14,15 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from 'better-sqlite3';
-import { migrate, openDb, PendingItemsRepo, GraphRepo, EventsRepo, BriefingsRepo } from '@cr/store';
+import {
+  migrate,
+  openDb,
+  PendingItemsRepo,
+  GraphRepo,
+  EventsRepo,
+  BriefingsRepo,
+  DeltasRepo,
+} from '@cr/store';
 import type { Artifact, Event, SourceId } from '@cr/core';
 
 const handle = vi.fn();
@@ -39,6 +47,7 @@ const {
   rankPendingItems,
   registerBriefingHandlers,
   resolvePendingItem,
+  backfillMissingResolutionDeltas,
 } = await import('../src/ipc/briefing.js');
 
 type BriefingModule = typeof import('../src/ipc/briefing.js');
@@ -53,6 +62,7 @@ let pending: PendingItemsRepo;
 let graph: GraphRepo;
 let events: EventsRepo;
 let briefings: BriefingsRepo;
+let deltas: DeltasRepo;
 
 /**
  * A stub with the shape of `@cr/ai`'s Ollama client.
@@ -216,6 +226,7 @@ beforeEach(() => {
   graph = new GraphRepo(db);
   events = new EventsRepo(db);
   briefings = new BriefingsRepo(db);
+  deltas = new DeltasRepo(db);
 });
 
 afterEach(() => {
@@ -594,6 +605,59 @@ describe('briefing:resolvePending', () => {
     expect(listPending(deps)).toEqual([]);
   });
 
+  it('appends a resolution delta to the item’s thread when the delta store is wired', () => {
+    seedPending({ pendingId: 'p1', confidence: 0.5, createdAt: 1_000 });
+    // seedPending mints `state_deltas` id `delta-p1` on thread `C:delta-p1`.
+    const deps = makeDeps({ deltas, clock: { now: () => 5_000 } });
+
+    expect(resolvePendingItem({ pendingId: 'p1' }, deps)).toEqual({ ok: true });
+
+    expect(pending.getById('p1')?.status).toBe('resolved');
+    const chain = deltas.chainFor('C:delta-p1');
+    expect(chain).toHaveLength(2);
+    expect(chain[1]).toMatchObject({
+      kind: 'resolution',
+      version: 2,
+      supersedes: 'delta-p1',
+      createdAt: 5_000,
+    });
+    expect(chain[1]?.citationArtifactIds).toEqual(['art-p1']);
+  });
+
+  it('also closes open duplicates that a restatement minted on the same chain', () => {
+    const artifact = seedPending({ pendingId: 'p1', confidence: 0.5, createdAt: 1_000 });
+    // A second, later delta on the same thread with its own open item — the
+    // duplicate a noise-classified reply used to mint.
+    deltas.append({
+      threadKey: 'C:delta-p1',
+      artifactId: null,
+      summary: 'same ask restated',
+      kind: 'request',
+      confidence: 0.7,
+      sourceEventIds: [],
+      citationArtifactIds: [artifact],
+      model: 'llama3',
+      promptVersion: 'v1',
+      createdAt: 2_000,
+    });
+    const dupDelta = deltas.chainFor('C:delta-p1').at(-1)!.deltaId;
+    pending.insert({
+      pendingId: 'p2',
+      deltaId: dupDelta,
+      description: 'same ask restated',
+      confidence: 0.7,
+      citationArtifactId: artifact,
+      createdAt: 2_000,
+    });
+
+    const deps = makeDeps({ deltas, clock: { now: () => 9_000 } });
+    expect(resolvePendingItem({ pendingId: 'p1' }, deps)).toEqual({ ok: true });
+
+    expect(pending.getById('p1')?.status).toBe('resolved');
+    expect(pending.getById('p2')?.status).toBe('resolved');
+    expect(pending.listOpen()).toEqual([]);
+  });
+
   it('rejects a missing or empty pendingId without touching the store', () => {
     const deps = makeDeps();
 
@@ -609,6 +673,7 @@ describe('briefing:resolvePending', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const broken: Deps['pending'] = {
       listOpen: () => [],
+      getById: () => undefined,
       resolve: () => {
         throw new Error('database is locked');
       },
@@ -634,6 +699,79 @@ describe('briefing:resolvePending', () => {
 
     expect(callback({}, { pendingId: 'p1' })).toEqual({ ok: true });
     expect(pending.getById('p1')?.status).toBe('resolved');
+  });
+});
+
+describe('backfillMissingResolutionDeltas', () => {
+  it('appends a resolution delta for an item resolved before that path existed', () => {
+    seedPending({ pendingId: 'p1', confidence: 0.5, createdAt: 1_000 });
+    // Pre-fix behaviour: a bare status flip, no `deltas` involved at all.
+    pending.resolve('p1', 5_000);
+    expect(deltas.chainFor('C:delta-p1')).toHaveLength(1);
+
+    const patched = backfillMissingResolutionDeltas(pending, deltas, 9_000);
+
+    expect(patched).toBe(1);
+    const chain = deltas.chainFor('C:delta-p1');
+    expect(chain).toHaveLength(2);
+    expect(chain[1]).toMatchObject({ kind: 'resolution', version: 2, createdAt: 9_000 });
+  });
+
+  it('is a no-op for a thread whose tip is already a resolution delta', () => {
+    seedPending({ pendingId: 'p1', confidence: 0.5, createdAt: 1_000 });
+    resolvePendingItem({ pendingId: 'p1' }, makeDeps({ deltas, clock: { now: () => 5_000 } }));
+    expect(deltas.chainFor('C:delta-p1')).toHaveLength(2);
+
+    const patched = backfillMissingResolutionDeltas(pending, deltas, 9_000);
+
+    expect(patched).toBe(0);
+    expect(deltas.chainFor('C:delta-p1')).toHaveLength(2);
+  });
+
+  it('patches a thread once even when two closed items share it', () => {
+    const artifact = seedPending({ pendingId: 'p1', confidence: 0.5, createdAt: 1_000 });
+    // A duplicate a pre-fix restatement minted on the same thread, also closed
+    // by hand (bare status flip, both predating the resolution-delta path).
+    deltas.append({
+      threadKey: 'C:delta-p1',
+      artifactId: null,
+      summary: 'same ask restated',
+      kind: 'request',
+      confidence: 0.7,
+      sourceEventIds: [],
+      citationArtifactIds: [artifact],
+      model: 'llama3',
+      promptVersion: 'v1',
+      createdAt: 2_000,
+    });
+    const dupDelta = deltas.chainFor('C:delta-p1').at(-1)!.deltaId;
+    pending.insert({
+      pendingId: 'p2',
+      deltaId: dupDelta,
+      description: 'same ask restated',
+      confidence: 0.7,
+      citationArtifactId: artifact,
+      createdAt: 2_000,
+    });
+    pending.resolve('p1', 5_000);
+    pending.resolve('p2', 6_000);
+
+    const patched = backfillMissingResolutionDeltas(pending, deltas, 9_000);
+
+    expect(patched).toBe(1);
+    expect(deltas.chainFor('C:delta-p1')).toHaveLength(3);
+  });
+
+  it('ignores a closed item whose delta cannot be found', () => {
+    seedPending({ pendingId: 'p1', confidence: 0.5, createdAt: 1_000 });
+    pending.resolve('p1', 5_000);
+    const noDeltas = {
+      getById: () => undefined,
+      chainFor: () => [],
+      append: deltas.append.bind(deltas),
+    };
+
+    expect(backfillMissingResolutionDeltas(pending, noDeltas, 9_000)).toBe(0);
   });
 });
 

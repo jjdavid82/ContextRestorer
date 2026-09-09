@@ -14,6 +14,7 @@ export type {
   LogAiCallInput,
   AiLayerStat,
   AiOutcomeStat,
+  AiCallNotable,
 } from './repos/aiCalls.js';
 export { ExtractionsRepo } from './repos/extractions.js';
 export type { NewExtraction } from './repos/extractions.js';

@@ -1,6 +1,13 @@
 /**
- * `projects:suggest` / `projects:declare` main-process handlers (Task 3.1, OI-3),
- * plus the `onboarding:status` read the declaration gate is built on.
+ * `projects:suggest` / `projects:declare` / `projects:list` / `projects:remove`
+ * main-process handlers (Task 3.1, OI-3), plus the `onboarding:status` read the
+ * declaration gate is built on.
+ *
+ * `projects:remove` is the counterpart to `declare` for the Settings "Projects"
+ * panel: the user who declared the wrong project at onboarding gets to take it
+ * back out. `GraphRepo.removeProject` handles the graph clean-up (see there);
+ * this handler adds the `onProjectsChanged` hook so the ingestion pipeline's
+ * channel → project resolver is rebuilt.
  *
  * The onboarding contract these three channels implement:
  *
@@ -81,6 +88,22 @@ export interface ProjectsHandlerDeps {
    * suggestions rather than wrong ones.
    */
   selfPersonId?: string;
+  /**
+   * Called once after a project is removed, before the handler resolves.
+   *
+   * Wired in `main.ts` to `relinkProjects(slackChannels.list())`: removing a
+   * project untags any channel that pointed at it (the FK does that), but the
+   * in-memory `SlackChannelProjectResolver` the ingestion pipeline consults is a
+   * snapshot and would keep mapping that channel to a project id that no longer
+   * exists until the next channel-settings save or app restart. Same hook
+   * pattern as `OauthHandlerDeps.onConnected` / `SlackChannelsHandlerDeps.
+   * onSelectionSaved`.
+   *
+   * Optional so the glue tests can build deps without a poller/resolver, and a
+   * hook that throws is logged, never turned into a failed removal — by the time
+   * it runs the row is already gone.
+   */
+  onProjectsChanged?: () => void;
 }
 
 /**
@@ -104,6 +127,21 @@ export function parseDeclareNames(arg: unknown): string[] | null {
     cleaned.push(trimmed);
   }
   return cleaned;
+}
+
+/**
+ * Narrow the renderer-supplied `{ projectId }` argument for `projects:remove`.
+ *
+ * As with {@link parseDeclareNames}: the preload shape-checks this too, but that
+ * check is a convenience gate, not a trust boundary.
+ *
+ * @returns the trimmed id, or `null` when the argument is not a non-empty string.
+ */
+export function parseRemoveProjectArg(arg: unknown): string | null {
+  const projectId: unknown = (arg as { projectId?: unknown } | null)?.projectId;
+  if (typeof projectId !== 'string') return null;
+  const trimmed = projectId.trim();
+  return trimmed === '' ? null : trimmed;
 }
 
 /**
@@ -224,6 +262,29 @@ export function registerProjectsHandlers(deps: ProjectsHandlerDeps): void {
       console.error('[projects] declare failed', error);
       return { ok: false, reason: 'internal_error' };
     }
+  });
+
+  ipcMain.handle('projects:remove', async (_event, arg: unknown): Promise<OkResult> => {
+    const projectId = parseRemoveProjectArg(arg);
+    if (projectId === null) return { ok: false, reason: 'invalid_project_id' };
+
+    let removed: boolean;
+    try {
+      removed = deps.graph.removeProject(projectId);
+    } catch (error) {
+      console.error('[projects] remove failed', error);
+      return { ok: false, reason: 'internal_error' };
+    }
+    if (!removed) return { ok: false, reason: 'not_found' };
+
+    // The row is already gone; a throwing hook must not turn a completed
+    // removal into a reported failure (same contract as the OAuth handlers).
+    try {
+      deps.onProjectsChanged?.();
+    } catch (error) {
+      console.error('[projects] onProjectsChanged hook failed', error);
+    }
+    return { ok: true };
   });
 
   ipcMain.handle('onboarding:status', async (): Promise<OnboardingStatus> => {

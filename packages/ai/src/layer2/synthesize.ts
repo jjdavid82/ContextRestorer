@@ -100,18 +100,19 @@ export type SynthesisOutcome =
   /** The model call threw or returned non-2xx. Rethrown to the scheduler. */
   | 'error';
 
-/** The four categories a delta may take; anything else is a schema error. */
+/** The five categories a delta may take; anything else is a schema error. */
 const DELTA_KINDS = new Set<string>([
   'decision',
   'progress',
   'reversal',
   'resolution',
+  'request',
 ] satisfies DeltaKind[]);
 
 /**
- * System prompt for `layer2-synthesize.v1`.
+ * System prompt for `layer2-synthesize.v2`.
  *
- * `config/prompts/layer2-synthesize.v1.md` is the human-readable source of truth
+ * `config/prompts/layer2-synthesize.v2.md` is the human-readable source of truth
  * and the thing `promptVersion` names; this constant is its executable form. The
  * template's `{{NONCE}}`/`{{CONTENT}}` placeholders and its untrusted-content
  * clause are omitted here because `wrapUntrusted` mints the nonce and
@@ -129,9 +130,14 @@ const SYSTEM_PROMPT = [
   '  progress    — work visibly advanced past a prior state',
   '  reversal    — a previous decision or direction was undone or changed',
   '  resolution  — an open question, blocker, or obligation was closed out',
+  '  request     — a new, specific obligation was placed on someone, with nothing else',
+  '                about the thread\'s state changing',
   '',
   'Not meaningful: restating what was already known, acknowledgements, scheduling chatter,',
   'opinions without commitment, automation noise, or a thread that is merely still active.',
+  'In particular, do NOT return request for an ask that is answered, withdrawn, or otherwise',
+  'resolved within the same content you are given — that is either resolution or, if it never',
+  'mattered, nothing. request is only for an obligation that is still open at the end.',
   '',
   'Rules:',
   '- Prefer {"meaningful": false}. Returning it is always an acceptable answer.',
@@ -163,7 +169,7 @@ const INSTRUCTIONS = [
   'Return the JSON object described by this schema, and nothing else:',
   '',
   '{ "meaningful": true,',
-  '  "kind": "decision|progress|reversal|resolution",',
+  '  "kind": "decision|progress|reversal|resolution|request",',
   '  "summary": "one sentence, past tense",',
   '  "confidence": 0.0,',
   '  "citation_artifact_ids": ["..."],',

@@ -611,6 +611,26 @@ describe('the briefing is labelled "Simplified briefing"', () => {
     expect(claims.map((claim) => claim.text)).not.toContain('The staging rollout completed.');
     expect(claims[0]?.text).toBe('Reply to the vendor about the SOC 2 letter.');
   });
+
+  it('files a request delta with no pending item under "Worth knowing"', async () => {
+    seedThreeDeltas();
+    appendDelta({
+      threadKey: 'C4:1',
+      summary: 'Finance asked the team to submit Q3 headcount plans.',
+      kind: 'request',
+      citations: [A1],
+    });
+
+    const result = await makeRenderer().renderTemplate(WINDOW);
+    const claims = briefings.listClaims(result.briefingId);
+    const request = claims.find(
+      (claim) => claim.text === 'Finance asked the team to submit Q3 headcount plans.',
+    );
+
+    // sectionForKind's `default` branch — "Worth knowing" asserts nothing about
+    // obligation or urgency, so an unrouted request is a cosmetic misfile at worst.
+    expect(request?.section).toBe('Worth knowing');
+  });
 });
 
 // ---------------------------------------------------------------------------

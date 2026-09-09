@@ -62,6 +62,7 @@ import {
   type SourceClient,
   type SourceFetchResult,
 } from '@cr/ingest';
+import { startTrace } from '@cr/observability';
 import { registerAppProtocol, registerAppSchemePrivileges } from './protocol.js';
 import {
   installNavigationLockdown,
@@ -70,6 +71,7 @@ import {
 import { createTray, destroyTray, updateTrayStatus } from './tray.js';
 import { registerAutostart } from './autostart.js';
 import { CHAT_MODEL_SETTING_KEY, registerIpcHandlers, startHealthPush } from './ipc/index.js';
+import { backfillMissingResolutionDeltas } from './ipc/briefing.js';
 import { deepLinkFor, resolveEvents } from './ipc/claim.js';
 import { ensureFreshTokens } from './ipc/oauth.js';
 import { registerPipelineStatusPush } from './ipc/pipelineStatus.js';
@@ -866,9 +868,19 @@ function createLayer12(
       else bucket.push(event);
     }
 
+    // Sweep-wide tallies for the `layer1_sweep` trace (Diagnostics feed). These
+    // are already computed per thread by `extractThread`; the only new work is
+    // summing them and writing one JSON line if anything noteworthy happened.
+    let prefiltered = 0;
+    let unclassified = 0;
+    let wroteOff = 0;
+
     for (const [threadKey, batch] of byThread) {
       try {
         const outcome = await extractor.extractThread(batch, newId());
+        prefiltered += outcome.prefiltered;
+        unclassified += outcome.unclassified;
+        wroteOff += outcome.abandoned;
         if (outcome.abandoned > 0) {
           // `failure must stay visible` (WatermarkRepo's DUE_SQL comment): the
           // model has failed these events MAX_EXTRACTION_ATTEMPTS times, so they
@@ -885,6 +897,15 @@ function createLayer12(
         // thread granularity.
         console.error('[layer1] thread extraction failed', threadKey, error);
       }
+    }
+
+    // One line per sweep, and only when there is something a user would care to
+    // see — a silent all-extracted sweep is not an event. `noise_skipped` in the
+    // Diagnostics feed reads `prefiltered`; the other two are for the raw view.
+    if (prefiltered > 0 || unclassified > 0 || wroteOff > 0) {
+      const trace = startTrace(systemClock, logsDir);
+      trace.annotate({ event: 'layer1_sweep', prefiltered, schemaFail: unclassified, wroteOff });
+      trace.finish();
     }
   };
 
@@ -1296,6 +1317,15 @@ if (!app.requestSingleInstanceLock()) {
       // the placeholder was still installed would hand the renderer an id it
       // would never see a chunk for.
       const sharedAiDeps = createSharedAiDeps(db!, config!, vectors!, graph);
+
+      // One-time-per-launch repair for items closed before manual "Mark
+      // resolved" started writing a `resolution` delta (see
+      // `recordManualResolution` in `ipc/briefing.ts`): without one, a closed
+      // item's thread tip still carries the obligation and the briefing keeps
+      // restating it. Idempotent and cheap once caught up, so it runs
+      // unconditionally rather than needing a one-off migration script.
+      backfillMissingResolutionDeltas(pending, sharedAiDeps.deltas, systemClock.now());
+
       const layer3 = createLayer3(sharedAiDeps, config!, {
         graph,
         briefings,
@@ -1445,6 +1475,10 @@ if (!app.requestSingleInstanceLock()) {
         poller,
         config: config!,
         pending,
+        // `briefing:resolvePending` appends a `resolution` delta when the user
+        // marks an obligation done, so it stops being restated in every future
+        // briefing. Same `DeltasRepo` instance every layer already shares.
+        deltas: sharedAiDeps.deltas,
         graph,
         // Task 4.4 step 4: the local metrics view (per-layer call stats, briefing
         // latency percentiles, gate drop reasons from the trace). Read-only, and
@@ -1453,6 +1487,10 @@ if (!app.requestSingleInstanceLock()) {
         // separate, narrower-typed field rather than reuse.
         metricsAiCalls: aiCalls,
         metricsBriefings: briefings,
+        // Fresh repo over the shared handle (prepared statements only) — the
+        // one in `createLayer12` is not returned. Feeds the Diagnostics
+        // "recent activity" list with events Layer 1 wrote off.
+        metricsExtractionFailures: new ExtractionFailuresRepo(db!),
         logsDir,
         // OI-3 onboarding (Task 3.1): `projects:suggest` mines the event log for
         // candidates, `projects:declare` writes them, `onboarding:status` reports
@@ -1468,6 +1506,11 @@ if (!app.requestSingleInstanceLock()) {
         // `claim:setProject` / `claim:projects` — the per-claim project labels
         // the briefing view's dropdown writes and reads back.
         claimLabels,
+        // Settings "Projects" panel: after `projects:remove` deletes a project,
+        // rebuild the channel → project resolver and `belongs_to` edges so a
+        // channel the FK just untagged is no longer mapped to a dead id. Reuses
+        // the same rebuild the Slack channel save runs.
+        onProjectsChanged: () => relinkProjects(slackChannels.list()),
         // Layer 3's DETERMINISTIC path (P0). No model client is reachable from
         // here — `TemplateBriefingRenderer`'s structural guarantee is that none
         // of its dependencies can be one — which is what makes AC-1 a property

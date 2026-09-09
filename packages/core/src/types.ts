@@ -6,7 +6,7 @@ export type { SourceId };
 export type ExtractionClass = 'decision' | 'question' | 'status_update' | 'noise';
 
 /** Layer-2 synthesis output category. */
-export type DeltaKind = 'decision' | 'progress' | 'reversal' | 'resolution';
+export type DeltaKind = 'decision' | 'progress' | 'reversal' | 'resolution' | 'request';
 
 export type PendingStatus = 'open' | 'resolved' | 'dismissed';
 

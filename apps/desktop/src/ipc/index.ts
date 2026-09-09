@@ -38,6 +38,7 @@ import { registerHealthHandlers, type HealthPushOptions } from './health.js';
 import {
   registerBriefingHandlers,
   type BriefingSnapshotReader,
+  type ResolutionDeltaWriter,
   type ResumePointReader,
   type PendingReader,
   type StakesReader,
@@ -50,6 +51,7 @@ import {
 } from './slackChannels.js';
 import { registerClaimHandlers, type ClaimProjectStore } from './claim.js';
 import { registerExternalHandlers } from './external.js';
+import { registerPollHandlers } from './poll.js';
 import {
   registerFeedbackHandlers,
   type BriefingCompletionStore,
@@ -59,6 +61,7 @@ import {
   registerMetricsHandlers,
   type AiCallStatsReader,
   type BriefingStatsReader,
+  type ExtractionFailureReader,
 } from './metrics.js';
 import {
   registerModelSettingsHandlers,
@@ -69,6 +72,7 @@ export { toHealthPayload, HEALTH_CHANNEL, type SourceHealth } from './health.js'
 export {
   registerProjectsHandlers,
   parseDeclareNames,
+  parseRemoveProjectArg,
   distinctNames,
   type ProjectsHandlerDeps,
 } from './projects.js';
@@ -91,6 +95,7 @@ export {
   RESUME_POINT_CHANNEL,
   type BriefingHandlerDeps,
   type PendingReader,
+  type ResolutionDeltaWriter,
   type StakesReader,
   type PendingItemView,
   type BriefingSnapshot,
@@ -143,6 +148,15 @@ export {
   type OpenExternalResult,
 } from './external.js';
 export {
+  registerPollHandlers,
+  requestManualRefresh,
+  parsePollSource,
+  REFRESH_CHANNEL as POLL_REFRESH_CHANNEL,
+  MANUAL_REFRESH_COOLDOWN_MS,
+  type PollHandlerDeps,
+  type PollRefreshResult,
+} from './poll.js';
+export {
   registerFeedbackHandlers,
   submitFeedback,
   markBriefingCaughtUp,
@@ -174,6 +188,7 @@ export {
   type MetricsHandlerDeps,
   type AiCallStatsReader,
   type BriefingStatsReader,
+  type ExtractionFailureReader,
 } from './metrics.js';
 export {
   registerScheduleHandlers,
@@ -233,6 +248,14 @@ export interface IpcDeps {
    * "not wired yet" and "nothing pending" must not look the same.
    */
   pending?: PendingReader;
+  /**
+   * D-6 delta store (`DeltasRepo`), used only by `briefing:resolvePending` to
+   * append a `resolution` delta when the user marks an obligation done — see
+   * `ResolutionDeltaWriter`. Optional and independent of {@link IpcDeps.pending}:
+   * absent it, a manual resolve only flips `pending_items.status` and the
+   * obligation keeps being restated in the narrative until it ages out.
+   */
+  deltas?: ResolutionDeltaWriter;
   /** Stakes source for ranking (`GraphRepo`). Ranking degrades gracefully without it. */
   graph?: StakesReader;
   /**
@@ -266,6 +289,13 @@ export interface IpcDeps {
    * silently accept labels and drop them.
    */
   claimLabels?: ClaimProjectStore;
+  /**
+   * Invoked after `projects:remove` deletes a project. `main.ts` wires this to
+   * `relinkProjects(slackChannels.list())` so the ingestion pipeline's
+   * channel → project resolver never points at a project id that is gone. See
+   * `ProjectsHandlerDeps.onProjectsChanged`.
+   */
+  onProjectsChanged?: () => void;
   /**
    * Layer-3 hand-off invoked after `briefing:request` has already returned its
    * handle. `main.ts` supplies an adapter over `BriefingGenerator` that threads
@@ -367,6 +397,12 @@ export interface IpcDeps {
    */
   metricsAiCalls?: AiCallStatsReader;
   metricsBriefings?: BriefingStatsReader;
+  /**
+   * `ExtractionFailuresRepo` slice for the Diagnostics "recent activity" feed —
+   * the events Layer 1 wrote off after repeated failures. Part of the same
+   * all-or-nothing group as `metricsAiCalls`/`metricsBriefings`/`logsDir`.
+   */
+  metricsExtractionFailures?: ExtractionFailureReader;
   /** Directory holding `trace-YYYY-MM-DD.jsonl`. */
   logsDir?: string;
   /**
@@ -406,13 +442,24 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   // one.
   registerExternalHandlers();
 
-  // OI-3 onboarding: `projects:suggest`, `projects:declare`, `onboarding:status`.
+  // Per-source "refresh now" (`poll:refresh`). Registered unconditionally —
+  // `poller` is always present — and owns its own rate limit, so a renderer
+  // loop cannot walk the app into a provider throttle. See `ipc/poll.ts`.
+  registerPollHandlers({ poller: deps.poller, clock: deps.clock ?? systemClock });
+
+  // OI-3 onboarding + Settings "Projects" panel: `projects:suggest`,
+  // `projects:declare`, `projects:list`, `projects:remove`, `onboarding:status`.
   if (deps.events !== undefined && deps.projectStore !== undefined) {
     registerProjectsHandlers({
       events: deps.events,
       graph: deps.projectStore,
       config: deps.config,
       vault: deps.vault,
+      // Spread, not assigned: `exactOptionalPropertyTypes` distinguishes an
+      // absent hook from an explicit `undefined`.
+      ...(deps.onProjectsChanged !== undefined
+        ? { onProjectsChanged: deps.onProjectsChanged }
+        : {}),
     });
   }
 
@@ -421,6 +468,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       pending: deps.pending,
       // Spread rather than assigned: under `exactOptionalPropertyTypes` an
       // explicit `graph: undefined` is not the same as an absent `graph`.
+      ...(deps.deltas !== undefined ? { deltas: deps.deltas } : {}),
       ...(deps.graph !== undefined ? { graph: deps.graph } : {}),
       // `briefing:snapshot` (rehydration after a Settings round-trip) needs
       // all three together — see `IpcDeps.briefingSnapshots`.
@@ -491,11 +539,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   if (
     deps.metricsAiCalls !== undefined &&
     deps.metricsBriefings !== undefined &&
+    deps.metricsExtractionFailures !== undefined &&
     deps.logsDir !== undefined
   ) {
     registerMetricsHandlers({
       aiCalls: deps.metricsAiCalls,
       briefings: deps.metricsBriefings,
+      extractionFailures: deps.metricsExtractionFailures,
       logsDir: deps.logsDir,
     });
   }

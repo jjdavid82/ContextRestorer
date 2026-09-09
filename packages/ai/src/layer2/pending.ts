@@ -51,9 +51,13 @@ export const LOW_CONFIDENCE_FLAG_THRESHOLD = 0.5;
  *
  * A `Pick` rather than the class so a test can hand in a hand-built double, and
  * so the write surface is visible at a glance: this module inserts and resolves;
- * it never dismisses and never deletes.
+ * it never dismisses and never deletes. `listClosed` is read-only, used purely
+ * by rule 5's dedupe guard.
  */
-export type PendingWriter = Pick<PendingItemsRepo, 'insert' | 'listOpen' | 'resolve'>;
+export type PendingWriter = Pick<
+  PendingItemsRepo,
+  'insert' | 'listOpen' | 'listClosed' | 'resolve'
+>;
 
 /** Everything needed to decide whether an obligation becomes a stored item. */
 export interface PendingDerivationInput {
@@ -138,14 +142,16 @@ export function isLowConfidence(item: Pick<PendingItem, 'confidence'>): boolean 
  * Derive and persist at most one pending item for a delta.
  *
  * @returns the item as written, or `null` when no item was created. `null`
- *   covers five distinct non-writes, all of them normal outcomes rather than
+ *   covers six distinct non-writes, all of them normal outcomes rather than
  *   errors — a failed derivation must never cost the delta it came from, which
  *   is already committed by the time this runs:
  *
  *   - the obligation is owed by a third party (rule 1);
  *   - it has no citation (rule 2);
  *   - its description is blank, so there is nothing to show the user;
- *   - an open item already exists for this exact `deltaId` (rule 5);
+ *   - an open item already exists somewhere on this thread's chain (rule 5);
+ *   - a `resolved`/`dismissed` item already exists on this thread's chain, so
+ *     the user has dealt with this obligation once already (rule 5);
  *   - the INSERT was rejected by the database.
  *
  * The last case is the one that used to be a bare `catch {}` inside the
@@ -156,22 +162,23 @@ export function isLowConfidence(item: Pick<PendingItem, 'confidence'>): boolean 
  * scheduler retry and append a duplicate version of a delta that already landed
  * — but it is now loud.
  *
- * Note on rule 5: the guard reads `listOpen()`, so it blocks a duplicate of an
- * item that is still open. An item already `resolved`/`dismissed` for the same
- * delta cannot be recreated in practice, because reaching this function again
- * requires a fresh `DeltasRepo.append()`, and that always mints a new
- * `deltaId` (`thread_key` + the next version).
- *
- * A per-delta-only check is not enough, though: D-6 versioning mints a new
+ * Note on rule 5: the guard reads BOTH `listOpen()` and `listClosed()`, over
+ * the whole thread chain (`deltaId` + `siblingDeltaIds`), not just this exact
+ * `deltaId`. A per-delta-only check is not enough: D-6 versioning mints a new
  * `deltaId` for every re-synthesis of a thread, including one that merely
- * restates a still-open obligation rather than resolving or replacing it (the
- * common trigger is a reply that Layer 1 misclassified as `noise` — the reply
- * never gets embedded, so the next synthesis sees only the original message
- * again and re-derives the same ask as a "new" delta). Only a `resolution`
- * delta closes the prior item (see {@link resolvePendingItemsForSupersededDelta}),
- * so without a thread-wide check that restatement mints a second, duplicate
- * `pending_items` row for the exact same thing owed. `siblingDeltaIds` widens
- * rule 5 to the whole thread for exactly this reason — see its doc comment.
+ * restates an obligation rather than resolving or replacing it (the common
+ * trigger is a reply Layer 1 misclassified as `noise` — the reply never gets
+ * embedded, so the next synthesis sees only the original message again and
+ * re-derives the same ask as a "new" delta).
+ *
+ * Checking `listClosed()` too is what makes a user's manual "Mark resolved"
+ * stick. That gesture flips the row to `resolved` and appends a `resolution`
+ * delta (see `resolvePendingItem` in `apps/desktop/src/ipc/briefing.ts`), but a
+ * subsequent noise-classified reply can still re-synthesise the original ask
+ * under a fresh `deltaId` that does not supersede the resolution — and without
+ * the closed-item check that restatement mints a second `pending_items` row for
+ * the exact thing the user just told us was done. `siblingDeltaIds` widens both
+ * checks to the whole thread — see its doc comment.
  */
 export function derivePendingItem(
   input: PendingDerivationInput,
@@ -193,7 +200,16 @@ export function derivePendingItem(
   // above for why an exact `deltaId` match alone lets a restated obligation
   // through as a duplicate.
   const dedupeIds = new Set([input.deltaId, ...(input.siblingDeltaIds ?? [])]);
-  if (pendingRepo.listOpen().some((existing) => dedupeIds.has(existing.deltaId))) return null;
+  const onThisChain = (existing: PendingItem): boolean => dedupeIds.has(existing.deltaId);
+  if (pendingRepo.listOpen().some(onThisChain)) return null;
+  // ...and never a re-mint of an obligation already CLOSED on this thread. An
+  // exact `deltaId` repeat cannot recur (a fresh synthesis mints a new id), but
+  // a restatement under a new id can — and `listOpen` alone misses it once the
+  // prior row is `resolved`/`dismissed`. The common triggers: a reply Layer 1
+  // filed as noise (so the next synthesis re-derives the original ask), and a
+  // user marking the item done offline (which leaves no `resolution` delta to
+  // supersede the chain). Either way the user already dealt with it once.
+  if (pendingRepo.listClosed().some(onThisChain)) return null;
 
   try {
     // Rule 4: the confidence is written as given. There is no threshold check

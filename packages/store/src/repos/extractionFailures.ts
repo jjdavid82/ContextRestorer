@@ -47,6 +47,33 @@ export class ExtractionFailuresRepo {
   attempts(eventId: string): number {
     return this.stmtGet.get(eventId)?.attempts ?? 0;
   }
+
+  /**
+   * Events with a failed attempt in `[sinceMs, now]`, most-recent first
+   * (Diagnostics "recent activity").
+   *
+   * Keyed on `last_at`, not `first_at`: a written-off event that failed again
+   * inside the window is still "recently" a problem. The caller renders these as
+   * an aggregate ("N messages couldn't be read"), so `limit` bounds the read but
+   * the count the panel shows may come from a wider query.
+   */
+  listRecent(sinceMs: number, limit: number): { eventId: string; attempts: number; lastAt: number }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT event_id, attempts, last_at
+           FROM extraction_failures
+          WHERE last_at >= ?
+          ORDER BY last_at DESC
+          LIMIT ?`,
+      )
+      .all(sinceMs, limit) as { event_id: string; attempts: number; last_at: number }[];
+
+    return rows.map((row) => ({
+      eventId: row.event_id,
+      attempts: row.attempts,
+      lastAt: row.last_at,
+    }));
+  }
 }
 
 export default ExtractionFailuresRepo;

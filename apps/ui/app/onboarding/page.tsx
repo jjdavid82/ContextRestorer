@@ -428,8 +428,14 @@ export default function OnboardingPage(): ReactNode {
                 <Button variant="contained" component="a" href="/index.html">
                   Go to your briefing
                 </Button>
-                <Button variant="outlined" onClick={() => setStep('declare')}>
-                  Edit projects
+                {/* Editing and removing projects, and reconnecting a source,
+                    both live in Settings now — this step is add-only. The hash
+                    opens the matching panel directly (`settings/page.tsx`). */}
+                <Button variant="outlined" component="a" href="/settings/index.html#projects">
+                  Manage projects
+                </Button>
+                <Button variant="text" component="a" href="/settings/index.html#connections">
+                  Manage connections
                 </Button>
               </Box>
             </CardContent>

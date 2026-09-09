@@ -64,6 +64,7 @@ function toDomain(row: PendingRow): PendingItem {
 export class PendingItemsRepo {
   private readonly stmtInsert: Statement<unknown[], unknown>;
   private readonly stmtListOpen: Statement<unknown[], PendingRow>;
+  private readonly stmtListClosed: Statement<unknown[], PendingRow>;
   private readonly stmtGetById: Statement<unknown[], PendingRow>;
   private readonly stmtClose: Statement<unknown[], unknown>;
 
@@ -71,6 +72,10 @@ export class PendingItemsRepo {
     this.stmtInsert = this.db.prepare(INSERT_SQL);
     this.stmtListOpen = this.db.prepare<unknown[], PendingRow>(
       `SELECT ${SELECT_COLUMNS} FROM pending_items WHERE status = 'open' ORDER BY created_at ASC`,
+    );
+    this.stmtListClosed = this.db.prepare<unknown[], PendingRow>(
+      `SELECT ${SELECT_COLUMNS} FROM pending_items
+       WHERE status IN ('resolved', 'dismissed') ORDER BY created_at ASC`,
     );
     this.stmtGetById = this.db.prepare<unknown[], PendingRow>(
       `SELECT ${SELECT_COLUMNS} FROM pending_items WHERE pending_id = ?`,
@@ -108,6 +113,18 @@ export class PendingItemsRepo {
   /** Every still-open item, oldest first — the "what's on me" briefing read. */
   listOpen(): PendingItem[] {
     return this.stmtListOpen.all().map(toDomain);
+  }
+
+  /**
+   * Every `resolved` or `dismissed` item, oldest first.
+   *
+   * The Layer 2 dedupe guard reads this alongside {@link listOpen}: a
+   * re-synthesis of a thread whose obligation was already closed (a reply Layer
+   * 1 filed as noise, or a user who marked it done offline) would otherwise mint
+   * a fresh row for the same thing, because `listOpen` no longer names it.
+   */
+  listClosed(): PendingItem[] {
+    return this.stmtListClosed.all().map(toDomain);
   }
 
   /** `undefined` when no such item exists — an unknown id is not an error. */

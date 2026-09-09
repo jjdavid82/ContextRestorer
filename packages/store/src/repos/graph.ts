@@ -299,6 +299,38 @@ export class GraphRepo {
     return (this.stmtListProjects.all() as ProjectRow[]).map(projectFromRow);
   }
 
+  /**
+   * Delete a declared project and the stakes it carried.
+   *
+   * Added for the Settings "Projects" panel — a user who declared the wrong
+   * project at onboarding needs a way to take it back out. Two clean-ups:
+   *
+   * - `belongs_to` edges pointing AT this project are removed explicitly.
+   *   `relationships` has no foreign key (edges are untyped by design, see the
+   *   `RelationshipRow` note), so nothing else would. A surviving edge is not
+   *   merely dead weight: `retrieval.stakesWeightFor` takes the HIGHEST stakes
+   *   weight across an artifact's projects, so an orphaned edge to a
+   *   now-missing `stakes_weight` row is a latent ranking bug.
+   * - `slack_selected_channels.project_id` is
+   *   `REFERENCES projects(project_id) ON DELETE SET NULL` (migration 006) and
+   *   `foreign_keys = ON` (`db.ts`), so a tagged channel is untagged
+   *   automatically — the channel stays selected, it just stops carrying
+   *   stakes. That is the behaviour migration 006's own comment specifies.
+   *
+   * Narrow and explicit, like {@link unrelate}: the graph is append-only in
+   * spirit, and the only structure that legitimately disappears is one the user
+   * retracted.
+   *
+   * @returns `true` when a row was deleted, `false` for an unknown id.
+   */
+  removeProject(projectId: string): boolean {
+    this.db
+      .prepare(`DELETE FROM relationships WHERE rel = 'belongs_to' AND to_id = ?`)
+      .run(projectId);
+    const result = this.db.prepare(`DELETE FROM projects WHERE project_id = ?`).run(projectId);
+    return result.changes > 0;
+  }
+
   /** The person flagged `is_self`, or `undefined` before identity is resolved. */
   getSelf(): Person | undefined {
     const row = this.stmtGetSelf.get() as PersonRow | undefined;
