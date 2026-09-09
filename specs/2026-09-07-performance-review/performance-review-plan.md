@@ -50,7 +50,7 @@ knob: a larger `forThread` cap than `forBriefing`.
 
 ## Tier 2 — small code changes, clear wins
 
-### 2. Missing indexes — add `010_perf_indexes.sql`
+### 2. Missing indexes — add `014_perf_indexes.sql`
 
 `REFERENCES` creates no index in SQLite, and these correlated / filtered
 queries currently scan:
@@ -67,7 +67,7 @@ Note `BriefingsRepo.deltasWithProse`'s own doc comment already claims it is
 "Indexed by `(delta_id, produced_by)`" — the index was never written.
 
 ```sql
--- 010_perf_indexes.sql
+-- 014_perf_indexes.sql
 CREATE INDEX IF NOT EXISTS idx_claims_delta_produced ON briefing_claims(delta_id, produced_by);
 CREATE INDEX IF NOT EXISTS idx_deltas_supersedes     ON state_deltas(supersedes);
 CREATE INDEX IF NOT EXISTS idx_pending_status        ON pending_items(status, created_at);

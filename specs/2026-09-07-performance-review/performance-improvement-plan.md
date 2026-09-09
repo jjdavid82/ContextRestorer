@@ -8,7 +8,7 @@ against the code.
 
 | Item | State |
 |---|---|
-| A — `010_perf_indexes.sql` | **done** — `npm run test -w packages/store` green, store package rebuilt |
+| A — `014_perf_indexes.sql` | **done** — `npm run test -w packages/store` green, store package rebuilt |
 | B — delete `BriefingsRepo.deltasWithProse` | **done** — method + its test removed |
 | C — memoise briefing-query embedding | **done** — `retrieval.ts`, test added |
 | D — `EventsRepo.countByThread` + wire at `main.ts` | **done** — tests added; `main.ts` + `e2eTrace.test.ts` updated |
@@ -62,7 +62,7 @@ left untouched.
 
 ## Do now
 
-### A. `010_perf_indexes.sql` — the genuinely missing indexes
+### A. `014_perf_indexes.sql` — the genuinely missing indexes
 
 `REFERENCES` creates no index in SQLite (see the `009` header comment for the
 same reasoning). These queries scan today:
@@ -76,7 +76,7 @@ same reasoning). These queries scan today:
 | `extraction_failures(last_at)` | `ExtractionFailuresRepo.listRecent` — `WHERE last_at >= ? ORDER BY last_at DESC` | Diagnostics "recent activity" (new in `2148e79`) |
 
 ```sql
--- 010_perf_indexes.sql
+-- 014_perf_indexes.sql
 -- REFERENCES does not create an index in SQLite (see 009). These correlated /
 -- filtered reads run on the briefing path, the 30s scheduler tick, and the
 -- Diagnostics panel; without an index each is a full table scan. IF NOT EXISTS
