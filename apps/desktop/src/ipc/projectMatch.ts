@@ -1,6 +1,6 @@
 /**
  * Deterministic project detection for a briefing row — the auto half of the
- * per-claim label (migrations 010/011).
+ * per-claim label (migrations 011/012).
  *
  * ## Why this is not a model call
  *

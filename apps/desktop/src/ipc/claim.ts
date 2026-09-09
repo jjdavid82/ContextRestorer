@@ -63,13 +63,13 @@ export type { Drilldown, DrilldownEvent };
 /** Invoke channel serving claim provenance. */
 export const DRILLDOWN_CHANNEL = 'claim:drilldown';
 
-/** Invoke channel writing one per-claim project label (migration 010). */
+/** Invoke channel writing one per-claim project label (migration 011). */
 export const SET_PROJECT_CHANNEL = 'claim:setProject';
 
 /** Invoke channel reading back every label on one briefing. */
 export const PROJECTS_CHANNEL = 'claim:projects';
 
-/** Invoke channel auto-filing a briefing's still-unlabelled rows (migration 011). */
+/** Invoke channel auto-filing a briefing's still-unlabelled rows (migration 012). */
 export const DETECT_PROJECTS_CHANNEL = 'claim:detectProjects';
 
 /**
@@ -123,7 +123,7 @@ export interface ThreadEventReader {
  */
 export interface ClaimProjectStore {
   /** Every label on file — keyed by artifact, so it spans briefings. */
-  listAll(): ReadonlyArray<{ artifactId: string; projectId: string; origin?: string }>;
+  listAll(): ReadonlyArray<{ artifactId: string; projectId: string; origin?: 'user' | 'auto' }>;
   setProject(
     artifactId: string,
     projectId: string | null,
@@ -432,13 +432,19 @@ export function drilldown(arg: unknown, deps: ClaimHandlerDeps): Drilldown {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Per-claim project labels (migration 010)                                   */
+/* Per-claim project labels (migration 011)                                   */
 /* -------------------------------------------------------------------------- */
 
 /** One label as it crosses the bridge. `projectId: null` means "untagged". */
 export interface ClaimProjectSelection {
   claimId: string;
   projectId: string | null;
+  /**
+   * `'user'` for a label the user picked, `'auto'` for one {@link detectProject}
+   * derived from the source text. Forwarded so the renderer can show a guess as
+   * a suggestion rather than as the user's own filing (X-2) — see migration 013.
+   */
+  origin: 'user' | 'auto';
 }
 
 /**
@@ -483,7 +489,7 @@ export function setClaimProject(arg: unknown, deps: ClaimHandlerDeps): { ok: boo
 
   try {
     // `briefingId` is provenance now, not identity — the label is keyed on the
-    // artifact so it survives the next Refresh (migration 012).
+    // artifact so it survives the next Refresh (migration 013).
     deps.labels.setProject(
       parsed.claimId,
       parsed.projectId,
@@ -501,7 +507,7 @@ export function setClaimProject(arg: unknown, deps: ClaimHandlerDeps): { ok: boo
 /**
  * `claim:projects` body — every label on file.
  *
- * Not scoped to a briefing since migration 012: labels are keyed on the
+ * Not scoped to a briefing since migration 013: labels are keyed on the
  * artifact, so the same thread keeps its filing across every Refresh. The
  * renderer indexes the result by claim id and looks up whichever rows its
  * current briefing happens to contain.
@@ -517,9 +523,12 @@ export function listClaimProjects(_arg: unknown, deps: ClaimHandlerDeps): ClaimP
   if (deps.labels === undefined) return [];
 
   try {
-    return deps.labels
-      .listAll()
-      .map((tag) => ({ claimId: tag.artifactId, projectId: tag.projectId }));
+    return deps.labels.listAll().map((tag) => ({
+      claimId: tag.artifactId,
+      projectId: tag.projectId,
+      // A row written before migration 013 has no origin; it was typed by hand.
+      origin: tag.origin ?? 'user',
+    }));
   } catch (error) {
     console.error('[claim] listProjects failed', error);
     return [];
@@ -537,6 +546,15 @@ export function listClaimProjects(_arg: unknown, deps: ClaimHandlerDeps): ClaimP
 export const MAX_DETECTION_CHARS = 20_000;
 
 /**
+ * Largest number of events, from the START of a thread, detection will read.
+ *
+ * Only there to bound a pathological thread (thousands of empty-body events)
+ * cheaply — {@link MAX_DETECTION_CHARS} is the real limit and is normally hit
+ * within the first dozen messages.
+ */
+export const MAX_DETECTION_EVENTS = 2_000;
+
+/**
  * The source text one claim is detected from: its thread's raw events, the same
  * rows `claim:drilldown` shows.
  *
@@ -545,14 +563,23 @@ export const MAX_DETECTION_CHARS = 20_000;
  * "the user proposed three optional enhancements" names no project even when
  * every message under it does. Reading the events is what makes this detection
  * "based on the message or email content" rather than on a summary of it.
+ *
+ * Reads from the HEAD of the thread, not via {@link resolveEvents}: that keeps
+ * only the most recent {@link MAX_DRILLDOWN_EVENTS}, and a project named once
+ * when a long thread opened — exactly the case worth catching — sits before
+ * that window. `eventText` (not a raw `payload.text` read) so the per-event
+ * cap and whitelist stay in one place.
  */
 export function detectionText(claimId: string, deps: ClaimHandlerDeps): string {
-  const events = resolveEvents(claimId, deps);
+  const artifact = deps.artifacts.getArtifact(claimId);
+  if (artifact === undefined) return '';
+
+  const events = deps.events.listByThread(artifact.externalRef);
   const parts: string[] = [];
   let length = 0;
 
-  for (const event of events) {
-    const text = typeof event.payload['text'] === 'string' ? event.payload['text'] : '';
+  for (const event of events.slice(0, MAX_DETECTION_EVENTS)) {
+    const text = eventText(event.payload);
     if (text === '') continue;
     parts.push(text);
     length += text.length + 1;

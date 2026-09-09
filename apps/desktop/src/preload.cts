@@ -36,6 +36,17 @@ export interface OnboardingStatus {
   projectsDeclared: string[];
   /** Whether the local Ollama endpoint answered a health probe. */
   ollamaReady: boolean;
+  /**
+   * How many projects `projects:declare` will actually accept
+   * (`config.onboarding.minDeclaredProjects`, OI-3).
+   *
+   * Reported rather than hardcoded in the renderer because the two had already
+   * drifted once: the config said 3 while the onboarding screen called the
+   * step optional and offered a "Skip for now" button that could only fail.
+   * The number the UI states and the number the handler enforces are now the
+   * same value, read from one place.
+   */
+  minDeclaredProjects: number;
 }
 
 /** `model:get` — the chat-model picker (Settings page). */
@@ -140,6 +151,16 @@ export interface PendingItem {
    * list does not. `null` when it could not be resolved.
    */
   sourceQuote: string | null;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** A citation anchoring a claim to a concrete ingested event. */
@@ -149,6 +170,16 @@ export interface Citation {
   source: Source;
   /** Deep link back into Slack/Gmail. */
   externalUrl?: string;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** One validated claim, streamed as it is produced. */
@@ -306,7 +337,7 @@ export interface ActivityEvent {
     | 'thread_parked'
     | 'gate_injection'
     | 'gate_drops'
-    | 'template_fallback'
+    | 'briefing_fallback'
     | 'extraction_writeoff'
     | 'model_error'
     | 'noise_skipped';
@@ -343,6 +374,16 @@ export interface LocalMetrics {
   gateDrops: MetricCount[];
   /** SEC-5: accepted claims that had something redacted. */
   redactedClaims: number;
+  /**
+   * Verdicts recorded per kind (`relevant` / `irrelevant` / `wrong` /
+   * `missed`), all time. Empty when nothing has been judged.
+   *
+   * Shown so the user can see their feedback was stored. It deliberately does
+   * NOT claim the ranking changed — nothing learns from these (X-2); they
+   * exist to be exported as labelled data for the offline eval.
+   */
+  feedbackCounts: Record<string, number>;
+
   /** SEC-5: total values redacted. */
   redactionCount: number;
   /** SEC-5: detector kinds that fired. Kinds only — never a redacted value. */
@@ -420,7 +461,7 @@ export interface SelectedSlackChannel {
 }
 
 /**
- * One per-claim project label (migration 010).
+ * One per-claim project label (migration 011).
  *
  * `claimId` is an artifact id, matching `Drilldown.claimId` — the renderer has
  * no `briefing_claims.claim_id`, as `ipc/claim.ts` documents.
@@ -428,6 +469,13 @@ export interface SelectedSlackChannel {
 export interface ClaimProjectSelection {
   claimId: string;
   projectId: string | null;
+  /**
+   * `'user'` for a label the user picked, `'auto'` for one detection derived by
+   * matching a project name in the source text. Absent is treated as `'user'`.
+   * Kept on the wire so the renderer never renders a guess as the user's own
+   * filing (X-2) — see migration 013.
+   */
+  origin?: 'user' | 'auto';
 }
 
 /**
@@ -452,6 +500,50 @@ export interface SourceHealth {
   retryAfter?: number;
 }
 
+/** `privacy:stats` — what the app is currently holding (SEC-8's read-only half). */
+export interface DataSummary {
+  /** Raw source messages stored. */
+  messages: number;
+  /** Derived state changes a wipe also removes. */
+  summaries: number;
+  /** Briefings written. */
+  briefings: number;
+  /** Obligations, open and closed. */
+  obligations: number;
+  /** Every row a wipe would delete, across every table. */
+  totalRows: number;
+  /** Epoch ms of the oldest stored message; `null` when nothing is stored. */
+  oldestEventAt: number | null;
+  /** Messages already past the retention cutoff — what the next purge takes. */
+  expiredRawEvents: number;
+  /** `config.retention.rawEventDays`. */
+  retentionDays: number;
+  /** Sources whose credentials a wipe would revoke. */
+  connectedSources: Source[];
+}
+
+/**
+ * `privacy:deleteEverything` — what each step of the erasure managed.
+ *
+ * `ok` reports the SQLite wipe specifically: once that commits, the user's
+ * messages are gone in every sense that matters to them. Anything the process
+ * could not finish afterwards is named in `incomplete` and shown, rather than
+ * downgrading a real erasure to a failure or hiding a partial one behind a
+ * green tick.
+ */
+export interface DeleteEverythingReport {
+  ok: boolean;
+  reason?: string;
+  rowsDeleted?: number;
+  /** `null` when the vector store could not be reached — not the same as `0`. */
+  vectorsDeleted?: number | null;
+  filesDeleted?: number;
+  filesFailed?: number;
+  credentialsRevoked?: Source[];
+  /** Steps that did not complete: `vectors`, `files`, `credentials`. */
+  incomplete?: string[];
+}
+
 /** `pipeline:status` — a live "what is the pipeline doing right now" snapshot. */
 export interface PipelineStatus {
   /** Ingested events with no `extractions` row yet. */
@@ -466,6 +558,15 @@ export interface PipelineStatus {
    * the "a human should look" number, surfaced on the rail and in Diagnostics.
    */
   parkedThreads: number;
+  /**
+   * Roughly how long the extraction backlog will take to clear, in ms; `null`
+   * when there is no backlog or not enough measured evidence to estimate one.
+   *
+   * `null` means "cannot say yet", never "instant" — a first-run user has no
+   * completed Layer-1 calls to average over, and the renderer must show the
+   * count alone rather than invent a promise.
+   */
+  extractionEtaMs: number | null;
 }
 
 /** Detaches a `send`-style listener. Always call this on component teardown. */
@@ -575,21 +676,32 @@ function assertScheduleInput(input: unknown): asserts input is BriefingScheduleI
   }
 }
 
-/** Shape-check the selection `slack:setSelected` takes. */
+/**
+ * Shape-check the selection `slack:setSelected` takes.
+ *
+ * `projectId` is tri-state and validated only when PRESENT: absent means "leave
+ * the existing tag alone", `null` clears it, a non-empty string sets it. That
+ * vocabulary is `SlackChannelsRepo.setSelected`'s, and this gate has to speak
+ * it exactly — coercing an absent key into `null` here would silently wipe
+ * every tag on a plain checkbox save.
+ */
 function assertChannelSelection(
   channels: unknown,
-): asserts channels is Array<{ channelId: string; name: string }> {
+): asserts channels is Array<{ channelId: string; name: string; projectId?: string | null }> {
   if (
     !Array.isArray(channels) ||
     channels.some((c: unknown) => {
-      const row = c as { channelId?: unknown; name?: unknown } | null;
+      const row = c as { channelId?: unknown; name?: unknown; projectId?: unknown } | null;
       return (
         row === null ||
         typeof row !== 'object' ||
         typeof row.channelId !== 'string' ||
         row.channelId.length === 0 ||
         typeof row.name !== 'string' ||
-        row.name.length === 0
+        row.name.length === 0 ||
+        (row.projectId !== undefined &&
+          row.projectId !== null &&
+          (typeof row.projectId !== 'string' || row.projectId.length === 0))
       );
     })
   ) {
@@ -700,13 +812,20 @@ export interface ContextRestorerBridge {
   feedback: {
     submit(feedback: FeedbackSubmission): Promise<OkResult>;
     /**
-     * The verdict already on file for each of `claimIds`, keyed by claim id —
-     * across every briefing, not just the current one. Seeds "✓ recorded" so a
-     * restarted app (or a still-open pending item resurfacing under a new
-     * `briefingId`) does not ask the user to re-judge something already
-     * answered. A claim with no key in the result has no verdict yet.
+     * The verdict already on file for each claim key — `<artifact id><U+001F>
+     * <claim sentence>`, the same key `feedback.submit` records — across every
+     * briefing, not just the current one. Seeds "✓ recorded" so a restarted app
+     * (or a still-open pending item resurfacing under a new `briefingId`) does
+     * not ask the user to re-judge something already answered. A key absent
+     * from the result has no verdict yet; a reworded claim is a different key
+     * and correctly comes back unanswered.
      */
-    claimVerdicts(claimIds: string[]): Promise<Record<string, FeedbackVerdict>>;
+    claimVerdicts(claimKeys: string[]): Promise<Record<string, FeedbackVerdict>>;
+    /**
+     * Write every recorded verdict to a local JSON file (FR-7), and report the
+     * path. Nothing leaves the machine.
+     */
+    export(): Promise<FeedbackExportResult>;
   };
   health: {
     onSources(cb: (health: SourceHealth[]) => void): Unsubscribe;
@@ -745,7 +864,13 @@ export interface ContextRestorerBridge {
     /** Live `conversations.list` call over the connected token. */
     listAvailable(): Promise<SlackChannelsResult>;
     getSelected(): Promise<SelectedSlackChannel[]>;
-    setSelected(channels: Array<{ channelId: string; name: string }>): Promise<OkResult>;
+    /**
+     * `projectId` is tri-state (A-2): omit it to leave existing tags alone,
+     * `null` clears one, a string sets it. The plain checkbox save omits it.
+     */
+    setSelected(
+      channels: Array<{ channelId: string; name: string; projectId?: string | null }>,
+    ): Promise<OkResult>;
   };
   /**
    * The chat-model picker (Settings page). `setChat` only PERSISTS the
@@ -756,6 +881,34 @@ export interface ContextRestorerBridge {
     get(): Promise<ModelInfo>;
     setChat(model: string): Promise<OkResult>;
   };
+  /**
+   * SEC-8: the "Your data" panel. `deleteEverything` takes the literal
+   * confirmation phrase, re-checked in the main process — see `ipc/privacy.ts`
+   * for why a channel that erases everything cannot be callable bare from a
+   * renderer that displays untrusted ingested text.
+   */
+  privacy: {
+    stats(): Promise<DataSummary>;
+    deleteEverything(confirm: string): Promise<DeleteEverythingReport>;
+  };
+}
+
+
+/**
+ * `feedback:export` — every recorded verdict written to a local JSON file.
+ *
+ * A LOCAL file on the same machine; nothing is uploaded. The `wrong` verdicts
+ * come out as `unsupportedClaims`, which is the exact shape a fixture's
+ * `ground_truth.unsupported_claims` takes — real, user-confirmed negatives for
+ * the offline eval.
+ */
+export interface FeedbackExportResult {
+  ok: boolean;
+  reason?: string;
+  /** Absolute path written. Present only when `ok`. */
+  path?: string;
+  total?: number;
+  counts?: Record<string, number>;
 }
 
 const bridge: ContextRestorerBridge = {
@@ -884,6 +1037,7 @@ const bridge: ContextRestorerBridge = {
         claimIds: claimIds.map(String),
       }) as Promise<Record<string, FeedbackVerdict>>;
     },
+    export: () => ipcRenderer.invoke('feedback:export') as Promise<FeedbackExportResult>,
   },
   health: {
     onSources: (cb) => subscribe<SourceHealth[]>('health:sources', cb),
@@ -932,8 +1086,19 @@ const bridge: ContextRestorerBridge = {
       assertChannelSelection(channels);
       // Rebuilt field by field, not forwarded: only structured-cloneable plain
       // data crosses the bridge.
+      // `projectId` was MISSING from this map, and dropping it is why channel →
+      // project tagging never worked from the UI: the settings page sent the
+      // tag, this line discarded it, and `slack:setSelected` read the absent
+      // key as "leave the existing tag alone" — so a save looked like it
+      // succeeded, the channel selection persisted, and the tag silently never
+      // did. Spread, not assigned: an explicit `undefined` would cross the
+      // bridge as a present key and mean the opposite (clear the tag).
       return ipcRenderer.invoke('slack:setSelected', {
-        channels: channels.map((c) => ({ channelId: c.channelId, name: c.name })),
+        channels: channels.map((c) => ({
+          channelId: c.channelId,
+          name: c.name,
+          ...(c.projectId === undefined ? {} : { projectId: c.projectId }),
+        })),
       }) as Promise<OkResult>;
     },
   },
@@ -942,6 +1107,18 @@ const bridge: ContextRestorerBridge = {
     setChat: (model) => {
       assertNonEmptyString(model, 'model');
       return ipcRenderer.invoke('model:setChat', { model }) as Promise<OkResult>;
+    },
+  },
+  privacy: {
+    stats: () => ipcRenderer.invoke('privacy:stats') as Promise<DataSummary>,
+    deleteEverything: (confirm) => {
+      // Shape only. The authoritative check is the exact-phrase comparison in
+      // `ipc/privacy.ts` — this gate cannot be the one that matters, since a
+      // compromised renderer controls what it sends.
+      assertNonEmptyString(confirm, 'confirm');
+      return ipcRenderer.invoke('privacy:deleteEverything', {
+        confirm,
+      }) as Promise<DeleteEverythingReport>;
     },
   },
 };

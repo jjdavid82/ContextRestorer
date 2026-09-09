@@ -1,5 +1,5 @@
 /**
- * Persistence for per-claim project labels (migrations 010-012).
+ * Persistence for per-claim project labels (migrations 011-013).
  *
  * A label store and nothing more: no `belongs_to` edge is written here, so
  * nothing in `ranker.ts` or `retrieval.ts` changes weight because a row landed
@@ -9,7 +9,7 @@
  * ## The key is the ARTIFACT
  *
  * A label says "this thread is about project X", so it is keyed on the artifact
- * and survives every re-render of the briefing it was set in. Migration 012
+ * and survives every re-render of the briefing it was set in. Migration 013
  * moved it there after the original `(briefing_id, artifact_id)` key made every
  * "Refresh" blank the dropdowns — see that file for the full account.
  *
@@ -21,7 +21,7 @@
 import type { Database, Statement } from 'better-sqlite3';
 
 /**
- * Who filed a claim under a project (migration 011).
+ * Who filed a claim under a project (migration 012).
  *
  * `'auto'` is a name match, not a judgement — see `detectProject()` in
  * `apps/desktop/src/ipc/projectMatch.ts`. Kept distinct from `'user'` so a

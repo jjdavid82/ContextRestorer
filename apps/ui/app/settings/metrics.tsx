@@ -63,6 +63,13 @@ const GATE_REASON_LABELS: Record<string, string> = {
   unsupported: 'Cited source did not back up the claim',
 };
 
+const FEEDBACK_VERDICT_LABELS: Record<string, string> = {
+  relevant: 'Marked relevant',
+  irrelevant: 'Marked not relevant',
+  wrong: 'Marked wrong',
+  missed: 'Reported as missed',
+};
+
 const TRIGGER_REASON_LABELS: Record<string, string> = {
   quiet: 'Conversation went quiet',
   hard_cap: 'Maximum wait reached',
@@ -340,9 +347,19 @@ function relativeTime(atMs: number, nowMs: number): string {
 
 /** Plain-language copy per event kind. `next` is the dim "what happens now" line. */
 const ACTIVITY_COPY: Record<ActivityEvent['kind'], (n: number) => { text: string; next?: string }> = {
+  // Only reached now by a thread that genuinely kept failing. A thread whose
+  // messages are all chatter no longer lands here: Layer 2 reports that as a
+  // settled `no_signal` rather than spending ten retries and reporting a
+  // failure (`layer2/synthesize.ts`), which is what used to fill this feed.
+  //
+  // The old "next" line — "it will be picked up again automatically as the
+  // conversation continues" — was false: a new message restarts the quiet clock
+  // but never cleared the attempt counter, and a parked thread is filtered out
+  // of `due()`, so nothing ever picked it up again. It is true now, and stated
+  // as the narrower thing it actually is: new content that can be summarized.
   thread_parked: () => ({
-    text: 'A conversation couldn’t be summarized after several tries.',
-    next: 'It will be picked up again automatically as the conversation continues.',
+    text: 'A conversation kept failing to summarize, so it was set aside.',
+    next: 'It will be tried again once a new message arrives on it with something to summarize.',
   }),
   gate_injection: (n) => ({
     text: `${n} ${n === 1 ? 'line was' : 'lines were'} kept out of a briefing for looking like a planted instruction.`,
@@ -353,8 +370,13 @@ const ACTIVITY_COPY: Record<ActivityEvent['kind'], (n: number) => { text: string
       n === 1 ? 'it wasn’t' : 'they weren’t'
     } backed by a source.`,
   }),
-  template_fallback: () => ({
-    text: 'A briefing used a simpler format because the model didn’t respond in time.',
+  // NOT "a briefing used a simpler format": under P0 the deterministic
+  // briefing is the designed output, and every delivered one takes that path.
+  // This row now fires only when the model was genuinely unavailable, which is
+  // a different and much rarer thing.
+  briefing_fallback: () => ({
+    text: 'A briefing was written without the model because it wasn’t available.',
+    next: 'Check that Ollama is running; the briefing itself is complete and cited either way.',
   }),
   extraction_writeoff: (n) => ({
     text: `${n} ${n === 1 ? 'message' : 'messages'} couldn’t be read by the model and ${
@@ -543,6 +565,45 @@ export default function LocalMetricsPanel(): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
+  /** One sentence describing the last export — the path, or why it failed. */
+  const [exportResult, setExportResult] = useState<string | null>(null);
+
+  /**
+   * Write every recorded verdict to a local file (FR-7).
+   *
+   * Reports the PATH rather than a bare "done": the file is the whole point,
+   * and an export the user cannot find has not really happened.
+   */
+  const runExport = useCallback(async (): Promise<void> => {
+    setExporting(true);
+    setExportResult(null);
+    try {
+      const result = await getBridge().feedback.export();
+      setExportResult(
+        result.ok
+          ? `Wrote ${result.total ?? 0} verdict(s) to ${result.path ?? 'the app data folder'}.`
+          : `Export failed: ${result.reason ?? 'unknown reason'}.`,
+      );
+    } catch (cause) {
+      setExportResult(`Export failed: ${cause instanceof Error ? cause.message : String(cause)}.`);
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
+  /**
+   * Verdict counts as `LabeledCounts` rows, in a fixed display order.
+   *
+   * Fixed rather than whatever order SQLite grouped them in, so the panel does
+   * not reshuffle between two refreshes for no reason.
+   */
+  const feedbackCounts = metrics?.feedbackCounts ?? {};
+  const feedbackRows: MetricCount[] = ['relevant', 'irrelevant', 'wrong', 'missed']
+    .map((key) => ({ key, count: feedbackCounts[key] ?? 0 }))
+    .filter((row) => row.count > 0);
+  const feedbackTotal = feedbackRows.reduce((n, row) => n + row.count, 0);
+
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -715,6 +776,39 @@ export default function LocalMetricsPanel(): ReactNode {
                 Kinds detected:{' '}
                 {metrics.redactionKinds.length === 0 ? 'none' : metrics.redactionKinds.join(', ')}
               </p>
+            </DetailSection>
+
+            <DetailSection title="Your feedback (FR-7)">
+              {/* Says plainly what these verdicts do and do not do. The controls
+                  used to be inert from the user's side — recorded and read by
+                  nothing — and the honest fix is a reader plus a sentence, not
+                  a hint of a learning loop the design excludes (X-2). */}
+              <p className="metrics__line">
+                <strong>{feedbackTotal}</strong> verdict(s) recorded.
+              </p>
+              <LabeledCounts
+                rows={feedbackRows}
+                labels={FEEDBACK_VERDICT_LABELS}
+                empty="Nothing judged yet."
+              />
+              <p className="metrics__line">
+                Nothing is learned from these — ranking never reads them. They are labelled data
+                for the offline eval, and the lines you marked wrong become its negatives.
+              </p>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={exporting || feedbackTotal === 0}
+                onClick={() => void runExport()}
+                sx={{ mt: 1 }}
+              >
+                {exporting ? 'Exporting…' : 'Export for eval'}
+              </Button>
+              {exportResult !== null ? (
+                <p className="metrics__line" role="status">
+                  {exportResult}
+                </p>
+              ) : null}
             </DetailSection>
 
             <DetailSection title="Synthesis triggers">

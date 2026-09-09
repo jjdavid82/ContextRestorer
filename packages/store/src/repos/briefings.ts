@@ -471,28 +471,6 @@ export class BriefingsRepo {
     return { count: values.length, p50Ms: at(0.5), p95Ms: at(0.95) };
   }
 
-  /**
-   * Delivered briefings generated in `[sinceMs, now]` that fell back to the
-   * template renderer (`mode = 'template'`), newest first — Diagnostics
-   * "recent activity".
-   *
-   * `purpose = 'delivered'` for the same reason {@link latencyStats} filters it:
-   * a background pre-compute pass that used the template path is not a
-   * user-visible degradation and should not read as one.
-   */
-  recentTemplateFallbacks(sinceMs: number, limit: number): { briefingId: string; generatedAt: number }[] {
-    const rows = this.db
-      .prepare(
-        `SELECT briefing_id, generated_at
-           FROM briefings
-          WHERE mode = 'template' AND generated_at >= ? AND purpose = 'delivered'
-          ORDER BY generated_at DESC
-          LIMIT ?`,
-      )
-      .all(sinceMs, limit) as { briefing_id: string; generated_at: number }[];
-
-    return rows.map((row) => ({ briefingId: row.briefing_id, generatedAt: row.generated_at }));
-  }
 
   /**
    * When the most recent user-facing briefing was generated (epoch ms), or

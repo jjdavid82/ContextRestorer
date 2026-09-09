@@ -324,6 +324,7 @@ function slowStore(delayMs: number, results: SearchResult[] = []): VectorStore {
         setTimeout(() => resolve(results), delayMs);
       }),
     deleteByEventIds: async () => 0,
+    deleteAll: async () => 0,
     close: async () => undefined,
   };
 }
@@ -365,6 +366,7 @@ describe('RetrievalService budget (OI-1)', () => {
         return new Promise<SearchResult[]>((resolve) => setTimeout(() => resolve([]), 3000));
       },
       deleteByEventIds: async () => 0,
+    deleteAll: async () => 0,
       close: async () => undefined,
     };
 
@@ -396,6 +398,7 @@ describe('RetrievalService budget (OI-1)', () => {
         throw new Error('lancedb exploded');
       },
       deleteByEventIds: async () => 0,
+    deleteAll: async () => 0,
       close: async () => undefined,
     };
 

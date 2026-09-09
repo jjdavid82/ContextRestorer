@@ -7,7 +7,9 @@ import type { DueThread } from '@cr/store';
 // pattern as `health.test.ts`/`tray.test.ts`.
 vi.mock('electron', () => ({}));
 
-const { computePipelineStatus } = await import('../src/ipc/pipelineStatus.js');
+const { computePipelineStatus, estimateExtractionEta } = await import(
+  '../src/ipc/pipelineStatus.js'
+);
 
 const CLOCK: Clock = { now: () => 1_700_000_000_000 };
 
@@ -20,10 +22,20 @@ const MAX_ATTEMPTS = 3;
 
 const due = (threadKey: string, attempts = 0): DueThread => ({ threadKey, source: 'gmail', attempts });
 
+/**
+ * `events` stub. `callEstimate` defaults to "every unextracted event is its own
+ * one-event thread" — the worst case, and the one that most differs from the
+ * old `total / MAX_BATCH_EVENTS`.
+ */
+const eventsStub = (unextracted: number, callEstimate = unextracted) => ({
+  countUnextracted: () => unextracted,
+  unextractedModelCallEstimate: () => callEstimate,
+});
+
 describe('computePipelineStatus', () => {
   it('reports zero across the board when nothing is outstanding', () => {
     const status = computePipelineStatus({
-      events: { countUnextracted: () => 0 },
+      events: eventsStub(0),
       watermarks: { due: () => [] },
       scheduler: { pending: [] },
       debounce: DEBOUNCE,
@@ -35,12 +47,14 @@ describe('computePipelineStatus', () => {
       synthesisDue: 0,
       synthesisInFlight: 0,
       parkedThreads: 0,
+      // No backlog means no wait to estimate. `null`, not 0 — see the field.
+      extractionEtaMs: null,
     });
   });
 
   it('passes the extraction backlog count through verbatim', () => {
     const status = computePipelineStatus({
-      events: { countUnextracted: () => 7 },
+      events: eventsStub(7),
       watermarks: { due: () => [] },
       scheduler: { pending: [] },
       debounce: DEBOUNCE,
@@ -52,7 +66,7 @@ describe('computePipelineStatus', () => {
 
   it('counts a currently-synthesizing thread as in-flight, not due', () => {
     const status = computePipelineStatus({
-      events: { countUnextracted: () => 0 },
+      events: eventsStub(0),
       watermarks: { due: () => [due('t1'), due('t2')] },
       scheduler: { pending: ['t1'] },
       debounce: DEBOUNCE,
@@ -66,7 +80,7 @@ describe('computePipelineStatus', () => {
 
   it('excludes a parked thread (attempts >= maxAttempts) from synthesisDue', () => {
     const status = computePipelineStatus({
-      events: { countUnextracted: () => 0 },
+      events: eventsStub(0),
       watermarks: { due: () => [due('t1'), due('doomed', MAX_ATTEMPTS)] },
       scheduler: { pending: [] },
       debounce: DEBOUNCE,
@@ -83,7 +97,7 @@ describe('computePipelineStatus', () => {
 
   it('does not count a parked thread as parked while it is being synthesized', () => {
     const status = computePipelineStatus({
-      events: { countUnextracted: () => 0 },
+      events: eventsStub(0),
       watermarks: { due: () => [due('retrying', MAX_ATTEMPTS)] },
       scheduler: { pending: ['retrying'] },
       debounce: DEBOUNCE,
@@ -98,7 +112,7 @@ describe('computePipelineStatus', () => {
   it('passes the debounce config and current time through to watermarks.due', () => {
     const dueFn = vi.fn(() => []);
     computePipelineStatus({
-      events: { countUnextracted: () => 0 },
+      events: eventsStub(0),
       watermarks: { due: dueFn },
       scheduler: { pending: [] },
       debounce: DEBOUNCE,
@@ -106,5 +120,66 @@ describe('computePipelineStatus', () => {
       clock: CLOCK,
     });
     expect(dueFn).toHaveBeenCalledWith(CLOCK.now(), { debounce: DEBOUNCE });
+  });
+});
+
+describe('estimateExtractionEta — the F2 first-run promise', () => {
+  /** An `AiCallsRepo` slice returning a fixed mean, or throwing. */
+  const meanOf = (value: number | null) => ({ recentMeanLatencyMs: () => value });
+  /** An `EventsRepo` slice reporting a fixed model-call estimate for the backlog. */
+  const callsOf = (calls: number) => ({ unextractedModelCallEstimate: () => calls });
+
+  it('costs the backlog in model CALLS, using the per-thread estimate', () => {
+    // Layer 1 batches per thread, so the number of calls comes from the store's
+    // `unextractedModelCallEstimate`, not `total / MAX_BATCH_EVENTS`. A backlog
+    // the store says is 300 calls at 80s each is 300 × 80s.
+    expect(estimateExtractionEta(callsOf(300), meanOf(80_000))).toBe(300 * 80_000);
+  });
+
+  it('multiplies the call count by the measured mean call latency', () => {
+    expect(estimateExtractionEta(callsOf(1), meanOf(80_000))).toBe(80_000);
+  });
+
+  it('is null when there is no backlog', () => {
+    // Not 0: the renderer distinguishes "nothing to wait for" (no line at all)
+    // from "waiting, duration unknown".
+    expect(estimateExtractionEta(callsOf(0), meanOf(80_000))).toBeNull();
+    expect(estimateExtractionEta(callsOf(-3), meanOf(80_000))).toBeNull();
+  });
+
+  it('is null when no latency has been measured yet — the first-run case', () => {
+    // A user who has just connected has no completed Layer-1 calls, which is
+    // exactly when they are staring at this. A count with no promise attached
+    // is the honest answer.
+    expect(estimateExtractionEta(callsOf(500), meanOf(null))).toBeNull();
+  });
+
+  it('is null when no latency source is wired at all', () => {
+    expect(estimateExtractionEta(callsOf(500))).toBeNull();
+  });
+
+  it('is null rather than 0 for a nonsense measured latency', () => {
+    expect(estimateExtractionEta(callsOf(500), meanOf(0))).toBeNull();
+    expect(estimateExtractionEta(callsOf(500), meanOf(-1))).toBeNull();
+  });
+
+  it('degrades to null when the latency lookup throws', () => {
+    const angry = {
+      recentMeanLatencyMs: () => {
+        throw new Error('database is locked');
+      },
+    };
+
+    // A status strip must not fail over its own optional garnish.
+    expect(estimateExtractionEta(callsOf(500), angry)).toBeNull();
+  });
+
+  it('degrades to null when the backlog read throws', () => {
+    const angry = {
+      unextractedModelCallEstimate: () => {
+        throw new Error('database is locked');
+      },
+    };
+    expect(estimateExtractionEta(angry, meanOf(80_000))).toBeNull();
   });
 });

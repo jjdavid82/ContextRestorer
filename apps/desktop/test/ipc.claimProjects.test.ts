@@ -42,20 +42,30 @@ const CLOCK_NOW = 1_700_000_000_000;
 const BRIEFING_ID = 'briefing-1';
 
 /** An in-memory stand-in for `ClaimProjectsRepo`, satisfying `ClaimProjectStore`. */
-function makeStore(seed: ReadonlyArray<{ artifactId: string; projectId: string }> = []) {
-  const rows = new Map(seed.map((row) => [row.artifactId, row.projectId]));
+function makeStore(
+  seed: ReadonlyArray<{ artifactId: string; projectId: string; origin?: 'user' | 'auto' }> = [],
+) {
+  const rows = new Map(
+    seed.map((row) => [row.artifactId, { projectId: row.projectId, origin: row.origin ?? 'user' }]),
+  );
   return {
     rows,
-    // Keyed on the artifact since migration 012, so labels span briefings.
-    listAll: vi.fn(() => [...rows].map(([artifactId, projectId]) => ({ artifactId, projectId }))),
-    setProject: vi.fn((artifactId: string, projectId: string | null) => {
-      if (projectId === null) rows.delete(artifactId);
-      else rows.set(artifactId, projectId);
-    }),
-    // Mirrors the repo's `INSERT … WHERE NOT EXISTS`: writes only where absent.
+    // Keyed on the artifact since migration 013, so labels span briefings. The
+    // `origin` rides along so a guess is never reported as the user's filing.
+    listAll: vi.fn(() =>
+      [...rows].map(([artifactId, v]) => ({ artifactId, projectId: v.projectId, origin: v.origin })),
+    ),
+    setProject: vi.fn(
+      (artifactId: string, projectId: string | null, _now: number, origin: 'user' | 'auto' = 'user') => {
+        if (projectId === null) rows.delete(artifactId);
+        else rows.set(artifactId, { projectId, origin });
+      },
+    ),
+    // Mirrors the repo's `INSERT … WHERE NOT EXISTS`: writes only where absent,
+    // and always as `'auto'` — this is the detection path.
     suggestProject: vi.fn((artifactId: string, projectId: string) => {
       if (rows.has(artifactId)) return false;
-      rows.set(artifactId, projectId);
+      rows.set(artifactId, { projectId, origin: 'auto' });
       return true;
     }),
   };
@@ -231,8 +241,17 @@ describe('listClaimProjects', () => {
     );
 
     expect(listClaimProjects({ briefingId: BRIEFING_ID }, deps)).toEqual([
-      { claimId: 'a1', projectId: 'p1' },
-      { claimId: 'a2', projectId: 'p2' },
+      { claimId: 'a1', projectId: 'p1', origin: 'user' },
+      { claimId: 'a2', projectId: 'p2', origin: 'user' },
+    ]);
+  });
+
+  it('defaults a row with no stored origin to "user" (predates migration 013)', () => {
+    const store = makeStore([{ artifactId: 'a1', projectId: 'p1' }]);
+    store.listAll.mockImplementation(() => [{ artifactId: 'a1', projectId: 'p1' }]);
+
+    expect(listClaimProjects({ briefingId: BRIEFING_ID }, makeDeps(store))).toEqual([
+      { claimId: 'a1', projectId: 'p1', origin: 'user' },
     ]);
   });
 
@@ -286,7 +305,9 @@ describe('detectClaimProjects', () => {
     });
 
     expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([
-      { claimId: 'a1', projectId: 'p-dsp' },
+      // `origin: 'auto'` — the filter and the dropdown treat this as a
+      // suggestion, never as the user's own filing (X-2).
+      { claimId: 'a1', projectId: 'p-dsp', origin: 'auto' },
     ]);
     expect(deps.labels.suggestProject).toHaveBeenCalledWith('a1', 'p-dsp', CLOCK_NOW, BRIEFING_ID);
   });
@@ -322,11 +343,11 @@ describe('detectClaimProjects', () => {
     });
 
     expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([
-      { claimId: 'a1', projectId: 'p-academy' },
+      { claimId: 'a1', projectId: 'p-academy', origin: 'user' },
     ]);
     // Skipped before the text was even read.
     expect(deps.labels.suggestProject).not.toHaveBeenCalled();
-    expect(store.rows.get('a1')).toBe('p-academy');
+    expect(store.rows.get('a1')).toEqual({ projectId: 'p-academy', origin: 'user' });
   });
 
   it('files what it can and leaves the rest, across a batch', () => {
@@ -342,8 +363,8 @@ describe('detectClaimProjects', () => {
     expect(
       detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1', 'a2', 'a3'] }, deps),
     ).toEqual([
-      { claimId: 'a1', projectId: 'p-dsp' },
-      { claimId: 'a3', projectId: 'p-academy' },
+      { claimId: 'a1', projectId: 'p-dsp', origin: 'auto' },
+      { claimId: 'a3', projectId: 'p-academy', origin: 'auto' },
     ]);
   });
 
@@ -371,7 +392,7 @@ describe('detectClaimProjects', () => {
 
     expect(
       detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1', 'a2'] }, deps),
-    ).toEqual([{ claimId: 'a2', projectId: 'p-dsp' }]);
+    ).toEqual([{ claimId: 'a2', projectId: 'p-dsp', origin: 'auto' }]);
   });
 
   it('returns an empty list for a malformed argument or an unwired store', () => {

@@ -18,11 +18,14 @@
  *
  * The point of the file is the *caller contract*. `deleteEverything` deliberately
  * performs no I/O beyond SQLite and instead returns
- * `{ vectorEventIds, narrativePaths }` — a manifest of what it could not erase
- * itself. That contract is only worth anything if somebody acts on it, and this
- * is the first test that plays the caller: it feeds `vectorEventIds` to
- * `VectorStore.deleteByEventIds`, unlinks every `narrativePath`, and drains the
- * `TokenVault` — then proves that nothing identifying is left anywhere.
+ * `{ rowsDeleted, vectorEventIds, narrativePaths }` — the count it removed plus a
+ * manifest of what it could not erase itself. That contract is only worth
+ * anything if somebody acts on it, and this is the first test that plays the
+ * caller: for a full erasure it clears the vector table outright
+ * (`VectorStore.deleteAll` — the manifest's ids are already gone from SQLite, so
+ * an id-by-id eviction that failed partway could never be finished), unlinks
+ * every `narrativePath`, and drains the `TokenVault` — then proves that nothing
+ * identifying is left anywhere.
  *
  * `TokenVault` is imported from `packages/ingest`'s *source*, not from
  * `@cr/ingest`: `@cr/store` does not (and must not) depend on `@cr/ingest`, and
@@ -516,7 +519,9 @@ describe('right to delete, end to end (SEC-8)', () => {
       expect(readdirSync(briefingsDir)).toHaveLength(2);
 
       // ---- Step 2: the caller's half of the contract. ----------------------
-      const removedChunks = await vectors.deleteByEventIds(manifest.vectorEventIds);
+      // Full erasure clears the whole table: `manifest.vectorEventIds` are gone
+      // from SQLite now, so a partial id-by-id eviction could never be resumed.
+      const removedChunks = await vectors.deleteAll();
       for (const path of manifest.narrativePaths) unlinkSync(path);
       // `TokenVault` has no "clear all" operation on purpose — it is keyed per
       // source — so a full erasure revokes each source in turn. Revoking the
@@ -559,7 +564,7 @@ describe('right to delete, end to end (SEC-8)', () => {
       const hits = await vectors.search(QUERY, READ_ALL);
       expect(hits).toEqual([]);
       // Idempotent: replaying the caller's step removes nothing further.
-      expect(await vectors.deleteByEventIds(manifest.vectorEventIds)).toBe(0);
+      expect(await vectors.deleteAll()).toBe(0);
 
       // ---- Assertions: the filesystem. ------------------------------------
       expect(readdirSync(briefingsDir)).toEqual([]);
@@ -582,7 +587,7 @@ describe('right to delete, end to end (SEC-8)', () => {
       await seedEverything();
 
       const first = deleteEverything(db);
-      await vectors.deleteByEventIds(first.vectorEventIds);
+      await vectors.deleteAll();
       for (const path of first.narrativePaths) unlinkSync(path);
       for (const source of ['slack', 'gmail'] satisfies SourceId[]) {
         await vault.revoke(source);
@@ -590,8 +595,8 @@ describe('right to delete, end to end (SEC-8)', () => {
 
       const second = deleteEverything(db);
 
-      expect(second).toEqual({ vectorEventIds: [], narrativePaths: [] });
-      expect(await vectors.deleteByEventIds(second.vectorEventIds)).toBe(0);
+      expect(second).toEqual({ rowsDeleted: 0, vectorEventIds: [], narrativePaths: [] });
+      expect(await vectors.deleteAll()).toBe(0);
       expect(existsSync(vaultPath)).toBe(false);
       expect(triggerNames()).toEqual(APPEND_ONLY_TRIGGERS);
     },
@@ -670,7 +675,11 @@ describe('90-day retention, end to end (NFR)', () => {
       // ---- The purge. ------------------------------------------------------
       const purged = purgeRawEventsOlderThan(db, cutoff);
 
-      expect(purged).toBe(old.length);
+      expect(purged.rowsDeleted).toBe(old.length);
+      // The manifest is what makes the vector half reachable at all — the ids
+      // are gone from `events` by the time this returns, so a caller that had
+      // to re-derive them could not.
+      expect([...purged.vectorEventIds].sort()).toEqual([...old].sort());
       const remaining = (db.prepare(`SELECT event_id FROM events`).all() as {
         event_id: string;
       }[]).map((row) => row.event_id);
@@ -691,7 +700,9 @@ describe('90-day retention, end to end (NFR)', () => {
       expect(await chunkEventIds()).toEqual([...old, ...kept].sort());
 
       // ---- The caller completes the flow. ---------------------------------
-      const removed = await vectors.deleteByEventIds(old);
+      // Driven off the manifest rather than the test's own `old` list, so this
+      // exercises the same two-step `scheduler/retentionPurge.ts` performs.
+      const removed = await vectors.deleteByEventIds(purged.vectorEventIds);
 
       expect(removed).toBe(old.length);
       expect(await chunkEventIds()).toEqual([...kept].sort());
@@ -715,15 +726,20 @@ describe('90-day retention, end to end (NFR)', () => {
         chunkFor('e-3', 'artifact-1', 9_000),
       ]);
 
-      expect(purgeRawEventsOlderThan(db, 1_500)).toBe(1);
-      expect(await vectors.deleteByEventIds(['e-1'])).toBe(1);
+      const first = purgeRawEventsOlderThan(db, 1_500);
+      expect(first.rowsDeleted).toBe(1);
+      expect(await vectors.deleteByEventIds(first.vectorEventIds)).toBe(1);
       expect(triggerNames()).toEqual(APPEND_ONLY_TRIGGERS);
 
-      expect(purgeRawEventsOlderThan(db, 2_500)).toBe(1);
-      expect(await vectors.deleteByEventIds(['e-2'])).toBe(1);
+      const second = purgeRawEventsOlderThan(db, 2_500);
+      expect(second.rowsDeleted).toBe(1);
+      expect(await vectors.deleteByEventIds(second.vectorEventIds)).toBe(1);
 
-      // A no-op purge must not double-create the trigger it just recreated.
-      expect(purgeRawEventsOlderThan(db, 2_500)).toBe(0);
+      // A no-op purge must not double-create the trigger it just recreated,
+      // and must report an empty manifest rather than the previous run's.
+      const third = purgeRawEventsOlderThan(db, 2_500);
+      expect(third.rowsDeleted).toBe(0);
+      expect(third.vectorEventIds).toEqual([]);
 
       expect(countRows('events')).toBe(1);
       expect(await chunkEventIds()).toEqual(['e-3']);

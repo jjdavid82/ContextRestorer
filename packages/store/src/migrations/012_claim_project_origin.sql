@@ -1,6 +1,6 @@
 -- ============ Where a claim's project label came from ============
 --
--- Migration 010 stored WHICH project a briefing row is filed under. This stores
+-- Migration 011 stored WHICH project a briefing row is filed under. This stores
 -- WHO decided: `'user'` for a label the user picked from the dropdown, `'auto'`
 -- for one `detectProject()` derived by finding the project's name in the source
 -- text.

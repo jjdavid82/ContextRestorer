@@ -15,15 +15,19 @@
  *    actually participates in (`@cr/ingest`'s `suggestProjects`). It is a
  *    suggestion, never a write — X-2 means only the user declares projects.
  *  - `projects:declare` is the ONLY writer, and it enforces the OI-3 minimum
- *    (`config.onboarding.minDeclaredProjects`, default `0` — declaration is
- *    optional; see the note on that config field) *before* touching the
- *    database. A rejected call leaves no row behind, so a user who mashes the
- *    button with fewer than the configured minimum selected does not end up
- *    half-onboarded.
- *  - `onboarding:status` reports what the wizard still needs. It lives here
- *    because `projectsDeclared` is this task's data, and because the home
- *    screen's briefing action is gated on it — a gate no one can read is not a
- *    gate.
+ *    (`config.onboarding.minDeclaredProjects`, `3` as shipped) *before*
+ *    touching the database. A rejected call leaves no row behind, so a user who
+ *    mashes the button with fewer than the configured minimum selected does not
+ *    end up half-onboarded.
+ *  - `onboarding:status` reports what the wizard still needs — including
+ *    `minDeclaredProjects` itself, so the screen can state and enforce the same
+ *    number this handler does. It did not always: the renderer carried its own
+ *    constant, described the step as optional, and offered a "Skip for now"
+ *    button whose only possible outcome was `too_few_projects` rendered raw.
+ *    A floor the UI cannot read is a floor the UI will contradict.
+ *    `onboarding:status` lives here because `projectsDeclared` is this task's
+ *    data, and because the home screen's briefing action is gated on it — a
+ *    gate no one can read is not a gate.
  *
  * IDEMPOTENCY. `projects.name` carries no UNIQUE constraint (the PK is a fresh
  * uuid per insert), so `GraphRepo.declareProject` would happily create a second
@@ -51,14 +55,11 @@ import type {
   OnboardingStatus,
   ProjectCandidate,
   ProjectSuggestions,
-  Source,
 } from '../preload.cjs';
+import { connectedSources } from './vaultSources.js';
 
 /** The only project origin the POC permits (X-2); `GraphRepo` rejects anything else. */
 const DECLARED_ORIGIN = 'declared';
-
-/** Sources probed for `onboarding.sourcesConnected`, in a stable display order. */
-const SOURCES: readonly Source[] = ['slack', 'gmail'];
 
 /**
  * Upper bound on a single project name. Free text from the renderer goes
@@ -184,20 +185,6 @@ function declareAll(graph: GraphRepo, names: readonly string[]): { created: numb
   return { created };
 }
 
-/** Which sources currently hold a usable, non-revoked credential. */
-async function connectedSources(vault: TokenVault): Promise<Source[]> {
-  const connected: Source[] = [];
-  for (const source of SOURCES) {
-    try {
-      if ((await vault.load(source)) !== undefined) connected.push(source);
-    } catch {
-      // A vault that cannot be decrypted is reported as "not connected", which
-      // is what the user has to act on anyway.
-    }
-  }
-  return connected;
-}
-
 /**
  * Register the two project channels plus `onboarding:status`.
  *
@@ -250,9 +237,33 @@ export function registerProjectsHandlers(deps: ProjectsHandlerDeps): void {
 
     const names = distinctNames(parsed);
     const minimum = deps.config.onboarding.minDeclaredProjects;
-    if (names.length < minimum) {
+
+    // Count what would exist AFTER this declaration, not just what this request
+    // carries: a user who already has projects on file (they went back a step,
+    // or the floor was raised after their first pass) is topping up, not
+    // re-declaring from zero. `declareAll` skips names that already exist, so
+    // the honest floor check is against the case-insensitive union of the
+    // existing names and the submitted ones — the same de-dup key
+    // `distinctNames` uses.
+    let existingKeys: Set<string>;
+    try {
+      existingKeys = new Set(
+        deps.graph.listProjects().map((project) => project.name.toLowerCase()),
+      );
+    } catch (error) {
+      console.error('[projects] declare could not read existing projects', error);
+      return { ok: false, reason: 'internal_error' };
+    }
+    const newCount = names.filter((name) => !existingKeys.has(name.toLowerCase())).length;
+
+    if (existingKeys.size + newCount < minimum) {
       // OI-3 — rejected before any write, so nothing is persisted.
-      return { ok: false, reason: `too_few_projects: at least ${minimum} required` };
+      // A bare slug, like every other `reason` in this codebase. It used to
+      // carry its own sentence ("too_few_projects: at least 3 required"), which
+      // the onboarding screen then printed verbatim at the user; the renderer
+      // now composes that sentence from `minDeclaredProjects` on
+      // `onboarding:status`, which is the same number enforced here.
+      return { ok: false, reason: 'too_few_projects' };
     }
 
     try {
@@ -306,6 +317,14 @@ export function registerProjectsHandlers(deps: ProjectsHandlerDeps): void {
       ollamaReady = false;
     }
 
-    return { sourcesConnected, projectsDeclared, ollamaReady };
+    return {
+      sourcesConnected,
+      projectsDeclared,
+      ollamaReady,
+      // The same value `projects:declare` rejects against, a few lines up.
+      // Reported rather than left for the renderer to assume — see the module
+      // header on why that assumption had already gone wrong once.
+      minDeclaredProjects: deps.config.onboarding.minDeclaredProjects,
+    };
   });
 }

@@ -193,6 +193,7 @@ describe('RailStatus refresh button', () => {
       synthesisDue: 0,
       synthesisInFlight: 0,
       parkedThreads: 0,
+      extractionEtaMs: null,
     };
     h.emitPipeline(base);
     expect(screen.queryByText(/stuck/i)).toBeNull();
@@ -210,6 +211,7 @@ describe('RailStatus refresh button', () => {
     synthesisDue: 0,
     synthesisInFlight: 0,
     parkedThreads: 0,
+    extractionEtaMs: null,
   };
 
   it('dismisses the stuck notice, then re-shows it only once the backlog grows past the dismissed count', () => {
@@ -263,3 +265,46 @@ describe('RailStatus refresh button', () => {
     expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
   });
 });
+
+describe('the extraction ETA (F2)', () => {
+  const backlog = (extractionBacklog: number, extractionEtaMs: number | null): PipelineStatus => ({
+    extractionBacklog,
+    synthesisDue: 0,
+    synthesisInFlight: 0,
+    parkedThreads: 0,
+    extractionEtaMs,
+  });
+
+  it('states the count alone while no estimate has been earned', () => {
+    // The first-run state: no completed Layer-1 calls to average, so there is
+    // no honest number to quote. The count still tells the user work is moving.
+    const h = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h.emitHealth(HEALTH);
+
+    h.emitPipeline(backlog(420, null));
+
+    expect(screen.getByText('Reading 420 new messages…')).toBeTruthy();
+  });
+
+  it('appends the estimate once one exists', () => {
+    const h = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h.emitHealth(HEALTH);
+
+    h.emitPipeline(backlog(420, 12 * 60_000));
+
+    expect(screen.getByText('Reading 420 new messages… ~12 min left')).toBeTruthy();
+  });
+
+  it('singularises one message', () => {
+    const h = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h.emitHealth(HEALTH);
+
+    h.emitPipeline(backlog(1, null));
+
+    expect(screen.getByText('Reading 1 new message…')).toBeTruthy();
+  });
+});
+

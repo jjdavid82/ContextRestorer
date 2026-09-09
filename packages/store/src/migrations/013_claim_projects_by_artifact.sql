@@ -1,6 +1,6 @@
 -- ============ Re-key claim labels to the ARTIFACT, not the briefing ============
 --
--- Migrations 010/011 keyed a label `(briefing_id, artifact_id)`, on the
+-- Migrations 011/012 keyed a label `(briefing_id, artifact_id)`, on the
 -- reasoning that "this thread is about project X" is a judgement about one
 -- briefing's context. Real use disproved that within a day.
 --
@@ -32,13 +32,25 @@ CREATE TABLE claim_projects_v2 (
   origin TEXT NOT NULL DEFAULT 'user' CHECK (origin IN ('user', 'auto'))
 ) WITHOUT ROWID;
 
+-- ONE row per artifact — the newest, which is the user's most recent statement.
+-- A window function with a TOTAL ordering, not `MAX(tagged_at)` + `GROUP BY`:
+-- two rows for one artifact written in the same millisecond (a rapid re-file)
+-- both match `= MAX(...)`, and `GROUP BY artifact_id` then takes the bare
+-- non-aggregated columns from an arbitrary one of them — so the surviving row
+-- could carry `project_id` from one and `origin`/`briefing_id` from the other.
+-- `briefing_id` is part of the old primary key and NOT NULL, so
+-- `tagged_at DESC, briefing_id DESC` breaks every tie deterministically.
 INSERT INTO claim_projects_v2 (artifact_id, project_id, briefing_id, tagged_at, origin)
-SELECT cp.artifact_id, cp.project_id, cp.briefing_id, cp.tagged_at, cp.origin
-  FROM claim_projects cp
- WHERE cp.tagged_at = (
-         SELECT MAX(x.tagged_at) FROM claim_projects x WHERE x.artifact_id = cp.artifact_id
-       )
- GROUP BY cp.artifact_id;
+SELECT artifact_id, project_id, briefing_id, tagged_at, origin
+  FROM (
+    SELECT cp.artifact_id, cp.project_id, cp.briefing_id, cp.tagged_at, cp.origin,
+           ROW_NUMBER() OVER (
+             PARTITION BY cp.artifact_id
+             ORDER BY cp.tagged_at DESC, cp.briefing_id DESC
+           ) AS rn
+      FROM claim_projects cp
+  )
+ WHERE rn = 1;
 
 DROP TABLE claim_projects;
 

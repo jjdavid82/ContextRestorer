@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
@@ -168,3 +168,141 @@ describe('migrations directory resolution', () => {
     }
   });
 });
+
+describe('010_watermark_parked_at — backfilling threads parked by an older build', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = openDb(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  /**
+   * Insert a watermark row the way a build without `parked_at` would have left
+   * it: attempts burned, no reference point. Written column-by-column so the
+   * insert keeps working when the table gains more columns.
+   */
+  const seedWatermark = (threadKey: string, attempts: number): void => {
+    db.prepare(
+      `INSERT INTO synthesis_watermark
+         (thread_key, source, oldest_unsynth_at, last_event_at, last_synthesized_at, attempts)
+       VALUES (?, 'slack', 1000, 1000, NULL, ?)`,
+    ).run(threadKey, attempts);
+  };
+
+  const parkedAt = (threadKey: string): number | null => {
+    const row = db
+      .prepare(`SELECT parked_at FROM synthesis_watermark WHERE thread_key = ?`)
+      .get(threadKey) as { parked_at: number | null } | undefined;
+    return row?.parked_at ?? null;
+  };
+
+  it('gives every row that had burned attempts a reference point', () => {
+    // Migrate to 009 first, then seed, then let 010 run — the actual upgrade
+    // path a user's existing database takes.
+    migrateThrough(db, 9);
+    seedWatermark('parked', 10);
+    seedWatermark('mid-retry', 3);
+    seedWatermark('healthy', 0);
+
+    migrate(db);
+
+    // Without this, the revive's comparison against NULL matches nothing and a
+    // thread parked by an older build stays parked forever — which is the
+    // defect the migration exists to fix.
+    expect(parkedAt('parked')).not.toBeNull();
+    expect(parkedAt('mid-retry')).not.toBeNull();
+    // A thread that never failed is not parked and needs no reference point.
+    expect(parkedAt('healthy')).toBeNull();
+  });
+
+  it('leaves a fresh install with no stamped rows', () => {
+    migrate(db);
+
+    expect(
+      (
+        db
+          .prepare(`SELECT COUNT(*) AS n FROM synthesis_watermark WHERE parked_at IS NOT NULL`)
+          .get() as { n: number }
+      ).n,
+    ).toBe(0);
+  });
+});
+
+describe('013_claim_projects_by_artifact — re-keying labels to the artifact', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = openDb(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('keeps ONE deterministic row per artifact when two share the newest tagged_at', () => {
+    migrateThrough(db, 12);
+
+    db.prepare(
+      `INSERT INTO projects (project_id, name, origin, stakes_weight, declared_at)
+       VALUES ('p-a', 'Alpha', 'declared', 1.0, 1), ('p-b', 'Beta', 'declared', 1.0, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO briefings
+         (briefing_id, window_start, window_end, generated_at, mode, narrative_path,
+          delta_ids_json, threads_still_processing)
+       VALUES ('b-1', 0, 1, 1, 'llm', '/n/1.md', '[]', 0),
+              ('b-2', 1, 2, 2, 'llm', '/n/2.md', '[]', 0)`,
+    ).run();
+    // A rapid re-file: the same artifact tagged in two briefings at the SAME
+    // millisecond. `MAX(tagged_at)` matches both — the tie the old GROUP BY
+    // resolved arbitrarily.
+    db.prepare(
+      `INSERT INTO claim_projects (artifact_id, project_id, briefing_id, tagged_at, origin)
+       VALUES ('art-1', 'p-a', 'b-1', 5000, 'user'),
+              ('art-1', 'p-b', 'b-2', 5000, 'auto')`,
+    ).run();
+
+    migrate(db);
+
+    const rows = db
+      .prepare(`SELECT artifact_id, project_id, briefing_id, origin FROM claim_projects`)
+      .all() as Array<{ artifact_id: string; project_id: string; briefing_id: string; origin: string }>;
+    expect(rows).toHaveLength(1);
+    // `tagged_at DESC, briefing_id DESC` → 'b-2' wins, and its project/origin
+    // travel together — never a mix of one row's project with another's origin.
+    expect(rows[0]).toEqual({
+      artifact_id: 'art-1',
+      project_id: 'p-b',
+      briefing_id: 'b-2',
+      origin: 'auto',
+    });
+  });
+});
+
+/**
+ * Apply only the migrations up to and including `version`, so a test can stand
+ * a database up at an older schema and then observe one upgrade in isolation.
+ *
+ * Duplicates a little of `migrate()`'s file walk on purpose: the point is to
+ * stop BEFORE the migration under test, which the real function cannot do.
+ */
+function migrateThrough(db: Database, version: number): void {
+  const dir = join(import.meta.dirname, '..', 'src', 'migrations');
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`);
+  for (const file of files) {
+    const n = Number.parseInt(file.slice(0, 3), 10);
+    if (n > version) break;
+    db.exec(readFileSync(join(dir, file), 'utf8'));
+    db.prepare(`INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)`).run(
+      n,
+      Date.now(),
+    );
+  }
+}
