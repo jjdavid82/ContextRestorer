@@ -24,9 +24,9 @@ import type { Database } from 'better-sqlite3';
  *   3. on the throw path better-sqlite3 rolls the transaction back, which also
  *      reverts the DROP, so the trigger survives either way.
  *
- * Neither function touches LanceDB or the filesystem. `deleteEverything`
- * instead *reports* what still needs erasing outside SQLite, so the caller can
- * finish the job with `VectorStore.deleteByEventIds` and `fs.unlink`.
+ * Neither function touches LanceDB or the filesystem. Both instead *report*
+ * what still needs erasing outside SQLite, so the caller can finish the job
+ * with `VectorStore.deleteByEventIds` and `fs.unlink`.
  */
 
 /** SQL that (re)creates each append-only trigger, keyed by trigger name. */
@@ -75,9 +75,47 @@ const DELETE_ORDER: readonly string[] = [
   'briefing_schedules',
 ];
 
+/** Milliseconds in a day. */
+const DAY_MS = 86_400_000;
+
+/**
+ * The retention cutoff: events older than this have expired.
+ *
+ * Lives here, with the comparison it feeds, because two callers need the same
+ * answer and a second copy of `now - days × 86_400_000` is a drift waiting to
+ * happen — the Settings panel reports how many events are past the cutoff, and
+ * the daily sweep deletes them. If those two disagree, the panel is lying about
+ * a promise the app made.
+ */
+export function retentionCutoffMs(nowMs: number, rawEventDays: number): number {
+  return nowMs - rawEventDays * DAY_MS;
+}
+
+/**
+ * What one retention purge removed from SQLite, and what it left for the
+ * caller — the same manifest contract as {@link DeleteEverythingResult}, for
+ * the same reason: this module performs no I/O outside SQLite.
+ */
+export interface RawEventPurge {
+  /** Rows removed from `events`. */
+  rowsDeleted: number;
+  /**
+   * Every purged `events.event_id`. Pass to `VectorStore.deleteByEventIds`:
+   * the embedded chunks are derived from the raw payloads that just expired
+   * and are just as identifying, so a purge that skipped them would age out
+   * the text and keep its embedding.
+   *
+   * Collected inside the same transaction as the DELETE rather than read
+   * beforehand, because a backfill of ancient messages can land between two
+   * statements — and an id missed that way names a vector nothing will ever
+   * collect again, since its event row is already gone.
+   */
+  vectorEventIds: string[];
+}
+
 /**
  * Purge raw events older than `cutoffMs` (NFR: 90-day retention on raw
- * payloads). Returns the number of rows removed.
+ * payloads).
  *
  * The comparison is `occurred_at < cutoffMs` — source time, not ingest time, so
  * a late-arriving backfill of ancient messages is aged out on its true age.
@@ -89,20 +127,30 @@ const DELETE_ORDER: readonly string[] = [
  * any extraction whose parent event falls inside the purge window is removed
  * first; leaving it would abort the DELETE on a FK violation.
  *
- * The caller remains responsible for evicting the corresponding LanceDB chunks
- * (`VectorStore.deleteByEventIds`); this function is SQLite-only.
+ * The caller remains responsible for evicting the LanceDB chunks named in
+ * {@link RawEventPurge.vectorEventIds}; this function is SQLite-only.
  */
-export function purgeRawEventsOlderThan(db: Database, cutoffMs: number): number {
-  const tx = db.transaction((): number => {
+export function purgeRawEventsOlderThan(db: Database, cutoffMs: number): RawEventPurge {
+  const tx = db.transaction((): RawEventPurge => {
     db.exec('DROP TRIGGER IF EXISTS events_no_delete');
     try {
+      // Named before anything is deleted — afterwards there is nothing left to
+      // enumerate. Inside the transaction, so the list and the DELETE below
+      // see exactly the same set of rows.
+      const doomed = db
+        .prepare('SELECT event_id FROM events WHERE occurred_at < ?')
+        .all(cutoffMs) as { event_id: string }[];
+
       // Children before parents: extractions point at the events being purged.
       db.prepare(
         `DELETE FROM extractions
           WHERE event_id IN (SELECT event_id FROM events WHERE occurred_at < ?)`,
       ).run(cutoffMs);
 
-      return db.prepare('DELETE FROM events WHERE occurred_at < ?').run(cutoffMs).changes;
+      const rowsDeleted = db.prepare('DELETE FROM events WHERE occurred_at < ?').run(cutoffMs)
+        .changes;
+
+      return { rowsDeleted, vectorEventIds: doomed.map((row) => row.event_id) };
     } finally {
       // Recreated inside the transaction: a rollback undoes the DROP, and a
       // commit has already recreated it. Either way the trigger is never
@@ -119,10 +167,16 @@ export function purgeRawEventsOlderThan(db: Database, cutoffMs: number): number 
  * manifest the caller must act on to complete a right-to-delete request.
  */
 export interface DeleteEverythingResult {
+  /** Total rows removed across every table — the DELETEs' own `.changes`, not
+   * a separate COUNT(*) pass (which would race a concurrent insert). */
+  rowsDeleted: number;
   /**
-   * Every `events.event_id` that existed immediately before the wipe. Pass to
-   * `VectorStore.deleteByEventIds` to evict the embedded chunks; the vectors
-   * are derived from raw payloads and are just as identifying.
+   * Every `events.event_id` that existed immediately before the wipe. The
+   * retention purge pairs this with `VectorStore.deleteByEventIds`; a full
+   * right-to-delete instead clears the vector table outright
+   * (`VectorStore.deleteAll`), since these ids are gone from SQLite the moment
+   * this returns and an id-by-id eviction that fails partway would strand
+   * embeddings nothing can ever name again.
    */
   vectorEventIds: string[];
   /**
@@ -151,7 +205,8 @@ export interface DeleteEverythingResult {
  * The manifest is collected *before* any DELETE runs — afterwards the rows are
  * gone and there is nothing left to enumerate.
  *
- * @returns event ids for the vector store and narrative paths for the filesystem.
+ * @returns the total rows removed, plus event ids for the vector store and
+ *   narrative paths for the filesystem.
  */
 export function deleteEverything(db: Database): DeleteEverythingResult {
   const tx = db.transaction((): DeleteEverythingResult => {
@@ -161,22 +216,24 @@ export function deleteEverything(db: Database): DeleteEverythingResult {
       .prepare('SELECT DISTINCT narrative_path FROM briefings')
       .all() as { narrative_path: string }[];
 
-    const manifest: DeleteEverythingResult = {
-      vectorEventIds: eventRows.map((row) => row.event_id),
-      narrativePaths: pathRows.map((row) => row.narrative_path),
-    };
-
     // 2. Stand down the append-only guards for the duration of the wipe.
     db.exec('DROP TRIGGER IF EXISTS events_no_update');
     db.exec('DROP TRIGGER IF EXISTS events_no_delete');
     db.exec('DROP TRIGGER IF EXISTS deltas_no_update');
 
     try {
-      // 3. Empty every table, children before parents (see DELETE_ORDER).
+      // 3. Empty every table, children before parents (see DELETE_ORDER),
+      //    summing the DELETEs' own row counts — no second COUNT(*) pass, and
+      //    no TOCTOU gap against a row the poller inserts mid-wipe.
+      let rowsDeleted = 0;
       for (const table of DELETE_ORDER) {
-        db.prepare(`DELETE FROM ${table}`).run();
+        rowsDeleted += db.prepare(`DELETE FROM ${table}`).run().changes;
       }
-      return manifest;
+      return {
+        rowsDeleted,
+        vectorEventIds: eventRows.map((row) => row.event_id),
+        narrativePaths: pathRows.map((row) => row.narrative_path),
+      };
     } finally {
       // 4. Restore the guards unconditionally — same reasoning as the purge:
       //    on commit these CREATEs are what the schema ends up with, and on
@@ -188,4 +245,70 @@ export function deleteEverything(db: Database): DeleteEverythingResult {
   });
 
   return tx();
+}
+
+/**
+ * What the app is currently holding, for the "Your data" settings panel — the
+ * read-only half of SEC-8. A user cannot meaningfully consent to erasing
+ * something they were never shown.
+ *
+ * Derived from {@link DELETE_ORDER} rather than from its own table list, so a
+ * migration that adds a table shows up in the panel the moment it is
+ * registered for deletion, and the two can never disagree about what "all of
+ * it" means.
+ */
+export interface UserDataSummary {
+  /**
+   * Row count per table — every table {@link deleteEverything} empties,
+   * including the ones sitting at zero, so the panel can render the whole
+   * scope rather than only the populated part of it.
+   */
+  rowsByTable: Record<string, number>;
+  /** Sum of {@link UserDataSummary.rowsByTable}. */
+  totalRows: number;
+  /** `MIN(events.occurred_at)`; `null` when no events are stored. */
+  oldestEventAt: number | null;
+  /**
+   * Raw events {@link purgeRawEventsOlderThan} would remove if it ran now with
+   * the caller's cutoff. Reported so the retention promise is visible as a
+   * number rather than as a sentence in a README.
+   */
+  expiredRawEvents: number;
+}
+
+/**
+ * Count what is stored, without changing any of it.
+ *
+ * Not privileged — it drops no trigger and opens no transaction — but it lives
+ * here because it must enumerate exactly the tables {@link DELETE_ORDER} does.
+ * Moving it to a repository would fork that list.
+ *
+ * @param rawEventCutoffMs - The retention cutoff to measure against, i.e.
+ *   `now - rawEventDays × 86_400_000`. Same comparison the purge uses.
+ */
+export function userDataSummary(db: Database, rawEventCutoffMs: number): UserDataSummary {
+  const rowsByTable: Record<string, number> = {};
+  let totalRows = 0;
+
+  for (const table of DELETE_ORDER) {
+    // Table names come from the module-private DELETE_ORDER constant, never
+    // from a caller, so the interpolation carries no injection surface.
+    const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number };
+    rowsByTable[table] = row.n;
+    totalRows += row.n;
+  }
+
+  const oldest = db.prepare('SELECT MIN(occurred_at) AS at FROM events').get() as {
+    at: number | null;
+  };
+  const expired = db
+    .prepare('SELECT COUNT(*) AS n FROM events WHERE occurred_at < ?')
+    .get(rawEventCutoffMs) as { n: number };
+
+  return {
+    rowsByTable,
+    totalRows,
+    oldestEventAt: oldest.at,
+    expiredRawEvents: expired.n,
+  };
 }

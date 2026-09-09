@@ -27,11 +27,15 @@ export { PendingItemsRepo } from './repos/pending.js';
 export type { NewPendingItem } from './repos/pending.js';
 export { WatermarkRepo } from './repos/watermark.js';
 export type { DueThread } from './repos/watermark.js';
-// Privileged writers (retention NFR + SEC-8 right-to-delete). These are the only
-// functions allowed to drop the append-only triggers; do not import them to
-// delete rows from anywhere else.
+// Privileged writers (retention NFR + SEC-8 right-to-delete). These two are the
+// only functions allowed to drop the append-only triggers; do not import them
+// to delete rows from anywhere else.
 export { purgeRawEventsOlderThan, deleteEverything } from './retention.js';
-export type { DeleteEverythingResult } from './retention.js';
+// Read-only companions from the same module (so they enumerate exactly the
+// tables the wipe does): `userDataSummary` opens no transaction and drops no
+// trigger, `retentionCutoffMs` is pure arithmetic. Safe to call from anywhere.
+export { userDataSummary, retentionCutoffMs } from './retention.js';
+export type { DeleteEverythingResult, RawEventPurge, UserDataSummary } from './retention.js';
 // Recurring briefing schedules (FR-3 time-based half, OI-4). Additive: the
 // `briefing_schedules` table ships with migration 001.
 export { BriefingSchedulesRepo, BRIEFING_CADENCES } from './repos/briefingSchedules.js';

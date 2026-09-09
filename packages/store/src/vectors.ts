@@ -85,10 +85,19 @@ export interface VectorStore {
   search(vector: number[], k: number, filter?: SearchFilter): Promise<SearchResult[]>;
   /**
    * Delete every chunk whose {@link Chunk.eventId} appears in `eventIds`.
-   * Returns the number of rows removed. Used by the retention purge and by
-   * right-to-delete requests.
+   * Returns the number of rows removed. Used by the retention purge.
    */
   deleteByEventIds(eventIds: string[]): Promise<number>;
+  /**
+   * Delete every chunk. Returns the number of rows removed.
+   *
+   * For SEC-8 right-to-delete only: the whole store goes, and the event ids
+   * that would otherwise drive {@link deleteByEventIds} have already been
+   * erased from SQLite by that point — so an id-by-id eviction that fails
+   * partway leaves identifying embeddings that nothing can ever name again.
+   * This needs no ids, so a retry after a failure can still finish the job.
+   */
+  deleteAll(): Promise<number>;
   /** Release the underlying LanceDB resources. Safe to call more than once. */
   close(): Promise<void>;
 }
@@ -329,11 +338,20 @@ export async function openVectors(dir: string, options: OpenVectorsOptions = {})
     });
   };
 
+  const deleteAll = async (): Promise<number> =>
+    serialise(async () => {
+      // `id` is NOT NULL on every row, so this predicate matches the whole
+      // table — LanceDB has no unconditional `truncate`.
+      const removed = await table.countRows();
+      await table.delete('id IS NOT NULL');
+      return removed;
+    });
+
   const close = async (): Promise<void> => {
     await queue.catch(() => undefined);
     if (table.isOpen()) table.close();
     if (conn.isOpen()) conn.close();
   };
 
-  return { upsert, search, deleteByEventIds, close };
+  return { upsert, search, deleteByEventIds, deleteAll, close };
 }

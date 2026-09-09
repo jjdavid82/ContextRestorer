@@ -69,6 +69,12 @@ import {
   registerModelSettingsHandlers,
   type ModelSettingsStore,
 } from './modelSettings.js';
+import {
+  registerPrivacyHandlers,
+  type FileRemover,
+  type PrivacyStore,
+  type VectorEvictor,
+} from './privacy.js';
 
 export { toHealthPayload, HEALTH_CHANNEL, type SourceHealth } from './health.js';
 export {
@@ -225,6 +231,23 @@ export {
   type ModelSettingsStore,
   type ModelInfo,
 } from './modelSettings.js';
+export {
+  registerPrivacyHandlers,
+  dataSummary,
+  deleteEverythingNow,
+  isConfirmed,
+  retentionCutoff,
+  CONFIRM_PHRASE,
+  PRIVACY_STATS_CHANNEL,
+  PRIVACY_DELETE_CHANNEL,
+  type PrivacyDeps,
+  type PrivacyStore,
+  type VectorEvictor,
+  type CredentialPurger,
+  type FileRemover,
+  type DataSummary,
+  type DeleteEverythingReport,
+} from './privacy.js';
 
 /** Process-level singletons the handler table needs. Built once, in `main.ts`. */
 export interface IpcDeps {
@@ -415,6 +438,36 @@ export interface IpcDeps {
   modelSettings?: ModelSettingsStore;
   /** `config.model.chat`, BEFORE any persisted override is applied — see `IpcDeps.modelSettings`. */
   defaultChatModel?: string;
+  /**
+   * SEC-8 right-to-delete store behind `privacy:stats` / `privacy:deleteEverything`
+   * — `main.ts`'s adapter over `retention.ts` bound to the live handle.
+   *
+   * Optional like every other feature-scoped store here, and the ONE place
+   * where an unregistered channel is not merely inconvenient: the panel reports
+   * "not available in this build" rather than offering a delete button that
+   * resolves without erasing anything. A confirmation the app silently ignored
+   * would be the worst possible failure on this screen.
+   *
+   * `vault` (always present) doubles as the credential purger, so it is not a
+   * separate field: a wipe must revoke the same tokens the OAuth handlers
+   * wrote, and a second vault instance over the same file could disagree about
+   * what is stored.
+   */
+  privacyStore?: PrivacyStore;
+  /**
+   * LanceDB handle for the vector half of a wipe. Separate from
+   * {@link IpcDeps.privacyStore} because the vector gate can fail
+   * independently of the database gate — a host in that state still owes the
+   * user a SQLite wipe, and the report says the vectors were not reached.
+   */
+  privacyVectors?: VectorEvictor;
+  /** `fs.promises.unlink` override, for tests. Production leaves it unset. */
+  privacyUnlink?: FileRemover;
+  /**
+   * Run after a completed wipe. `main.ts` rebuilds the channel → project
+   * resolver from the now-empty selection; see `PrivacyDeps.afterDelete`.
+   */
+  onDataDeleted?: () => void;
 }
 
 /**
@@ -569,6 +622,21 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       settings: deps.modelSettings,
       defaultChatModel: deps.defaultChatModel,
       ollamaBaseUrl: deps.config.model.ollamaBaseUrl,
+    });
+  }
+
+  // SEC-8 "Your data" panel: `privacy:stats` and `privacy:deleteEverything`.
+  // Gated on the store alone — `vault` is always present, and the vector store
+  // is deliberately optional (see `IpcDeps.privacyVectors`).
+  if (deps.privacyStore !== undefined) {
+    registerPrivacyHandlers({
+      store: deps.privacyStore,
+      vault: deps.vault,
+      ...(deps.privacyVectors !== undefined ? { vectors: deps.privacyVectors } : {}),
+      ...(deps.privacyUnlink !== undefined ? { unlink: deps.privacyUnlink } : {}),
+      ...(deps.onDataDeleted !== undefined ? { afterDelete: deps.onDataDeleted } : {}),
+      rawEventDays: deps.config.retention.rawEventDays,
+      clock: deps.clock ?? systemClock,
     });
   }
 }

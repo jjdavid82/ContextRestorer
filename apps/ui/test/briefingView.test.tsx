@@ -237,6 +237,21 @@ function installBridge(
       get: vi.fn(async () => ({ chat: 'qwen2.5:3b', defaultChat: 'qwen2.5:3b', available: [] })),
       setChat: vi.fn(async () => ({ ok: true })),
     },
+    // Bridge-contract only; the briefing view never touches SEC-8's channels.
+    privacy: {
+      stats: vi.fn(async () => ({
+        messages: 0,
+        summaries: 0,
+        briefings: 0,
+        obligations: 0,
+        totalRows: 0,
+        oldestEventAt: null,
+        expiredRawEvents: 0,
+        retentionDays: 90,
+        connectedSources: [],
+      })),
+      deleteEverything: vi.fn(async () => ({ ok: true })),
+    },
   };
 
   window.contextRestorer = bridge;

@@ -10,6 +10,7 @@ import { PageToolbar } from '../../components/PageToolbar';
 import BriefingWindowSettings from './briefingWindow';
 import SlackChannelSettings from './channels';
 import ConnectionsSettings from './connections';
+import DataSettings from './data';
 import LocalMetricsPanel from './metrics';
 import ModelSettings from './model';
 import ProjectSettings from './projects';
@@ -48,6 +49,9 @@ const PANELS: readonly PanelDef[] = [
   { id: 'model', label: 'Chat model', render: () => <ModelSettings /> },
   { id: 'window', label: 'Briefing window', render: () => <BriefingWindowSettings /> },
   { id: 'diagnostics', label: 'Diagnostics', render: () => <LocalMetricsPanel /> },
+  // Last in the list on purpose: it is the only panel that can destroy data,
+  // and nothing above it should be one mis-click away.
+  { id: 'data', label: 'Your data', render: () => <DataSettings /> },
 ];
 
 export default function SettingsPage(): ReactNode {

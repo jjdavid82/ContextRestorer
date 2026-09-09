@@ -55,14 +55,11 @@ import type {
   OnboardingStatus,
   ProjectCandidate,
   ProjectSuggestions,
-  Source,
 } from '../preload.cjs';
+import { connectedSources } from './vaultSources.js';
 
 /** The only project origin the POC permits (X-2); `GraphRepo` rejects anything else. */
 const DECLARED_ORIGIN = 'declared';
-
-/** Sources probed for `onboarding.sourcesConnected`, in a stable display order. */
-const SOURCES: readonly Source[] = ['slack', 'gmail'];
 
 /**
  * Upper bound on a single project name. Free text from the renderer goes
@@ -186,20 +183,6 @@ function declareAll(graph: GraphRepo, names: readonly string[]): { created: numb
     created += 1;
   }
   return { created };
-}
-
-/** Which sources currently hold a usable, non-revoked credential. */
-async function connectedSources(vault: TokenVault): Promise<Source[]> {
-  const connected: Source[] = [];
-  for (const source of SOURCES) {
-    try {
-      if ((await vault.load(source)) !== undefined) connected.push(source);
-    } catch {
-      // A vault that cannot be decrypted is reported as "not connected", which
-      // is what the user has to act on anyway.
-    }
-  }
-  return connected;
 }
 
 /**
