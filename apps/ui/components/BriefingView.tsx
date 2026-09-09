@@ -517,6 +517,10 @@ export function BriefingView({
           text={chunk.claim}
           claimId={claimId}
           citationLabel={CITATION_CHIP_LABEL} // standardized across every claim, see ClaimBullet.tsx
+          // The declared project behind this claim, resolved in the main
+          // process from the `belongs_to` edge (`ipc/briefing.ts`). Absent for
+          // an untagged thread, which renders no badge at all.
+          projectName={chunk.citation.projectName}
           onCitationClick={toggleDrilldown}
         >
           {renderDetail(claimId)}

@@ -85,6 +85,7 @@ export {
   getBriefingSnapshot,
   getResumePoint,
   citationForArtifact,
+  projectNameFor,
   parseBriefingWindow,
   parsePendingIdArg,
   parseSnapshotIdArg,

@@ -1003,3 +1003,56 @@ describe('BriefingView — subscription lifecycle', () => {
     expect(screen.getAllByText('Only once, please.')).toHaveLength(1);
   });
 });
+
+describe('the project badge', () => {
+  it('labels a changed item with the project its thread belongs to', async () => {
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+
+    h.emitChunk(
+      chunk({
+        claim: 'The team postponed the migration to Q4.',
+        citation: citation({ projectName: 'Platform Migration' }),
+      }),
+    );
+
+    const badge = await screen.findByTestId('project-badge');
+    expect(badge.textContent).toBe('Platform Migration');
+    // NFR-9: the name is the whole signal and it is plain text, so the badge
+    // survives greyscale and a screen reader. The label says what it IS,
+    // because "Platform Migration" alone does not read as a project.
+    expect(badge.getAttribute('aria-label')).toBe('Project: Platform Migration');
+  });
+
+  it('labels an obligation with its project too', async () => {
+    const h = installBridge({
+      pending: [
+        {
+          pendingId: 'p-1',
+          description: 'Approve the vendor SOW.',
+          confidence: 0.9,
+          citationArtifactId: 'art-1',
+          sourceQuote: null,
+          projectName: 'Vendor SOW',
+        },
+      ],
+    });
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    await waitFor(() => expect(h.pending).toHaveBeenCalled());
+
+    const badge = await screen.findByTestId('project-badge');
+    expect(badge.textContent).toBe('Vendor SOW');
+  });
+
+  it('renders NO badge for an untagged item', async () => {
+    // The ordinary case: most threads carry no `belongs_to` edge, and an empty
+    // or placeholder badge on every one of them would be noise.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+
+    h.emitChunk(chunk({ claim: 'Priya shipped the retry logic.' }));
+
+    await screen.findByText('Priya shipped the retry logic.');
+    expect(screen.queryByTestId('project-badge')).toBeNull();
+  });
+});

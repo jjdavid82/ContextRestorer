@@ -222,6 +222,10 @@ export function PendingSection({
                 text={item.description}
                 claimId={claimId}
                 citationLabel={CITATION_CHIP_LABEL}
+                // Same badge as the changed list: an obligation's project is
+                // exactly as load-bearing there, and the two lists disagreeing
+                // about how an item is labelled would be its own defect.
+                projectName={item.projectName}
                 confidence={item.confidence}
                 lowConfidenceNote={PENDING_LOW_CONFIDENCE_NOTE}
                 {...(onCitationClick === undefined ? {} : { onCitationClick })}

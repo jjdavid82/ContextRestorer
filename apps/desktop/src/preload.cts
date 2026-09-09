@@ -151,6 +151,16 @@ export interface PendingItem {
    * list does not. `null` when it could not be resolved.
    */
   sourceQuote: string | null;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** A citation anchoring a claim to a concrete ingested event. */
@@ -160,6 +170,16 @@ export interface Citation {
   source: Source;
   /** Deep link back into Slack/Gmail. */
   externalUrl?: string;
+  /**
+   * Declared project this item belongs to, when its artifact carries a
+   * `belongs_to` edge — the label the briefing shows.
+   *
+   * Absent for an untagged item, which is the ordinary case and not a defect.
+   * The project is the largest ranking weight after obligation, so surfacing it
+   * is what lets the user see WHY something is near the top rather than having
+   * to trust that their declaration did anything.
+   */
+  projectName?: string;
 }
 
 /** One validated claim, streamed as it is produced. */

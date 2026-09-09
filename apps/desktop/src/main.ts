@@ -72,6 +72,7 @@ import { registerAutostart } from './autostart.js';
 import { CHAT_MODEL_SETTING_KEY, registerIpcHandlers, startHealthPush } from './ipc/index.js';
 import { backfillMissingResolutionDeltas } from './ipc/briefing.js';
 import { deepLinkFor, resolveEvents } from './ipc/claim.js';
+import { projectNameFor } from './ipc/briefing.js';
 import { ensureFreshTokens } from './ipc/oauth.js';
 import { registerPipelineStatusPush } from './ipc/pipelineStatus.js';
 import { BriefingScheduleRunner } from './scheduler/briefingSchedule.js';
@@ -1041,12 +1042,18 @@ function citationFor(
   const externalUrl =
     latest === undefined ? undefined : deepLinkFor(latest.source, latest.sourceEventId);
 
+  // The declared project behind this item, for its label. Resolved through the
+  // SAME helper `briefing:snapshot` uses, so a claim carries the same project
+  // whether it arrived live or was rehydrated after a page navigation.
+  const projectName = projectNameFor(graph, artifactId);
+
   return {
     eventId: latest?.eventId ?? '',
     artifactId,
     source: latest?.source ?? artifact.source,
     // `exactOptionalPropertyTypes`: an absent link is an absent KEY.
     ...(externalUrl !== undefined ? { externalUrl } : {}),
+    ...(projectName === undefined ? {} : { projectName }),
   };
 }
 
