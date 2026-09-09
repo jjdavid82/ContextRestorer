@@ -160,9 +160,20 @@ describe('migrations directory resolution', () => {
     const db = openDb(':memory:');
     try {
       migrate(db);
-      // The highest applied version equals the highest file number, so a
-      // shadowed migration shows up as a version behind the source tree.
-      expect(currentSchemaVersion(db)).toBe(onDisk.length);
+      // COUNT the stamped rows rather than reading the highest version. Those
+      // two numbers agree only while the file numbers happen to be gap-free,
+      // which is a property of how branches were merged and not something this
+      // test is about: renumbering one migration to clear a collision (two
+      // branches both claiming `010`) left a legitimate gap and turned this
+      // into a false failure. One stamped row per file on disk is the property
+      // the stale-dist trap actually broke.
+      const applied = (db.prepare('SELECT COUNT(*) AS n FROM schema_version').get() as { n: number })
+        .n;
+      expect(applied).toBe(onDisk.length);
+      // …and the tip still matches the highest file number on disk, so a
+      // shadowed LAST migration cannot pass the count check above.
+      const highest = Math.max(...onDisk.map((f) => Number.parseInt(f.slice(0, 3), 10)));
+      expect(currentSchemaVersion(db)).toBe(highest);
     } finally {
       db.close();
     }

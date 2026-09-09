@@ -198,6 +198,17 @@ export class RetrievalService {
    */
   private stakesCache = new Map<string, number>();
 
+  /**
+   * Cached embedding of {@link BRIEFING_QUERY_TEXT}. The text is a compile-time
+   * constant and the embed model is fixed for this service's lifetime, so the
+   * vector never changes — but `forBriefing` runs on every Layer 3 pre-compute
+   * tick, and re-embedding a constant is a redundant Ollama round-trip each
+   * time. Filled on first use; a failed embed leaves it unset so the next call
+   * retries. Overlapping first calls may each embed once, which costs a spare
+   * round-trip and can never change the result.
+   */
+  private briefingQueryVector?: number[];
+
   constructor(
     private vectors: VectorStore,
     private graph: GraphRepo,
@@ -278,7 +289,7 @@ export class RetrievalService {
     const deadline = this.clock.now() + this.config.retrieval.budgetMs;
     this.stakesCache = new Map();
 
-    const query = await withDeadline(this.embed(BRIEFING_QUERY_TEXT), deadline - this.clock.now());
+    const query = await withDeadline(this.embedBriefingQuery(), deadline - this.clock.now());
     if (query.timedOut) return { chunks: [], partial: true };
 
     const k = Math.max(1, this.config.retrieval.topK);
@@ -290,6 +301,14 @@ export class RetrievalService {
 
     const inWindow = found.value.filter((hit) => isCitable(hit) && hit.occurredAt < window.end);
     return { chunks: this.finish(this.score(inWindow)), partial: false };
+  }
+
+  /** Embedding of {@link BRIEFING_QUERY_TEXT}, memoised — see {@link briefingQueryVector}. */
+  private async embedBriefingQuery(): Promise<number[]> {
+    if (this.briefingQueryVector === undefined) {
+      this.briefingQueryVector = await this.embed(BRIEFING_QUERY_TEXT);
+    }
+    return this.briefingQueryVector;
   }
 
   /**

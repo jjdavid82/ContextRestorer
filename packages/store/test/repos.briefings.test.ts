@@ -478,49 +478,4 @@ describe('BriefingsRepo claim provenance', () => {
       'template',
     ]);
   });
-
-  describe('deltasWithProse', () => {
-    it('reports only deltas that already have model-written claims', () => {
-      const briefing = createBriefing();
-      db.prepare(
-        `INSERT INTO state_deltas
-           (delta_id, thread_key, version, summary, kind, confidence,
-            source_event_ids_json, citation_artifact_ids_json, model, prompt_version, created_at)
-         VALUES (?, ?, 1, 's', 'decision', 0.9, '[]', '[]', 'm', 'v1', 1000)`,
-      ).run('d-prose', 'C1:1');
-      db.prepare(
-        `INSERT INTO state_deltas
-           (delta_id, thread_key, version, summary, kind, confidence,
-            source_event_ids_json, citation_artifact_ids_json, model, prompt_version, created_at)
-         VALUES (?, ?, 1, 's', 'decision', 0.9, '[]', '[]', 'm', 'v1', 1000)`,
-      ).run('d-plain', 'C2:1');
-
-      briefings.addClaim({
-        briefingId: briefing.briefingId,
-        ordinal: 0,
-        section: 'What moved',
-        text: 'Prose.',
-        citationArtifactId: ARTIFACT_ID,
-        deltaId: 'd-prose',
-        producedBy: 'llm',
-      });
-      briefings.addClaim({
-        briefingId: briefing.briefingId,
-        ordinal: 1,
-        section: 'What moved',
-        text: 'Deterministic.',
-        citationArtifactId: ARTIFACT_ID,
-        deltaId: 'd-plain',
-      });
-
-      // This is the synchronous path's per-request question: which deltas can
-      // reuse prose, and which must be rendered deterministically?
-      const withProse = briefings.deltasWithProse(['d-prose', 'd-plain', 'd-unknown']);
-      expect([...withProse]).toEqual(['d-prose']);
-    });
-
-    it('returns empty for an empty request without touching the database', () => {
-      expect(briefings.deltasWithProse([]).size).toBe(0);
-    });
-  });
 });

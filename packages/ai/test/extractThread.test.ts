@@ -71,7 +71,10 @@ const batchOf = (indices: number[]) => ({
   latencyMs: 10,
 });
 
-function makeExtractor(failures?: ExtractionFailuresRepo): Layer1Extractor {
+function makeExtractor(
+  failures?: ExtractionFailuresRepo,
+  embed: (text: string) => Promise<number[]> = async () => [0.1, 0.2],
+): Layer1Extractor {
   const ollama = { generateJson, generateStream: vi.fn(), embed: vi.fn() };
   const vectors = { upsert } as unknown as VectorStore;
   return new Layer1Extractor(
@@ -79,7 +82,7 @@ function makeExtractor(failures?: ExtractionFailuresRepo): Layer1Extractor {
     extractions,
     vectors,
     aiCalls,
-    (async () => [0.1, 0.2]) as never,
+    embed as never,
     'qwen2.5:14b',
     'v1',
     new FakeClock(NOW),
@@ -154,17 +157,44 @@ describe('Layer1Extractor.extractThread', () => {
     expect(generateJson).toHaveBeenCalledTimes(1);
   });
 
-  it('writes one extractions row per event, exactly as the single-event path does', async () => {
+  it('writes one row per event and upserts the batch chunks in ONE call, in order', async () => {
     const batch = [seed(1), seed(2)];
     generateJson.mockResolvedValue(batchOf([0, 1]));
 
     await makeExtractor().extractThread(batch, 'trace-1');
 
-    // The row/chunk contract is unchanged, which is what keeps retrieval,
+    // One `extractions` row per event, unchanged — what keeps retrieval,
     // citations and the recovery sweep working untouched.
     expect(extractions.listByEvent('evt-1')).toHaveLength(1);
     expect(extractions.listByEvent('evt-2')).toHaveLength(1);
-    expect(upsert).toHaveBeenCalledTimes(2);
+
+    // The chunk upsert is batched: one call carrying both chunks in input
+    // order, not one round-trip per event.
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(
+      (upsert.mock.calls[0]?.[0] as Array<{ eventId: string }>).map((c) => c.eventId),
+    ).toEqual(['evt-1', 'evt-2']);
+  });
+
+  it('embeds a batch of chunks concurrently, not one at a time', async () => {
+    const batch = [seed(1), seed(2), seed(3)];
+    generateJson.mockResolvedValue(batchOf([0, 1, 2]));
+
+    let inFlight = 0;
+    let peak = 0;
+    const embed = async (): Promise<number[]> => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return [0.1, 0.2];
+    };
+
+    await makeExtractor(undefined, embed).extractThread(batch, 'trace-1');
+
+    // Serial awaits would never show more than one embed in flight.
+    expect(peak).toBeGreaterThan(1);
+    expect(upsert).toHaveBeenCalledTimes(1);
   });
 
   it('leaves unclassified events queued rather than guessing', async () => {

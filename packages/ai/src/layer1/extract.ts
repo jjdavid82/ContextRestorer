@@ -296,6 +296,19 @@ export function eventArtifactId(event: Event): string {
   return artifactIdFor(event.source, THREAD_ARTIFACT_KIND, event.threadKey);
 }
 
+/**
+ * The chunk body for an event that gets a vector, or `null` when it does not.
+ *
+ * `noise` never competes for a retrieval slot and a bodiless event has nothing
+ * to embed. Shared by the single-event and batched persist paths so the two
+ * cannot disagree about what is indexed.
+ */
+function chunkBodyFor(event: Event, parsed: Layer1Response): string | null {
+  if (parsed.class === 'noise') return null;
+  const text = eventText(event);
+  return text.trim() === '' ? null : text;
+}
+
 /** Every entry is a string, or `null` if `value` is not such an array. */
 function asStringArray(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
@@ -659,15 +672,15 @@ export class Layer1Extractor {
       throw err;
     }
 
-    let extracted = 0;
     let abandoned = 0;
+    const classified: Array<{ event: Event; parsed: Layer1Response }> = [];
+
     for (const [index, parsed] of slots.entries()) {
       const event = batch[index];
       if (event === undefined) continue;
 
       if (parsed !== null) {
-        await this.persistExtraction(event, parsed);
-        extracted += 1;
+        classified.push({ event, parsed });
         continue;
       }
 
@@ -683,6 +696,10 @@ export class Layer1Extractor {
         }
       }
     }
+
+    // One embed fan-out and one vector upsert for the whole batch, not per event.
+    await this.persistExtractionBatch(classified);
+    const extracted = classified.length;
 
     // `abandoned` events did not get a real classification, so they still count
     // as unclassified for the `ai_calls` outcome — 'ok' unless the whole batch
@@ -713,43 +730,73 @@ export class Layer1Extractor {
    * the two steps leaves the event unextracted and therefore retried. The chunk
    * id is deterministic, so the retry overwrites rather than duplicates.
    *
-   * Shared by the single-event and batched paths so the two cannot drift: a
-   * batched extraction must produce a byte-identical row to the one
-   * `extractEvent` would have written.
+   * A thin wrapper over {@link persistExtractionBatch} so the single-event and
+   * batched paths cannot drift — a batched extraction produces a byte-identical
+   * row to the one `extractEvent` would have written.
    */
   private async persistExtraction(event: Event, parsed: Layer1Response): Promise<Extraction> {
-    const text = eventText(event);
-    const artifactId = eventArtifactId(event);
-
-    // Noise is persisted (the eval harness needs negatives) but never embedded:
-    // retrieval must not spend its top-K budget on chatter, and an un-citable
-    // acknowledgement has no business in the citation allowlist.
-    if (parsed.class !== 'noise' && text.trim() !== '') {
-      const chunk: Chunk = {
-        id: chunkId(event.eventId, 0),
-        eventId: event.eventId,
-        artifactId,
-        threadKey: event.threadKey,
-        occurredAt: event.occurredAt,
-        text,
-        vector: await this.embed(text),
-      };
-      await this.vectors.upsert([chunk]);
+    const [extraction] = await this.persistExtractionBatch([{ event, parsed }]);
+    if (extraction === undefined) {
+      // Unreachable: a one-item batch always yields one row.
+      throw new Error('layer1: persistExtractionBatch dropped a single item');
     }
-
-    const extraction: Extraction = {
-      extractionId: newId(),
-      eventId: event.eventId,
-      class: parsed.class,
-      confidence: parsed.confidence,
-      participants: parsed.participants,
-      artifacts: parsed.artifacts,
-      model: this.model,
-      promptVersion: this.promptVersion,
-      createdAt: this.clock.now(),
-    };
-    this.extractions.insert(extraction);
     return extraction;
+  }
+
+  /**
+   * Persist a batch of model-classified events: one embedding round-trip per
+   * chunk but all in flight together, then a single vector upsert, then the
+   * rows.
+   *
+   * Concurrency is bounded by the caller — a batch is at most
+   * {@link MAX_BATCH_EVENTS} events — so this fans out with a plain
+   * `Promise.all` rather than a pool.
+   *
+   * The chunk-before-row ordering {@link persistExtraction} documents holds
+   * across the whole batch: if an embed or the upsert throws, NO `extractions`
+   * row is written and every event is left for the next sweep to re-queue.
+   * Chunk ids are deterministic, so the retry overwrites.
+   */
+  private async persistExtractionBatch(
+    items: ReadonlyArray<{ event: Event; parsed: Layer1Response }>,
+  ): Promise<Extraction[]> {
+    const toEmbed = items.flatMap(({ event, parsed }) => {
+      const body = chunkBodyFor(event, parsed);
+      return body === null ? [] : [{ event, body }];
+    });
+
+    const chunks: Chunk[] = await Promise.all(
+      toEmbed.map(async ({ event, body }): Promise<Chunk> => {
+        const vector = await this.embed(body);
+        return {
+          id: chunkId(event.eventId, 0),
+          eventId: event.eventId,
+          artifactId: eventArtifactId(event),
+          threadKey: event.threadKey,
+          occurredAt: event.occurredAt,
+          text: body,
+          vector,
+        };
+      }),
+    );
+    if (chunks.length > 0) await this.vectors.upsert(chunks);
+
+    const rows = items.map(({ event, parsed }): Extraction => {
+      const extraction: Extraction = {
+        extractionId: newId(),
+        eventId: event.eventId,
+        class: parsed.class,
+        confidence: parsed.confidence,
+        participants: parsed.participants,
+        artifacts: parsed.artifacts,
+        model: this.model,
+        promptVersion: this.promptVersion,
+        createdAt: this.clock.now(),
+      };
+      this.extractions.insert(extraction);
+      return extraction;
+    });
+    return rows;
   }
 
   private persistNoise(event: Event): Extraction {

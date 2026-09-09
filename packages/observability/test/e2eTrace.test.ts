@@ -572,7 +572,7 @@ describe('requirement 3 — every Layer 2 trigger logs its condition, event coun
       config: DEBOUNCE,
       watermarks,
       logsDir,
-      countThreadEvents: (threadKey) => events.listByThread(threadKey).length,
+      countThreadEvents: (threadKey) => events.countByThread(threadKey),
       onSynthesize,
       onTrace: (trace) => sink.push(trace),
     });
