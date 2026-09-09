@@ -34,7 +34,14 @@
  * handler synchronous regardless of what generation turns out to cost.
  */
 import { ipcMain } from 'electron';
-import { newId, systemClock, type PendingItem, type StateDelta } from '@cr/core';
+import {
+  MANUAL_RESOLVE_MODEL,
+  MANUAL_RESOLVE_PROMPT_VERSION,
+  newId,
+  systemClock,
+  type PendingItem,
+  type StateDelta,
+} from '@cr/core';
 import type { NewStateDelta } from '@cr/store';
 import type {
   BriefingChunk,
@@ -453,10 +460,14 @@ export function parsePendingIdArg(arg: unknown): string | null {
   return pendingId;
 }
 
-/** `state_deltas.model` / `prompt_version` sentinels for a user-authored delta:
- *  no model wrote it, so the audit columns must not read as though one did. */
-const MANUAL_RESOLVE_MODEL = 'none:user-action';
-const MANUAL_RESOLVE_PROMPT_VERSION = 'user-resolve.v1';
+/**
+ * `MANUAL_RESOLVE_MODEL` / `MANUAL_RESOLVE_PROMPT_VERSION` (from `@cr/core`) are
+ * the `state_deltas` audit sentinels for a user-authored delta — no model wrote
+ * it, so those columns must not read as though one did. They live in `@cr/core`
+ * because `@cr/ai`'s Layer 3 filters exactly these deltas out of the briefing
+ * narrative (`isUserActionDelta`); the sentinel written here and the filter
+ * applied there must not drift apart.
+ */
 
 /**
  * Append the `resolution` delta that takes an obligation off the briefing

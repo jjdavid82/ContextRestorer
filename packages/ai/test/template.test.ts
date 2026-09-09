@@ -27,7 +27,14 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
-import { FakeClock, type AppConfig, type Artifact, type DeltaKind } from '@cr/core';
+import {
+  FakeClock,
+  MANUAL_RESOLVE_MODEL,
+  MANUAL_RESOLVE_PROMPT_VERSION,
+  type AppConfig,
+  type Artifact,
+  type DeltaKind,
+} from '@cr/core';
 import {
   AiCallsRepo,
   BriefingsRepo,
@@ -1022,6 +1029,44 @@ describe('template ordering and D-6', () => {
     expect(result.threadsStillProcessing).toBe(2);
     expect(briefings.getById(result.briefingId)?.threadsStillProcessing).toBe(2);
     expect(readFileSync(result.narrativePath, 'utf8')).toContain('2 thread(s) still had');
+  });
+
+  it('never narrates a user-action "Mark resolved" delta, but a Layer 2 resolution still speaks', async () => {
+    // C1: an obligation the user marked done offline — a request delta, then a
+    // user-authored `resolution` delta superseding it.
+    appendDelta({
+      threadKey: 'C1:1',
+      summary: 'Reply to the vendor about the renewal quote.',
+      kind: 'request',
+      citations: [A1],
+    });
+    deltas.append({
+      threadKey: 'C1:1',
+      artifactId: null,
+      summary: 'You marked this done: Reply to the vendor about the renewal quote.',
+      kind: 'resolution',
+      confidence: 1,
+      sourceEventIds: [],
+      citationArtifactIds: [A1],
+      model: MANUAL_RESOLVE_MODEL,
+      promptVersion: MANUAL_RESOLVE_PROMPT_VERSION,
+      createdAt: NOW - 60_000,
+    });
+    // C3: a thread a real reply closed — Layer 2 wrote this one.
+    appendDelta({
+      threadKey: 'C3:1',
+      summary: 'The expired-cert outage was closed out.',
+      kind: 'resolution',
+      citations: [A3],
+    });
+
+    const result = await makeRenderer().renderTemplate(WINDOW);
+    const markdown = readFileSync(result.narrativePath, 'utf8');
+
+    expect(result.claimsAccepted).toBe(1);
+    expect(markdown).not.toContain('You marked this done');
+    expect(markdown).not.toContain('Reply to the vendor');
+    expect(markdown).toContain('The expired-cert outage was closed out.');
   });
 });
 

@@ -100,8 +100,14 @@ that Layer 2 tracks the obligation across a noisy thread and doesn't let the
 
 Historically, marking an item resolved only hid the pinned card — the same
 obligation kept being restated in every subsequent briefing because it was
-rebuilt from the thread's still-current state delta. These scenarios lock that
-down.
+rebuilt from the thread's still-current state delta. A first fix appended a
+`resolution` delta so it read *once* under *Quietly resolved* instead — but that
+line then lingered on every briefing for the whole lookback window. The current
+behaviour: a manual **Mark resolved** removes the obligation from the briefing
+**entirely and immediately** — no restatement, and no "you marked this done"
+line either. (A *Quietly resolved* entry is still shown when someone else closes
+a thread by replying — that is real news; only your own manual resolve goes
+silent.) These scenarios lock that down.
 
 ### B1 — resolve, then re-brief
 
@@ -116,11 +122,9 @@ down.
 
 **Expect:**
 - The obligation is **gone** from "things need you".
-- It appears **once** under *Quietly resolved* as roughly *"You marked this
-  done: send Dana your sign-off…"*, then ages out of the window on the next
-  briefing.
-- It does **not** reappear under "What moved" / "Worth knowing" on any later
-  briefing.
+- It does **not** appear under *Quietly resolved*, *What moved*, or *Worth
+  knowing* — not on this briefing, not on any later one.
+- No *"You marked this done: …"* line anywhere.
 
 ### B2 — resolve doesn't un-hide a streamed duplicate
 
@@ -368,11 +372,10 @@ acknowledgement — it doesn't replay everything from J1.
 1. **A1** → Refresh now → wait 5 min → **Refresh the briefing** → item appears, cited. *(A,
    E)*
 2. Drill down on it → redacted source + Gmail link. *(E2)*
-3. **Mark resolved → Cancel**, then **→ Yes, resolve** → gone. *(B1)*
-4. **Refresh the briefing** → shows once under *Quietly resolved*, not as a live obligation.
-   *(B1)*
-5. **Refresh the briefing** once more → obligation fully gone, not resurfaced elsewhere.
-   *(B1)*
+3. **Mark resolved → Cancel**, then **→ Yes, resolve** → gone from the current view. *(B1)*
+4. **Refresh the briefing** → obligation fully gone: not a live item, and **no**
+   *"you marked this done"* line under *Quietly resolved* / *What moved*. *(B1)*
+5. **Refresh the briefing** once more → still gone, not resurfaced anywhere. *(B1)*
 6. Send **D1** (obligation on someone else) → **Refresh the briefing** → narrated, **no**
    pending item. *(D1)*
 7. **"I'm caught up"**, send **C1** (a decision), **Refresh the briefing** → only the new

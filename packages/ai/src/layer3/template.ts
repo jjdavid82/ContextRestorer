@@ -45,6 +45,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  isUserActionDelta,
   newId,
   systemClock,
   type AppConfig,
@@ -389,7 +390,12 @@ export class TemplateBriefingRenderer {
 
     // ---- stage 1: read ------------------------------------------------------
     const readSpan = trace.span('retrieval');
-    const tips = this.deltas.currentForWindow(window.windowStart, window.windowEnd);
+    // User-action deltas ("Mark resolved") are dropped here for the same reason
+    // the LLM path drops them: they supersede an obligation (which still holds)
+    // but are not themselves briefing content.
+    const tips = this.deltas
+      .currentForWindow(window.windowStart, window.windowEnd)
+      .filter((delta) => !isUserActionDelta(delta));
     const openByDelta = this.openPendingByDelta();
     readSpan.end();
 
@@ -532,7 +538,9 @@ export class TemplateBriefingRenderer {
         .filter((id): id is string => id !== null && id !== ''),
     );
 
-    const tips = this.deltas.currentForWindow(window.windowStart, window.windowEnd);
+    const tips = this.deltas
+      .currentForWindow(window.windowStart, window.windowEnd)
+      .filter((delta) => !isUserActionDelta(delta));
     const openByDelta = this.openPendingByDelta();
     const remaining = this.rank(tips, openByDelta).filter(
       (delta) => !delta.citationArtifactIds.some((id) => covered.has(id)),
