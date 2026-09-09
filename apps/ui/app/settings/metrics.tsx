@@ -340,9 +340,19 @@ function relativeTime(atMs: number, nowMs: number): string {
 
 /** Plain-language copy per event kind. `next` is the dim "what happens now" line. */
 const ACTIVITY_COPY: Record<ActivityEvent['kind'], (n: number) => { text: string; next?: string }> = {
+  // Only reached now by a thread that genuinely kept failing. A thread whose
+  // messages are all chatter no longer lands here: Layer 2 reports that as a
+  // settled `no_signal` rather than spending ten retries and reporting a
+  // failure (`layer2/synthesize.ts`), which is what used to fill this feed.
+  //
+  // The old "next" line — "it will be picked up again automatically as the
+  // conversation continues" — was false: a new message restarts the quiet clock
+  // but never cleared the attempt counter, and a parked thread is filtered out
+  // of `due()`, so nothing ever picked it up again. It is true now, and stated
+  // as the narrower thing it actually is: new content that can be summarized.
   thread_parked: () => ({
-    text: 'A conversation couldn’t be summarized after several tries.',
-    next: 'It will be picked up again automatically as the conversation continues.',
+    text: 'A conversation kept failing to summarize, so it was set aside.',
+    next: 'It will be tried again once a new message arrives on it with something to summarize.',
   }),
   gate_injection: (n) => ({
     text: `${n} ${n === 1 ? 'line was' : 'lines were'} kept out of a briefing for looking like a planted instruction.`,

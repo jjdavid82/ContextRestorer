@@ -86,6 +86,7 @@ export class EventsRepo {
   private readonly stmtListUnextracted: Database.Statement<[number]>;
   private readonly stmtNewestByPrefix: Database.Statement<[string, string]>;
   private readonly stmtNewestBySource: Database.Statement<[string]>;
+  private readonly stmtThreadExtractionState: Database.Statement<[string]>;
 
   constructor(private db: Database.Database) {
     this.stmtInsert = this.db.prepare(
@@ -132,6 +133,26 @@ export class EventsRepo {
     this.stmtNewestBySource = this.db.prepare(
       `SELECT MAX(occurred_at) AS m FROM events WHERE source = ?`,
     );
+
+    // LEFT JOIN, not a NOT EXISTS pair: one index-driven pass over the thread's
+    // events answers all three counts, and `idx_events_thread` plus
+    // `idx_extractions_event` (migration 009) make it a lookup rather than a scan.
+    this.stmtThreadExtractionState = this.db.prepare(
+      // COALESCE, not decoration: `SUM` over zero rows is NULL, so an unknown
+      // thread would otherwise return `unextracted: null` behind a `number`
+      // type — and `null === 0` is false, which would quietly route Layer 2's
+      // terminal-empty decision the wrong way.
+      `SELECT COUNT(*) AS events,
+              COALESCE(SUM(CASE WHEN x.event_id IS NULL THEN 1 ELSE 0 END), 0) AS unextracted,
+              COALESCE(
+                SUM(CASE WHEN x.class IS NOT NULL AND x.class <> 'noise' THEN 1 ELSE 0 END),
+                0
+              ) AS signal
+         FROM events e
+         LEFT JOIN extractions x ON x.event_id = e.event_id
+        WHERE e.thread_key = ?`,
+    );
+
   }
 
   /**
@@ -196,6 +217,37 @@ export class EventsRepo {
   newestOccurredAtBySource(source: string): number | null {
     const row = this.stmtNewestBySource.get(source) as { m: number | null } | undefined;
     return row?.m ?? null;
+  }
+
+  /**
+   * Layer-1 progress for ONE thread: how many events it has, how many are still
+   * unextracted, and how many carry a class other than `noise`.
+   *
+   * Exists so Layer 2 can tell its two kinds of empty apart. Retrieval returning
+   * no chunks for a thread has two causes with opposite lifetimes: extraction is
+   * still in flight (transient — a chunk is coming), or every event on the
+   * thread was classified `noise` and therefore contributed no chunk at all
+   * (`layer1/extract.ts` only embeds non-noise events), which is permanent. The
+   * scheduler used to retry both for its whole budget and then park the thread,
+   * reporting a summarization failure for a conversation that simply had nothing
+   * in it.
+   *
+   * `unextracted === 0` is the load-bearing half, and it settles the question on
+   * its own: `extractEvent` upserts the chunk BEFORE writing the `extractions`
+   * row, so once every event on a thread has a row, every chunk that thread will
+   * ever have is already in the vector store. `signal` is reported alongside
+   * because it is the same query and it lets the caller say *why* the thread is
+   * empty rather than only that it is.
+   */
+  threadExtractionState(threadKey: string): {
+    events: number;
+    unextracted: number;
+    signal: number;
+  } {
+    const row = this.stmtThreadExtractionState.get(threadKey) as
+      | { events: number; unextracted: number; signal: number }
+      | undefined;
+    return row ?? { events: 0, unextracted: 0, signal: 0 };
   }
 
   /** How many events still have no Layer-1 extraction — the ingestion backlog. */

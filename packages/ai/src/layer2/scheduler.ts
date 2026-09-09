@@ -238,6 +238,22 @@ export class DebounceScheduler {
    */
   async tick(): Promise<void> {
     const now = this.deps.clock.now();
+
+    // Before asking what is due: un-park anything that has since gained a
+    // non-noise extraction. Parking is otherwise terminal — `due()` filters
+    // parked threads out and only a success clears the counter, which a thread
+    // that is never offered can never reach — so a thread parked while it held
+    // nothing but chatter would stay deaf to a real message arriving on it
+    // later. See `WatermarkRepo.reviveWithSignal`.
+    //
+    // Here rather than in the extraction path deliberately: it also heals
+    // threads parked by an earlier run, and it keeps Layer 1 free of any
+    // knowledge of the scheduler's retry accounting.
+    const revived = this.deps.watermarks.reviveWithSignal(this.maxAttempts);
+    if (revived > 0) {
+      console.info(`[layer2/scheduler] revived ${revived} parked thread(s) that gained signal`);
+    }
+
     // The quiet/hard-cap arithmetic deliberately lives in the repo's single
     // indexed query rather than being re-derived here: two implementations of
     // the same predicate is exactly how this feature goes subtly wrong.
@@ -336,7 +352,19 @@ export class DebounceScheduler {
       // `TriggerOutcome`. Anything else is Layer 2's own outcome vocabulary.
       const outcome: TriggerOutcome = typeof reported === 'string' ? reported : 'unreported';
 
-      // `no_context` is not a decision, unlike `'ok'` and `'not_meaningful'`:
+      // `no_signal` IS a decision, and a final one: every event on the thread
+      // is extracted and none of them produced a citable chunk, so there is
+      // nothing to summarize and never will be. Settled exactly like
+      // `not_meaningful` — the thread is caught up, its retry budget is
+      // untouched, and it earns no park event and no user-facing alert. This
+      // branch is the difference between "72% of your threads are chatter" and
+      // "79 conversations couldn't be summarized".
+      //
+      // `no_context` below is the same empty retrieval with the opposite
+      // lifetime, which is why Layer 2 reports them as two outcomes.
+
+      // `no_context` is not a decision, unlike `'ok'`, `'not_meaningful'` and
+      // `'no_signal'`:
       // retrieval had nothing citable to show the model, most often because
       // Layer 1 extraction for the thread's newest event had not finished
       // embedding it yet when the quiet window fired. Marking the watermark
@@ -349,8 +377,7 @@ export class DebounceScheduler {
       // merely raced ahead of extraction) still parks instead of retrying
       // every 30s forever.
       if (outcome === 'no_context') {
-        this.deps.watermarks.incrementAttempts(threadKey);
-        const attempts = this.deps.watermarks.get(threadKey)?.attempts ?? 0;
+        const attempts = this.recordFailedAttempt(threadKey);
         const at = this.deps.clock.now();
 
         trace.annotate({ outcome, wroteDelta: false, attempts });
@@ -394,8 +421,7 @@ export class DebounceScheduler {
       span.end();
       // No `markSynthesized`: the watermark is left armed so the thread stays
       // due and is retried on a later tick.
-      this.deps.watermarks.incrementAttempts(threadKey);
-      const attempts = this.deps.watermarks.get(threadKey)?.attempts ?? 0;
+      const attempts = this.recordFailedAttempt(threadKey);
 
       // `String(error)` rather than the error object: the trace file is JSON, and
       // `JSON.stringify(new Error(...))` is `{}`. A message is greppable; an
@@ -427,6 +453,32 @@ export class DebounceScheduler {
    * Never throws: this number exists to explain a decision, and a diagnostic
    * that can abort the decision it describes is worse than a missing one.
    */
+  /**
+   * Count one unproductive cycle against a thread's retry budget, and stamp
+   * `parked_at` at the exact moment that budget runs out.
+   *
+   * The stamp has to happen HERE, not in `tick()`'s park branch, and that
+   * ordering is load-bearing. `tick()` calls `reviveWithSignal` before it looks
+   * at anything, so a thread that exhausted its budget on the previous tick but
+   * had not been stamped yet would be un-parked by any signal it already held —
+   * which is precisely the poison thread the revive must not touch. Stamping on
+   * the crossing means a parked thread always has a reference point by the time
+   * any revive can see it.
+   *
+   * @returns The new attempt count, for the trace.
+   */
+  private recordFailedAttempt(threadKey: string): number {
+    this.deps.watermarks.incrementAttempts(threadKey);
+    const attempts = this.deps.watermarks.get(threadKey)?.attempts ?? 0;
+    if (attempts >= this.maxAttempts) {
+      // First stamp wins (the repo enforces it), so re-crossing on a later
+      // tick cannot push the revive window forward and lose signal that
+      // arrived in between — including while the app was closed.
+      this.deps.watermarks.markParked(threadKey, this.deps.clock.now());
+    }
+    return attempts;
+  }
+
   private countEvents(threadKey: string): number | null {
     const count = this.deps.countThreadEvents;
     if (count === undefined) return null;

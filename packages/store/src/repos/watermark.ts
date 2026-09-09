@@ -57,7 +57,73 @@ const INCREMENT_ATTEMPTS_SQL = `
 `;
 
 const RESET_ATTEMPTS_SQL = `
-  UPDATE synthesis_watermark SET attempts = 0 WHERE thread_key = ?
+  UPDATE synthesis_watermark SET attempts = 0, parked_at = NULL WHERE thread_key = ?
+`;
+
+/**
+ * Un-park every thread that has gained something worth summarizing SINCE it
+ * was parked.
+ *
+ * Parking is otherwise terminal, and that is the bug this closes. `touch()`
+ * does not clear `attempts` (a new message only restarts the quiet clock),
+ * `resetAttempts` is called only after a synthesis succeeds, and `DUE_SQL`
+ * filters out anything at or above the cap — so a parked thread is never
+ * offered again, can never succeed, and can never be un-parked. A thread parked
+ * for holding nothing but `noise` would stay invisible to Layer 2 even after a
+ * real, non-noise message arrived on it: no delta, no obligation, nothing in
+ * the briefing.
+ *
+ * Two halves to the predicate, and the second is what makes this safe:
+ *
+ *   1. a non-`noise` extraction exists. That is exactly what puts a citable
+ *      chunk in the vector store (`layer1/extract.ts` embeds nothing else), so
+ *      this revives a thread only if a retry could now actually find context.
+ *   2. that extraction is NEWER than `parked_at`. Without this clause a poison
+ *      thread — repeated parse/citation/model failures, which by their nature
+ *      happen to threads that DO have context — would be un-parked on the very
+ *      next tick and loop forever, defeating the point of parking. See
+ *      `010_watermark_parked_at.sql` for the full case analysis.
+ *
+ * A NULL `parked_at` matches nothing — SQL comparison against NULL is NULL —
+ * so a thread with no reference point is never revived. That is deliberate:
+ * the scheduler stamps on the crossing (`recordFailedAttempt`), so NULL means
+ * "not parked", and migration 010 backfills the rows that predate the column.
+ * Set-based rather than a per-thread call from the extraction path, so Layer 1
+ * needs no knowledge of the scheduler's retry accounting and threads parked by
+ * an earlier run heal too.
+ */
+const REVIVE_WITH_SIGNAL_SQL = `
+  UPDATE synthesis_watermark SET attempts = 0, parked_at = NULL
+   WHERE attempts >= ?
+     AND EXISTS (
+       SELECT 1
+         FROM events e
+         JOIN extractions x ON x.event_id = e.event_id
+        WHERE e.thread_key = synthesis_watermark.thread_key
+          AND x.class <> 'noise'
+          AND x.created_at > synthesis_watermark.parked_at
+     )
+`;
+
+/**
+ * Stamp the moment the scheduler gave up on a thread.
+ *
+ * Unconditional, because the crossing it records happens exactly once per park
+ * cycle: `DebounceScheduler.recordFailedAttempt` calls this on the attempt that
+ * reaches the cap, and from then on `DUE_SQL` filters the thread out entirely,
+ * so nothing can fire it — and therefore nothing can re-stamp it — until
+ * `reviveWithSignal` or `resetAttempts` clears the field again.
+ *
+ * An earlier draft guarded this with `WHERE parked_at IS NULL` to stop a
+ * relaunch from pushing the reference point forward. That guard protected a
+ * call site that no longer exists (the park branch of `tick()`, which ran once
+ * per process), and it interacted badly with migration 010's backfill: a row
+ * backfilled while still mid-retry could never take a real stamp on the park
+ * that followed, leaving a reference point in the past that the same signal
+ * could revive from over and over.
+ */
+const MARK_PARKED_SQL = `
+  UPDATE synthesis_watermark SET parked_at = ? WHERE thread_key = ?
 `;
 
 /**
@@ -243,6 +309,8 @@ export class WatermarkRepo {
   private readonly stmtGet: Statement<unknown[], WatermarkRow>;
   private readonly stmtIncrementAttempts: Statement<unknown[], unknown>;
   private readonly stmtResetAttempts: Statement<unknown[], unknown>;
+  private readonly stmtReviveWithSignal: Statement<[number], unknown>;
+  private readonly stmtMarkParked: Statement<[number, string], unknown>;
   private readonly stmtPendingCount: Statement<[number], { n: number }>;
 
   constructor(private readonly db: Database) {
@@ -250,6 +318,8 @@ export class WatermarkRepo {
     this.stmtMarkSynthesized = this.db.prepare(MARK_SYNTHESIZED_SQL);
     this.stmtIncrementAttempts = this.db.prepare(INCREMENT_ATTEMPTS_SQL);
     this.stmtResetAttempts = this.db.prepare(RESET_ATTEMPTS_SQL);
+    this.stmtReviveWithSignal = this.db.prepare<[number], unknown>(REVIVE_WITH_SIGNAL_SQL);
+    this.stmtMarkParked = this.db.prepare<[number, string], unknown>(MARK_PARKED_SQL);
     this.stmtDue = this.db.prepare<unknown[], WatermarkRow>(DUE_SQL);
     this.stmtPendingCount = this.db.prepare<[number], { n: number }>(PENDING_COUNT_SQL);
     this.stmtGet = this.db.prepare<unknown[], WatermarkRow>(
@@ -307,9 +377,42 @@ export class WatermarkRepo {
    *
    * Without this, a thread that failed twice and then recovered would carry
    * those two failures forever and be retired by a single later blip.
+   *
+   * Clears `parked_at` along with the counter: a thread that has succeeded is
+   * not parked, and leaving a stale timestamp behind would make the NEXT park's
+   * revive window start in the past.
    */
   resetAttempts(threadKey: string): void {
     this.stmtResetAttempts.run(threadKey);
+  }
+
+  /**
+   * Record that the scheduler has parked `threadKey`, at `at` — the reference
+   * point {@link reviveWithSignal} compares extraction times against.
+   *
+   * Called once per park cycle, on the attempt that exhausts the budget; see
+   * {@link MARK_PARKED_SQL} for why that makes an unconditional write correct.
+   * Cleared by {@link resetAttempts} and by {@link reviveWithSignal}. No-op on
+   * an unknown thread key.
+   */
+  markParked(threadKey: string, at: number): void {
+    this.stmtMarkParked.run(at, threadKey);
+  }
+
+  /**
+   * Un-park every thread that has gained a non-`noise` extraction since it was
+   * parked. See {@link REVIVE_WITH_SIGNAL_SQL} for why parking is otherwise
+   * permanent, why that is a data-loss bug rather than a cosmetic one, and why
+   * the "since" is load-bearing.
+   *
+   * @param minAttempts - The parking threshold (`maxAttempts`). Threads at or
+   *   above it are candidates; a thread still inside its retry budget is left
+   *   alone, since `due()` will offer it again on the next tick anyway.
+   * @returns How many threads were revived — 0 on the overwhelming majority of
+   *   ticks, which is why the caller only logs a non-zero result.
+   */
+  reviveWithSignal(minAttempts: number): number {
+    return this.stmtReviveWithSignal.run(minAttempts).changes;
   }
 
   /**

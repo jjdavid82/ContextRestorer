@@ -75,6 +75,21 @@ import {
 export type ThreadRetriever = Pick<RetrievalService, 'forThread'>;
 
 /**
+ * Layer-1 progress for one thread — `Pick<EventsRepo, 'threadExtractionState'>`,
+ * spelled structurally so this module gains no dependency on the events store
+ * beyond the single question it asks.
+ *
+ * Optional on the synthesizer. Without it, an empty retrieval is always reported
+ * as the transient {@link SynthesisOutcome} `no_context`, exactly as before this
+ * existed; with it, a thread that can never gain context is reported as the
+ * terminal `no_signal` instead. See the `no_context` branch of
+ * {@link Layer2Synthesizer.synthesize}.
+ */
+export interface ThreadExtractionReader {
+  threadExtractionState(threadKey: string): { events: number; unextracted: number; signal: number };
+}
+
+/**
  * Outcome vocabulary recorded on the `ai_calls` row.
  *
  * Split finer than `ok`/`error` on purpose: "the model declined" and "the model
@@ -85,8 +100,21 @@ export type SynthesisOutcome =
   | 'ok'
   /** The model said nothing meaningful happened — the expected common case. */
   | 'not_meaningful'
-  /** Retrieval returned no citable context, so no model call was made. */
+  /**
+   * Retrieval returned no citable context YET, and the thread may still gain
+   * some — Layer 1 has not finished with every event on it. Transient: the
+   * scheduler leaves the watermark armed and retries.
+   */
   | 'no_context'
+  /**
+   * Retrieval returned no citable context and the thread can never gain any:
+   * every event on it is extracted, and none produced a chunk (all `noise`).
+   * Terminal, and a normal answer — most threads are chatter. The scheduler
+   * settles the watermark instead of spending its retry budget and then
+   * reporting a summarization failure for a conversation that had nothing in it.
+   */
+  | 'no_signal'
+
   /** The model emitted something that was not JSON. */
   | 'parse_error'
   /** Valid JSON, but not the shape the schema requires. */
@@ -283,7 +311,12 @@ export class Layer2Synthesizer {
    * @param model - Chat model name, recorded on every delta and `ai_calls` row.
    * @param promptVersion - e.g. `layer2-synthesize.v1`; recorded on every delta.
    * @param clock - Injected time source; nothing here calls `Date.now()`.
+   * @param threadExtraction - Optional Layer-1 progress reader. Supplied, it is
+   *   what lets an empty retrieval be reported as terminal (`no_signal`) rather
+   *   than as retryable (`no_context`) — see {@link ThreadExtractionReader}.
+   *   Last and optional so every existing call site stays valid.
    */
+
   constructor(
     private readonly ollama: OllamaClient,
     private readonly retrieval: ThreadRetriever,
@@ -294,6 +327,7 @@ export class Layer2Synthesizer {
     private readonly model: string,
     private readonly promptVersion: string,
     clock: Clock = systemClock,
+    private readonly threadExtraction?: ThreadExtractionReader,
   ) {
     this.clock = clock;
   }
@@ -335,9 +369,26 @@ export class Layer2Synthesizer {
     // No citable context means no groundable claim. Skipping the model call is
     // not just an optimisation — a prompt with an empty allowlist can only be
     // answered with citations that would have to be rejected.
+    //
+    // But WHICH empty this is decides the thread's fate, so the two are
+    // separated here rather than collapsed into one retryable outcome:
+    //
+    //   - Layer 1 is still working through the thread  -> `no_context`,
+    //     transient, retry (a chunk is on its way).
+    //   - every event is extracted and none made a chunk -> `no_signal`,
+    //     terminal, settle. Chunks are upserted BEFORE their `extractions` row
+    //     (`layer1/extract.ts`), so once every event has a row, every chunk the
+    //     thread will ever have already exists — and there are none.
+    //
+    // Collapsing them is what parked 79 all-noise threads on a real install
+    // after 10 retries each, and then told the user their conversations
+    // "couldn't be summarized".
     if (context.chunks.length === 0) {
-      this.log(trace, 0, 'no_context');
-      return 'no_context';
+      const state = this.threadExtraction?.threadExtractionState(threadKey);
+      const terminal = state !== undefined && state.events > 0 && state.unextracted === 0;
+      const outcome: SynthesisOutcome = terminal ? 'no_signal' : 'no_context';
+      this.log(trace, 0, outcome);
+      return outcome;
     }
 
     // T-1: the ONLY route thread content takes into a prompt.
