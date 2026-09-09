@@ -363,8 +363,13 @@ const ACTIVITY_COPY: Record<ActivityEvent['kind'], (n: number) => { text: string
       n === 1 ? 'it wasn’t' : 'they weren’t'
     } backed by a source.`,
   }),
-  template_fallback: () => ({
-    text: 'A briefing used a simpler format because the model didn’t respond in time.',
+  // NOT "a briefing used a simpler format": under P0 the deterministic
+  // briefing is the designed output, and every delivered one takes that path.
+  // This row now fires only when the model was genuinely unavailable, which is
+  // a different and much rarer thing.
+  briefing_fallback: () => ({
+    text: 'A briefing was written without the model because it wasn’t available.',
+    next: 'Check that Ollama is running; the briefing itself is complete and cited either way.',
   }),
   extraction_writeoff: (n) => ({
     text: `${n} ${n === 1 ? 'message' : 'messages'} couldn’t be read by the model and ${

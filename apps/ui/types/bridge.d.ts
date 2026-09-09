@@ -267,7 +267,7 @@ export interface ActivityEvent {
     | 'thread_parked'
     | 'gate_injection'
     | 'gate_drops'
-    | 'template_fallback'
+    | 'briefing_fallback'
     | 'extraction_writeoff'
     | 'model_error'
     | 'noise_skipped';
