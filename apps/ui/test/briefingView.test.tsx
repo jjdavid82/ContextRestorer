@@ -15,7 +15,9 @@ import type {
   BriefingSnapshot,
   Citation,
   ClaimChunk,
+  ClaimProjectSelection,
   ContextRestorerBridge,
+  DeclaredProject,
   DrillDown,
   FeedbackInput,
   PendingItemView,
@@ -63,6 +65,10 @@ interface MockBridge {
   claimVerdicts: ReturnType<typeof vi.fn>;
   /** Task 4.6: the only sanctioned egress for FR-6 deep links. */
   openExternal: ReturnType<typeof vi.fn>;
+  /** Migration 011: the per-claim project label write and its read-back. */
+  claimSetProject: ReturnType<typeof vi.fn>;
+  claimProjectsFor: ReturnType<typeof vi.fn>;
+  claimDetectProjects: ReturnType<typeof vi.fn>;
 }
 
 function citation(overrides: Partial<Citation> = {}): Citation {
@@ -102,6 +108,14 @@ function installBridge(
     claimVerdicts?: Record<string, FeedbackInput['verdict']>;
     /** Defaults to "nothing to rehydrate" — the live-stream path these tests exercise. */
     snapshot?: BriefingSnapshot;
+    /** Declared projects offered by the per-claim label dropdown (migration 011). */
+    declaredProjects?: DeclaredProject[];
+    /** Labels already on the briefing, replayed into the dropdowns on load. */
+    claimProjects?: ClaimProjectSelection[];
+    /** Lets a test make `claim:setProject` fail, to exercise the rollback. */
+    setProjectResult?: { ok: boolean; reason?: string };
+    /** What `claim:detectProjects` reports back after auto-filing (migration 012). */
+    detectedProjects?: ClaimProjectSelection[];
   } = {},
 ): MockBridge {
   const chunkListeners: Array<(c: ClaimChunk) => void> = [];
@@ -124,6 +138,14 @@ function installBridge(
       options.drilldown ?? { claimId, events: [] },
   );
   const submit = vi.fn(async () => ({ ok: true }));
+  const claimSetProject = vi.fn(async () => options.setProjectResult ?? { ok: true });
+  const claimProjectsFor = vi.fn(async () => options.claimProjects ?? []);
+  // Auto-detection returns the briefing's labels AFTER filing what it could,
+  // so it defaults to whatever detection is configured to find, falling back
+  // to the labels already on file (i.e. "detected nothing new").
+  const claimDetectProjects = vi.fn(
+    async () => options.detectedProjects ?? options.claimProjects ?? [],
+  );
   const claimVerdicts = vi.fn(async (ids: string[]) => {
     const known = options.claimVerdicts ?? {};
     const result: Record<string, FeedbackInput['verdict']> = {};
@@ -147,9 +169,9 @@ function installBridge(
     projects: {
       suggest: vi.fn(async () => ({ candidates: [] })),
       declare: vi.fn(async () => ({ ok: true })),
-      // A-2 channel tagging. Bridge-contract only; the briefing view never
-      // reads it — the Settings channel panel does.
-      list: vi.fn(async () => []),
+      // Read by the briefing view since migration 011: it populates the
+      // per-claim project dropdown, and an empty list hides that control.
+      list: vi.fn(async () => options.declaredProjects ?? []),
       remove: vi.fn(async () => ({ ok: true })),
     },
     briefing: {
@@ -183,7 +205,15 @@ function installBridge(
         };
       },
     },
-    claim: { drilldown },
+    // `setProject`/`projects` back the per-claim project label (migration 011).
+    // `projects` resolves empty so no dropdown starts out selected; the view
+    // hides the control entirely unless `projects.list()` returns something.
+    claim: {
+      drilldown,
+      setProject: claimSetProject,
+      projects: claimProjectsFor,
+      detectProjects: claimDetectProjects,
+    },
     shell: { openExternal },
     // `export` is bridge-contract only here: the briefing view never exports,
     // that is the Diagnostics panel's button.
@@ -276,6 +306,9 @@ function installBridge(
     submit,
     claimVerdicts,
     openExternal,
+    claimSetProject,
+    claimProjectsFor,
+    claimDetectProjects,
   };
 }
 
@@ -1034,6 +1067,292 @@ describe('BriefingView — subscription lifecycle', () => {
     mock.emitChunk(chunk({ claim: 'Only once, please.' }));
     await screen.findByText('Only once, please.');
     expect(screen.getAllByText('Only once, please.')).toHaveLength(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Per-claim project labels (migration 013)                                   */
+/* -------------------------------------------------------------------------- */
+
+describe('BriefingView — per-claim project label', () => {
+  const PROJECTS: DeclaredProject[] = [
+    { projectId: 'p-migration', name: 'Migration' },
+    { projectId: 'p-pilot', name: 'Pilot' },
+  ];
+
+  it('offers no control when the user has declared no projects', async () => {
+    const mock = installBridge({ declaredProjects: [] });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+
+    // A dropdown with nothing in it is a dead control; projects are declared
+    // during onboarding, not here.
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('labels a claim through the bridge, keyed by the claim artifact id', async () => {
+    const mock = installBridge({ declaredProjects: PROJECTS });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+
+    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'Project' })[0]!);
+    fireEvent.click(await screen.findByRole('option', { name: 'Migration' }));
+
+    await waitFor(() =>
+      expect(mock.claimSetProject).toHaveBeenCalledWith(BRIEFING_ID, 'art-1', 'p-migration'),
+    );
+  });
+
+  it('replays a label already on file so re-opening the briefing shows it', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-pilot' }],
+    });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+
+    await waitFor(() => expect(mock.claimProjectsFor).toHaveBeenCalledWith(BRIEFING_ID));
+    expect(await screen.findByText('Pilot')).toBeTruthy();
+  });
+
+  it('clears a label through the explicit "No project" option', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-pilot' }],
+    });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+
+    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'Project' })[0]!);
+    fireEvent.click(await screen.findByRole('option', { name: 'No project' }));
+
+    // `null`, not '' — clearing is its own instruction on the wire.
+    await waitFor(() =>
+      expect(mock.claimSetProject).toHaveBeenCalledWith(BRIEFING_ID, 'art-1', null),
+    );
+  });
+
+  it('rolls the selection back and reports when the write fails', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      setProjectResult: { ok: false, reason: 'database is locked' },
+    });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+
+    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'Project' })[0]!);
+    fireEvent.click(await screen.findByRole('option', { name: 'Migration' }));
+
+    // The optimistic selection must not survive a failed write, or the user
+    // would believe a label was saved that is not there.
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('Migration')).toBeNull());
+  });
+});
+
+describe('BriefingView — automatic project detection', () => {
+  const PROJECTS: DeclaredProject[] = [
+    { projectId: 'p-dsp', name: 'DSP' },
+    { projectId: 'p-academy', name: 'AI Academy' },
+  ];
+
+  it('auto-fills the dropdown from what detection found once the stream ends', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      detectedProjects: [{ claimId: 'art-1', projectId: 'p-dsp' }],
+    });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+
+    // Detection is deliberately deferred until `done`: the claim set is only
+    // final then, and this is one round trip for the whole briefing.
+    expect(mock.claimDetectProjects).not.toHaveBeenCalled();
+
+    mock.emitDone(doneEvent());
+
+    await waitFor(() =>
+      expect(mock.claimDetectProjects).toHaveBeenCalledWith(BRIEFING_ID, ['art-1']),
+    );
+    expect(await screen.findByText('DSP')).toBeTruthy();
+  });
+
+  it('leaves the dropdown blank when detection abstains', async () => {
+    const mock = installBridge({ declaredProjects: PROJECTS, detectedProjects: [] });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+    mock.emitDone(doneEvent());
+
+    await waitFor(() => expect(mock.claimDetectProjects).toHaveBeenCalled());
+    // Blank is the whole point of abstaining — the user fills it in.
+    expect(screen.queryByText('DSP')).toBeNull();
+    expect(screen.queryByText('AI Academy')).toBeNull();
+  });
+
+  it('does not run detection when no projects are declared', async () => {
+    const mock = installBridge({ declaredProjects: [] });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+    mock.emitDone(doneEvent());
+
+    await waitFor(() => expect(mock.claimProjectsFor).toHaveBeenCalled());
+    expect(mock.claimDetectProjects).not.toHaveBeenCalled();
+  });
+
+  it('survives a detection failure with every dropdown as the user left it', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-academy' }],
+    });
+    mock.claimDetectProjects.mockRejectedValue(new Error('detection exploded'));
+    await renderBriefing(mock);
+    mock.emitChunk(chunk());
+    await screen.findByText('Auth refactor shipped to staging.');
+    mock.emitDone(doneEvent());
+
+    await waitFor(() => expect(mock.claimDetectProjects).toHaveBeenCalled());
+    // The label already on file must still be showing.
+    expect(await screen.findByText('AI Academy')).toBeTruthy();
+  });
+});
+
+describe('BriefingView — project filter', () => {
+  const PROJECTS: DeclaredProject[] = [
+    { projectId: 'p-dsp', name: 'DSP' },
+    { projectId: 'p-academy', name: 'AI Academy' },
+  ];
+
+  /** Two changed claims on different artifacts, one filed, one not. */
+  async function renderTwoClaims(mock: MockBridge): Promise<void> {
+    await renderBriefing(mock);
+    mock.emitChunk(chunk({ claim: 'DSP dashboard shipped.' }));
+    mock.emitChunk(
+      chunk({ claim: 'Unrelated thing happened.', citation: citation({ artifactId: 'art-2' }) }),
+    );
+    await screen.findByText('DSP dashboard shipped.');
+    await screen.findByText('Unrelated thing happened.');
+    mock.emitDone(doneEvent());
+  }
+
+  it('is not offered when no projects are declared', async () => {
+    const mock = installBridge({ declaredProjects: [] });
+    await renderTwoClaims(mock);
+    expect(screen.queryByRole('combobox', { name: 'Filter by project' })).toBeNull();
+  });
+
+  it('narrows the changed list to one project and says what it hid', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-dsp' }],
+    });
+    await renderTwoClaims(mock);
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by project' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'DSP' }));
+
+    await waitFor(() => expect(screen.queryByText('Unrelated thing happened.')).toBeNull());
+    expect(screen.getByText('DSP dashboard shipped.')).toBeTruthy();
+    // A filter left on must never read as "nothing changed".
+    expect(screen.getByText(/1 item hidden by this filter/)).toBeTruthy();
+  });
+
+  it('"Not filed" shows only the rows carrying no label', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-dsp' }],
+    });
+    await renderTwoClaims(mock);
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by project' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Not filed' }));
+
+    await waitFor(() => expect(screen.queryByText('DSP dashboard shipped.')).toBeNull());
+    expect(screen.getByText('Unrelated thing happened.')).toBeTruthy();
+  });
+
+  it('"Show all" clears the filter again', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-dsp' }],
+    });
+    await renderTwoClaims(mock);
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by project' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'DSP' }));
+    await waitFor(() => expect(screen.queryByText('Unrelated thing happened.')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
+
+    expect(await screen.findByText('Unrelated thing happened.')).toBeTruthy();
+  });
+
+  it('filters obligations too, and says so rather than hiding them silently', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-dsp' }],
+      pending: [
+        {
+          pendingId: 'p1',
+          description: 'Sign off on the two SRE reqs.',
+          confidence: 0.9,
+          // Filed under nothing, so a DSP filter excludes it.
+          citationArtifactId: 'art-99',
+          sourceQuote: null,
+        },
+      ],
+    });
+    await renderTwoClaims(mock);
+    await screen.findByText('Sign off on the two SRE reqs.');
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by project' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'DSP' }));
+
+    // The panel filter governs EVERY section by explicit user decision.
+    await waitFor(() => expect(screen.queryByText('Sign off on the two SRE reqs.')).toBeNull());
+    // …but an obligation must never vanish quietly: the count names it.
+    expect(screen.getByText(/hidden by this filter, including anything waiting on you/)).toBeTruthy();
+  });
+
+  it('filters a "Waiting on you" claim that has no pending row of its own', async () => {
+    const mock = installBridge({
+      declaredProjects: PROJECTS,
+      claimProjects: [{ claimId: 'art-1', projectId: 'p-dsp' }],
+    });
+    await renderBriefing(mock);
+    mock.emitChunk(chunk({ claim: 'DSP dashboard shipped.' }));
+    mock.emitChunk(
+      chunk({
+        section: 'Waiting on you',
+        claim: 'Someone needs an answer.',
+        citation: citation({ artifactId: 'art-3' }),
+      }),
+    );
+    await screen.findByText('Someone needs an answer.');
+    mock.emitDone(doneEvent());
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by project' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'DSP' }));
+
+    await waitFor(() => expect(screen.queryByText('Someone needs an answer.')).toBeNull());
+    expect(screen.getByText('DSP dashboard shipped.')).toBeTruthy();
+  });
+
+  it('sits above the sections, not inside the changed one', async () => {
+    const mock = installBridge({ declaredProjects: PROJECTS });
+    await renderTwoClaims(mock);
+
+    // The control governs every section, so it must not be nested in one of
+    // them — a filter inside "things changed" reads as scoped to it.
+    const filter = screen.getByRole('combobox', { name: 'Filter by project' });
+    const changedSection = screen.getByLabelText('Changed while you were out');
+    expect(changedSection.contains(filter)).toBe(false);
   });
 });
 

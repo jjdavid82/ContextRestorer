@@ -56,11 +56,21 @@
 import { ipcMain } from 'electron';
 import type { Artifact, Event, Person, SourceId } from '@cr/core';
 import type { Drilldown, DrilldownEvent } from '../preload.cjs';
+import { detectProject } from './projectMatch.js';
 
 export type { Drilldown, DrilldownEvent };
 
 /** Invoke channel serving claim provenance. */
 export const DRILLDOWN_CHANNEL = 'claim:drilldown';
+
+/** Invoke channel writing one per-claim project label (migration 011). */
+export const SET_PROJECT_CHANNEL = 'claim:setProject';
+
+/** Invoke channel reading back every label on one briefing. */
+export const PROJECTS_CHANNEL = 'claim:projects';
+
+/** Invoke channel auto-filing a briefing's still-unlabelled rows (migration 012). */
+export const DETECT_PROJECTS_CHANNEL = 'claim:detectProjects';
 
 /**
  * Maximum events returned for one drill-down.
@@ -105,6 +115,39 @@ export interface ThreadEventReader {
   listByThread(threadKey: string): Event[];
 }
 
+/**
+ * The slice of `ClaimProjectsRepo` the label channels use.
+ *
+ * Structural for the same reason as {@link ArtifactReader}: the real repo
+ * satisfies it with no adapter, and a test can pass a hand-rolled store.
+ */
+export interface ClaimProjectStore {
+  /** Every label on file — keyed by artifact, so it spans briefings. */
+  listAll(): ReadonlyArray<{ artifactId: string; projectId: string; origin?: 'user' | 'auto' }>;
+  setProject(
+    artifactId: string,
+    projectId: string | null,
+    now: number,
+    origin?: 'user' | 'auto',
+    briefingId?: string | null,
+  ): void;
+  /** Writes an auto-detected label only where the thread has none. */
+  suggestProject(
+    artifactId: string,
+    projectId: string,
+    now: number,
+    briefingId?: string | null,
+  ): boolean;
+}
+
+/**
+ * The slice of `GraphRepo` auto-detection reads: the declared projects whose
+ * names it looks for. Narrow for the same reason as {@link ArtifactReader}.
+ */
+export interface ProjectLister {
+  listProjects(): ReadonlyArray<{ projectId: string; name: string }>;
+}
+
 /** Everything the drill-down handler needs. Note the absence of any model client. */
 export interface ClaimHandlerDeps {
   /** Artifact + person source; `GraphRepo` in production. */
@@ -113,6 +156,23 @@ export interface ClaimHandlerDeps {
   events: ThreadEventReader;
   /** Override for {@link MAX_DRILLDOWN_EVENTS}; tests use it to keep fixtures small. */
   maxEvents?: number;
+  /**
+   * Per-claim project labels (`ClaimProjectsRepo`). Optional and paired with
+   * {@link ClaimHandlerDeps.clock}: the two label channels are registered only
+   * when both are present, so a partially-wired host leaves them unhandled
+   * rather than accepting labels and dropping them — the same reasoning
+   * `projects:*` and `claim:drilldown` already use in `ipc/index.ts`.
+   */
+  labels?: ClaimProjectStore;
+  /** Injected clock stamping `tagged_at`. Required alongside `labels`. */
+  clock?: { now(): number };
+  /**
+   * Declared projects for auto-detection (`GraphRepo`). Optional independently
+   * of {@link ClaimHandlerDeps.labels}: without it the label channels still
+   * work and detection simply never suggests anything, which is the same
+   * outcome as a user who has declared no projects.
+   */
+  projects?: ProjectLister;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -371,13 +431,239 @@ export function drilldown(arg: unknown, deps: ClaimHandlerDeps): Drilldown {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Per-claim project labels (migration 011)                                   */
+/* -------------------------------------------------------------------------- */
+
+/** One label as it crosses the bridge. `projectId: null` means "untagged". */
+export interface ClaimProjectSelection {
+  claimId: string;
+  projectId: string | null;
+  /**
+   * `'user'` for a label the user picked, `'auto'` for one {@link detectProject}
+   * derived from the source text. Forwarded so the renderer can show a guess as
+   * a suggestion rather than as the user's own filing (X-2) — see migration 013.
+   */
+  origin: 'user' | 'auto';
+}
+
 /**
- * Register the drill-down channel.
+ * Narrow `{ briefingId, claimId, projectId }` off the wire.
  *
- * Safe to call before any window exists — the handler needs no `BrowserWindow`.
- * The callback is a thin wrapper over {@link drilldown}, which is where the
- * tests aim.
+ * `projectId` is tri-state on the renderer's side but only bi-state here:
+ * a non-empty string tags, `null` clears. `undefined` is rejected rather than
+ * treated as a clear — a dropdown that failed to send its value must not read
+ * as the user choosing "None".
+ */
+export function parseSetProjectArg(
+  arg: unknown,
+): { briefingId: string; claimId: string; projectId: string | null } | null {
+  const row = arg as { briefingId?: unknown; claimId?: unknown; projectId?: unknown } | null;
+  if (row === null || typeof row !== 'object') return null;
+  if (typeof row.briefingId !== 'string' || row.briefingId === '') return null;
+  if (typeof row.claimId !== 'string' || row.claimId === '') return null;
+  if (row.projectId === null) return { briefingId: row.briefingId, claimId: row.claimId, projectId: null };
+  if (typeof row.projectId !== 'string' || row.projectId === '') return null;
+  return { briefingId: row.briefingId, claimId: row.claimId, projectId: row.projectId };
+}
+
+/** Narrow `{ briefingId }` off the wire. */
+export function parseClaimProjectsArg(arg: unknown): string | null {
+  const id = (arg as { briefingId?: unknown } | null)?.briefingId;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
+/**
+ * `claim:setProject` body.
+ *
+ * Never throws: a failed label write degrades to `{ ok: false }`, which the
+ * briefing view reports inline and rolls its optimistic selection back from.
+ * Losing a label must not take down the briefing the user is reading.
+ */
+export function setClaimProject(arg: unknown, deps: ClaimHandlerDeps): { ok: boolean; reason?: string } {
+  const parsed = parseSetProjectArg(arg);
+  if (parsed === null) return { ok: false, reason: 'invalid_selection' };
+  if (deps.labels === undefined || deps.clock === undefined) {
+    return { ok: false, reason: 'not_wired' };
+  }
+
+  try {
+    // `briefingId` is provenance now, not identity — the label is keyed on the
+    // artifact so it survives the next Refresh (migration 013).
+    deps.labels.setProject(
+      parsed.claimId,
+      parsed.projectId,
+      deps.clock.now(),
+      'user',
+      parsed.briefingId,
+    );
+    return { ok: true };
+  } catch (error) {
+    console.error('[claim] setProject failed', parsed.briefingId, parsed.claimId, error);
+    return { ok: false, reason: 'internal_error' };
+  }
+}
+
+/**
+ * `claim:projects` body — every label on file.
+ *
+ * Not scoped to a briefing since migration 013: labels are keyed on the
+ * artifact, so the same thread keeps its filing across every Refresh. The
+ * renderer indexes the result by claim id and looks up whichever rows its
+ * current briefing happens to contain.
+ *
+ * The `briefingId` argument is still accepted (and ignored) so the channel's
+ * shape did not change under a renderer that has not been rebuilt yet.
+ *
+ * Degrades a failed read to an empty list, the same way `getSelectedChannels`
+ * does: unlabelled and unreadable both render as "no project chosen", and the
+ * distinction is a job for the main-process log.
+ */
+export function listClaimProjects(_arg: unknown, deps: ClaimHandlerDeps): ClaimProjectSelection[] {
+  if (deps.labels === undefined) return [];
+
+  try {
+    return deps.labels.listAll().map((tag) => ({
+      claimId: tag.artifactId,
+      projectId: tag.projectId,
+      // A row written before migration 013 has no origin; it was typed by hand.
+      origin: tag.origin ?? 'user',
+    }));
+  } catch (error) {
+    console.error('[claim] listProjects failed', error);
+    return [];
+  }
+}
+
+/**
+ * Longest run of source text auto-detection reads per claim.
+ *
+ * Detection is a substring scan, so this is about bounding pathological input
+ * (a thread with thousands of messages, concatenated) rather than about model
+ * context. Generous, because a project name mentioned once at the top of a long
+ * thread is exactly the case worth catching.
+ */
+export const MAX_DETECTION_CHARS = 20_000;
+
+/**
+ * Largest number of events, from the START of a thread, detection will read.
+ *
+ * Only there to bound a pathological thread (thousands of empty-body events)
+ * cheaply — {@link MAX_DETECTION_CHARS} is the real limit and is normally hit
+ * within the first dozen messages.
+ */
+export const MAX_DETECTION_EVENTS = 2_000;
+
+/**
+ * The source text one claim is detected from: its thread's raw events, the same
+ * rows `claim:drilldown` shows.
+ *
+ * The CLAIM text is deliberately not used. It is Layer 3's one-sentence
+ * paraphrase, which routinely drops the proper nouns detection depends on —
+ * "the user proposed three optional enhancements" names no project even when
+ * every message under it does. Reading the events is what makes this detection
+ * "based on the message or email content" rather than on a summary of it.
+ *
+ * Reads from the HEAD of the thread, not via {@link resolveEvents}: that keeps
+ * only the most recent {@link MAX_DRILLDOWN_EVENTS}, and a project named once
+ * when a long thread opened — exactly the case worth catching — sits before
+ * that window. `eventText` (not a raw `payload.text` read) so the per-event
+ * cap and whitelist stay in one place.
+ */
+export function detectionText(claimId: string, deps: ClaimHandlerDeps): string {
+  const artifact = deps.artifacts.getArtifact(claimId);
+  if (artifact === undefined) return '';
+
+  const events = deps.events.listByThread(artifact.externalRef);
+  const parts: string[] = [];
+  let length = 0;
+
+  for (const event of events.slice(0, MAX_DETECTION_EVENTS)) {
+    const text = eventText(event.payload);
+    if (text === '') continue;
+    parts.push(text);
+    length += text.length + 1;
+    if (length >= MAX_DETECTION_CHARS) break;
+  }
+
+  return parts.join('\n').slice(0, MAX_DETECTION_CHARS);
+}
+
+/**
+ * `claim:detectProjects` body — auto-file the rows of one briefing that the
+ * user has not filed themselves.
+ *
+ * Returns every label the briefing now carries, auto and user alike, so the
+ * renderer can apply one result to its whole list instead of reconciling two.
+ *
+ * Never throws, and never overwrites: {@link ClaimProjectStore.suggestProject}
+ * writes only where a row is absent, so a claim the user has already filed —
+ * or deliberately cleared and re-filed — is untouched no matter how many times
+ * this runs.
+ */
+export function detectClaimProjects(arg: unknown, deps: ClaimHandlerDeps): ClaimProjectSelection[] {
+  const parsed = parseDetectArg(arg);
+  if (parsed === null || deps.labels === undefined || deps.clock === undefined) return [];
+
+  const projects = deps.projects?.listProjects() ?? [];
+  if (projects.length > 0) {
+    const already = new Set(deps.labels.listAll().map((t) => t.artifactId));
+
+    for (const claimId of parsed.claimIds) {
+      // Cheapest possible skip: a thread that already has a decision needs no
+      // text read at all, which matters when a briefing is re-opened and every
+      // row is already filed.
+      if (already.has(claimId)) continue;
+
+      try {
+        const match = detectProject(detectionText(claimId, deps), projects);
+        if (match === null) continue; // Not clear enough — left blank for the user.
+        deps.labels.suggestProject(
+          claimId,
+          match.projectId,
+          deps.clock.now(),
+          parsed.briefingId,
+        );
+      } catch (error) {
+        // One unreadable thread must not cost the other rows their suggestion.
+        console.error('[claim] project detection failed', claimId, error);
+      }
+    }
+  }
+
+  return listClaimProjects({ briefingId: parsed.briefingId }, deps);
+}
+
+/** Narrow `{ briefingId, claimIds }` off the wire. */
+export function parseDetectArg(arg: unknown): { briefingId: string; claimIds: string[] } | null {
+  const row = arg as { briefingId?: unknown; claimIds?: unknown } | null;
+  if (row === null || typeof row !== 'object') return null;
+  if (typeof row.briefingId !== 'string' || row.briefingId === '') return null;
+  if (!Array.isArray(row.claimIds)) return null;
+
+  const claimIds: string[] = [];
+  for (const id of row.claimIds) {
+    // One malformed entry drops that entry, rather than failing the batch:
+    // the other rows' suggestions are still worth having.
+    if (typeof id === 'string' && id !== '') claimIds.push(id);
+  }
+  return { briefingId: row.briefingId, claimIds };
+}
+
+/**
+ * Register the drill-down channel, plus the two label channels when a label
+ * store and clock are wired.
+ *
+ * Safe to call before any window exists — none of the handlers needs a
+ * `BrowserWindow`. Each callback is a thin wrapper over an exported function,
+ * which is where the tests aim.
  */
 export function registerClaimHandlers(deps: ClaimHandlerDeps): void {
   ipcMain.handle(DRILLDOWN_CHANNEL, (_event, arg: unknown): Drilldown => drilldown(arg, deps));
+
+  if (deps.labels === undefined || deps.clock === undefined) return;
+
+  ipcMain.handle(SET_PROJECT_CHANNEL, (_event, arg: unknown) => setClaimProject(arg, deps));
+  ipcMain.handle(PROJECTS_CHANNEL, (_event, arg: unknown) => listClaimProjects(arg, deps));
+  ipcMain.handle(DETECT_PROJECTS_CHANNEL, (_event, arg: unknown) => detectClaimProjects(arg, deps));
 }

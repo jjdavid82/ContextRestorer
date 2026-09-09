@@ -31,6 +31,7 @@ import {
   AppSettingsRepo,
   BriefingSchedulesRepo,
   BriefingsRepo,
+  ClaimProjectsRepo,
   DeltasRepo,
   EventsRepo,
   ExtractionsRepo,
@@ -1329,6 +1330,10 @@ if (!app.requestSingleInstanceLock()) {
       const pending = new PendingItemsRepo(db!);
       const briefings = new BriefingsRepo(db!);
       const schedules = new BriefingSchedulesRepo(db!);
+      // Per-claim project LABELS (migration 011). Separate from `graph`'s
+      // `belongs_to` edges on purpose: this writes no edge, so nothing here
+      // reaches `ranker.ts`. See the migration header.
+      const claimLabels = new ClaimProjectsRepo(db!);
       watermarks = new WatermarkRepo(db!);
 
       // Layer 3, assembled before the handler table so `startGeneration` is the
@@ -1527,6 +1532,9 @@ if (!app.requestSingleInstanceLock()) {
         // would re-prepare every statement for no benefit.
         events,
         projectStore: graph,
+        // `claim:setProject` / `claim:projects` — the per-claim project labels
+        // the briefing view's dropdown writes and reads back.
+        claimLabels,
         // Settings "Projects" panel: after `projects:remove` deletes a project,
         // rebuild the channel → project resolver and `belongs_to` edges so a
         // channel the FK just untagged is no longer mapped to a dead id. Reuses

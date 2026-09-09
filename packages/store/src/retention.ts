@@ -51,6 +51,11 @@ const DELETE_ORDER: readonly string[] = [
   // Briefing leaves first — both reference `briefings` / `artifacts`.
   'briefing_claims',
   'feedback',
+  // Per-claim project labels (migration 013): FK to `briefings` (ON DELETE SET
+  // NULL) and to `projects` (ON DELETE CASCADE), so it must be emptied before
+  // both — and named here explicitly, not left to the cascade, so the "Your
+  // data" panel counts what the user filed and `deleteEverything` reports it.
+  'claim_projects',
   'briefings',
   // Pending items reference state_deltas and artifacts.
   'pending_items',

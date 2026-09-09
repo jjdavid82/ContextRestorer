@@ -201,6 +201,7 @@ const USER_DATA_TABLES = [
   'briefings',
   'briefing_claims',
   'feedback',
+  'claim_projects',
   'briefing_schedules',
   'ai_calls',
 ];
@@ -268,6 +269,10 @@ function seedEverything(): void {
   db.prepare(
     `INSERT INTO feedback (feedback_id, briefing_id, claim_id, verdict, note, created_at)
      VALUES ('f1', 'b1', 'c1', 'relevant', NULL, 11000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO claim_projects (artifact_id, project_id, briefing_id, tagged_at, origin)
+     VALUES ('a1', 'proj1', 'b1', 11000, 'user')`,
   ).run();
   db.prepare(
     `INSERT INTO briefing_schedules

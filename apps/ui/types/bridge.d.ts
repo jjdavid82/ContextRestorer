@@ -199,6 +199,26 @@ export interface DrillDown {
   events: DrilldownEvent[];
 }
 
+/**
+ * Who filed a claim under a project: `'user'` picked it from the dropdown,
+ * `'auto'` is a name match `detectProject()` derived from the source text. Kept
+ * distinct so a guess is never rendered as the user's own declaration (X-2).
+ */
+export type ClaimProjectOrigin = 'user' | 'auto';
+
+/**
+ * One per-claim project label. Mirrors `ClaimProjectSelection` in the preload.
+ *
+ * `claimId` is the artifact-backed handle the briefing rows already use, not a
+ * `briefing_claims.claim_id` — see `apps/desktop/src/ipc/claim.ts`.
+ */
+export interface ClaimProjectSelection {
+  claimId: string;
+  projectId: string | null;
+  /** `'user'` when absent, for a wire that predates the field (migration 013). */
+  origin?: ClaimProjectOrigin;
+}
+
 /** `feedback:submit` — user judgement used to tune relevance. */
 export interface FeedbackInput {
   briefingId: string;
@@ -598,6 +618,16 @@ export interface ContextRestorerBridge {
   };
   claim: {
     drilldown(claimId: string): Promise<DrillDown>;
+    /** Label one briefing row with a declared project, or clear it with `null`. */
+    setProject(briefingId: string, claimId: string, projectId: string | null): Promise<OkResult>;
+    /** Every label already on one briefing, for restoring the dropdowns on load. */
+    projects(briefingId: string): Promise<ClaimProjectSelection[]>;
+    /**
+     * Auto-file rows whose source text names exactly one declared project,
+     * leaving the rest blank. Returns the briefing's labels afterwards, and
+     * never overwrites one already there.
+     */
+    detectProjects(briefingId: string, claimIds: string[]): Promise<ClaimProjectSelection[]>;
   };
   /**
    * The one sanctioned way out of the app (Task 4.6).

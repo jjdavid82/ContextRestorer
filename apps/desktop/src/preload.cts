@@ -461,6 +461,24 @@ export interface SelectedSlackChannel {
 }
 
 /**
+ * One per-claim project label (migration 011).
+ *
+ * `claimId` is an artifact id, matching `Drilldown.claimId` — the renderer has
+ * no `briefing_claims.claim_id`, as `ipc/claim.ts` documents.
+ */
+export interface ClaimProjectSelection {
+  claimId: string;
+  projectId: string | null;
+  /**
+   * `'user'` for a label the user picked, `'auto'` for one detection derived by
+   * matching a project name in the source text. Absent is treated as `'user'`.
+   * Kept on the wire so the renderer never renders a guess as the user's own
+   * filing (X-2) — see migration 013.
+   */
+  origin?: 'user' | 'auto';
+}
+
+/**
  * `slack:listAvailable` result.
  *
  * `ok: false, reason: 'not_connected'` is the expected shape before Slack has
@@ -762,6 +780,21 @@ export interface ContextRestorerBridge {
   };
   claim: {
     drilldown(claimId: string): Promise<Drilldown>;
+    /**
+     * Label one briefing row with a declared project, or clear it with `null`.
+     *
+     * `claimId` is the same artifact-backed handle {@link drilldown} takes —
+     * see `ipc/claim.ts`'s header for why the wire field is named this way.
+     */
+    setProject(briefingId: string, claimId: string, projectId: string | null): Promise<OkResult>;
+    /** Every label already on one briefing, for restoring the dropdowns on load. */
+    projects(briefingId: string): Promise<ClaimProjectSelection[]>;
+    /**
+     * Auto-file the given rows whose source text names exactly one declared
+     * project, leaving every other row blank, and return the briefing's labels
+     * afterwards. Never overwrites a label already on a row.
+     */
+    detectProjects(briefingId: string, claimIds: string[]): Promise<ClaimProjectSelection[]>;
   };
   /**
    * The one sanctioned way out of the app (Task 4.6).
@@ -949,6 +982,32 @@ const bridge: ContextRestorerBridge = {
     drilldown: (claimId) => {
       assertNonEmptyString(claimId, 'claimId');
       return ipcRenderer.invoke('claim:drilldown', { claimId }) as Promise<Drilldown>;
+    },
+    setProject: (briefingId, claimId, projectId) => {
+      assertNonEmptyString(briefingId, 'briefingId');
+      assertNonEmptyString(claimId, 'claimId');
+      // `null` clears the label; anything else must be a real project id. The
+      // main process re-checks this — the renderer is not trusted — but failing
+      // here gives the caller a stack pointing at the bad call site.
+      if (projectId !== null) assertNonEmptyString(projectId, 'projectId');
+      return ipcRenderer.invoke('claim:setProject', {
+        briefingId,
+        claimId,
+        projectId,
+      }) as Promise<OkResult>;
+    },
+    projects: (briefingId) => {
+      assertNonEmptyString(briefingId, 'briefingId');
+      return ipcRenderer.invoke('claim:projects', { briefingId }) as Promise<
+        ClaimProjectSelection[]
+      >;
+    },
+    detectProjects: (briefingId, claimIds) => {
+      assertNonEmptyString(briefingId, 'briefingId');
+      if (!Array.isArray(claimIds)) throw new TypeError('claimIds must be an array');
+      return ipcRenderer.invoke('claim:detectProjects', { briefingId, claimIds }) as Promise<
+        ClaimProjectSelection[]
+      >;
     },
   },
   shell: {

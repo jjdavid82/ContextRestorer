@@ -49,7 +49,7 @@ import {
   type RelinkProjects,
   type SlackChannelStore,
 } from './slackChannels.js';
-import { registerClaimHandlers } from './claim.js';
+import { registerClaimHandlers, type ClaimProjectStore } from './claim.js';
 import { registerExternalHandlers } from './external.js';
 import { registerPollHandlers } from './poll.js';
 import {
@@ -117,6 +117,17 @@ export {
 export {
   registerClaimHandlers,
   drilldown,
+  setClaimProject,
+  listClaimProjects,
+  detectClaimProjects,
+  detectionText,
+  parseSetProjectArg,
+  parseClaimProjectsArg,
+  parseDetectArg,
+  SET_PROJECT_CHANNEL,
+  PROJECTS_CHANNEL,
+  DETECT_PROJECTS_CHANNEL,
+  MAX_DETECTION_CHARS,
   resolveEvents,
   parseDrilldownArg,
   toDrilldownEvent,
@@ -131,6 +142,9 @@ export {
   type ClaimHandlerDeps,
   type ArtifactReader,
   type ThreadEventReader,
+  type ClaimProjectStore,
+  type ClaimProjectSelection,
+  type ProjectLister,
 } from './claim.js';
 export {
   registerExternalHandlers,
@@ -297,6 +311,16 @@ export interface IpcDeps {
    * actually holds the whole repo, so it is what gets passed in.
    */
   projectStore?: GraphRepo;
+  /**
+   * Per-claim project label store (`ClaimProjectsRepo`, migration 011) behind
+   * `claim:setProject` / `claim:projects`.
+   *
+   * Optional like every other repo here. Absent leaves both label channels
+   * unregistered, which the briefing view reads as "labelling is not available"
+   * — an unhandled channel rejects, whereas a handler with no store would
+   * silently accept labels and drop them.
+   */
+  claimLabels?: ClaimProjectStore;
   /**
    * Invoked after `projects:remove` deletes a project. `main.ts` wires this to
    * `relinkProjects(slackChannels.list())` so the ingestion pipeline's
@@ -552,7 +576,22 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   // the same `EventsRepo` the project suggester reads; no new instances, since
   // each repo prepares its whole statement set in its constructor.
   if (deps.events !== undefined && deps.projectStore !== undefined) {
-    registerClaimHandlers({ artifacts: deps.projectStore, events: deps.events });
+    registerClaimHandlers({
+      artifacts: deps.projectStore,
+      events: deps.events,
+      // Per-claim project labels (migration 011). Passed through unconditionally:
+      // `registerClaimHandlers` itself skips the two label channels when this is
+      // absent, so a host without the repo keeps `claim:drilldown` and nothing else.
+      ...(deps.claimLabels !== undefined
+        ? {
+            labels: deps.claimLabels,
+            clock: deps.clock ?? systemClock,
+            // Auto-detection reads the declared project names out of the same
+            // `GraphRepo` instance the artifact lookup above uses.
+            projects: deps.projectStore,
+          }
+        : {}),
+    });
   }
 
   // FR-11 completion signal + FR-12 verdict capture: `briefing:caughtUp`,

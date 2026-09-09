@@ -59,3 +59,8 @@ export {
 export type { ProjectLinkSummary, ProjectLinkGraph } from './projectLinks.js';
 // Generic app-level settings (currently: the selected chat model). Migration 005.
 export { AppSettingsRepo } from './repos/appSettings.js';
+// Per-claim project LABELS (migration 011). Deliberately not part of the
+// `projectLinks` write path above: these tag briefing rows for later filtering
+// and write no `belongs_to` edge, so nothing here re-weights ranking.
+export { ClaimProjectsRepo } from './repos/claimProjects.js';
+export type { ClaimProjectTag, ClaimProjectOrigin } from './repos/claimProjects.js';
