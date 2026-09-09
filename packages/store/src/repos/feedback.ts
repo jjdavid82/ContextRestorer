@@ -49,6 +49,40 @@ function toFeedback(row: FeedbackRow): Feedback {
  * signal outlives any single briefing. Validation therefore has to happen in
  * this layer; the database will not do it for us.
  */
+/**
+ * One recorded verdict with the claim it judged (FR-7's exportable shape).
+ *
+ * `claimText`/`section`/`citationArtifactId` are `null` when the claim itself
+ * is gone — a briefing-level verdict (`missed` carries no `claimId`), or a
+ * claim aged out by retention. Null rather than omitted, so a consumer must
+ * decide what to do about it rather than silently seeing a shorter list.
+ */
+export interface LabeledVerdict {
+  feedbackId: string;
+  briefingId: string;
+  claimId: string | null;
+  verdict: FeedbackVerdict;
+  note: string | null;
+  createdAt: number;
+  /** The sentence the user judged. */
+  claimText: string | null;
+  section: string | null;
+  citationArtifactId: string | null;
+}
+
+/** Raw join row backing {@link LabeledVerdict}. */
+interface LabeledRow {
+  feedback_id: string;
+  briefing_id: string;
+  claim_id: string | null;
+  verdict: string;
+  note: string | null;
+  created_at: number;
+  claim_text: string | null;
+  section: string | null;
+  citation_artifact_id: string | null;
+}
+
 export class FeedbackRepo {
   constructor(private db: Database) {}
 
@@ -101,6 +135,69 @@ export class FeedbackRepo {
       .all(briefingId) as FeedbackRow[];
 
     return rows.map(toFeedback);
+  }
+
+  /**
+   * Every verdict the user has recorded, joined to the claim it judged.
+   *
+   * The `feedback` table alone is close to useless outside the UI: it stores a
+   * `claim_id` and a word, and the sentence that was judged lives in
+   * `briefing_claims`. Without the join, a verdict cannot be read by anything
+   * that was not already looking at that briefing — which is why FR-7's
+   * "feeds offline eval" had no reader at all: there was nothing legible to
+   * feed it.
+   *
+   * A LEFT JOIN, deliberately. Feedback carries no foreign key (it must outlive
+   * the briefing it refers to, and the 90-day purge does not spare claims), so
+   * a verdict whose claim has since been deleted still comes back — with its
+   * text absent, which is honest, rather than being silently dropped from a
+   * count the user believes is complete.
+   *
+   * @param sinceMs - Epoch ms lower bound (inclusive). Omit for everything.
+   */
+  listLabeled(sinceMs = 0): LabeledVerdict[] {
+    const rows = this.db
+      .prepare(
+        `SELECT f.feedback_id, f.briefing_id, f.claim_id, f.verdict, f.note, f.created_at,
+                c.text AS claim_text, c.section, c.citation_artifact_id
+           FROM feedback f
+           LEFT JOIN briefing_claims c ON c.claim_id = f.claim_id
+          WHERE f.created_at >= ?
+          ORDER BY f.created_at ASC`,
+      )
+      .all(sinceMs) as LabeledRow[];
+
+    return rows.map((row) => ({
+      feedbackId: row.feedback_id,
+      briefingId: row.briefing_id,
+      claimId: row.claim_id,
+      verdict: row.verdict as FeedbackVerdict,
+      note: row.note,
+      createdAt: row.created_at,
+      claimText: row.claim_text,
+      section: row.section,
+      citationArtifactId: row.citation_artifact_id,
+    }));
+  }
+
+  /**
+   * How many verdicts of each kind were recorded since `sinceMs`.
+   *
+   * Feeds the Diagnostics panel, so the user can see that pressing those
+   * buttons produced something. A verdict count is the smallest honest answer
+   * to "did that do anything" — it does not claim the ranking changed, because
+   * it did not (X-2).
+   */
+  countByVerdict(sinceMs = 0): Record<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT verdict, COUNT(*) AS n FROM feedback WHERE created_at >= ? GROUP BY verdict`,
+      )
+      .all(sinceMs) as Array<{ verdict: string; n: number }>;
+
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[row.verdict] = row.n;
+    return counts;
   }
 
   /**

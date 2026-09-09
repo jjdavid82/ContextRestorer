@@ -63,6 +63,13 @@ const GATE_REASON_LABELS: Record<string, string> = {
   unsupported: 'Cited source did not back up the claim',
 };
 
+const FEEDBACK_VERDICT_LABELS: Record<string, string> = {
+  relevant: 'Marked relevant',
+  irrelevant: 'Marked not relevant',
+  wrong: 'Marked wrong',
+  missed: 'Reported as missed',
+};
+
 const TRIGGER_REASON_LABELS: Record<string, string> = {
   quiet: 'Conversation went quiet',
   hard_cap: 'Maximum wait reached',
@@ -558,6 +565,45 @@ export default function LocalMetricsPanel(): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
+  /** One sentence describing the last export — the path, or why it failed. */
+  const [exportResult, setExportResult] = useState<string | null>(null);
+
+  /**
+   * Write every recorded verdict to a local file (FR-7).
+   *
+   * Reports the PATH rather than a bare "done": the file is the whole point,
+   * and an export the user cannot find has not really happened.
+   */
+  const runExport = useCallback(async (): Promise<void> => {
+    setExporting(true);
+    setExportResult(null);
+    try {
+      const result = await getBridge().feedback.export();
+      setExportResult(
+        result.ok
+          ? `Wrote ${result.total ?? 0} verdict(s) to ${result.path ?? 'the app data folder'}.`
+          : `Export failed: ${result.reason ?? 'unknown reason'}.`,
+      );
+    } catch (cause) {
+      setExportResult(`Export failed: ${cause instanceof Error ? cause.message : String(cause)}.`);
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
+  /**
+   * Verdict counts as `LabeledCounts` rows, in a fixed display order.
+   *
+   * Fixed rather than whatever order SQLite grouped them in, so the panel does
+   * not reshuffle between two refreshes for no reason.
+   */
+  const feedbackCounts = metrics?.feedbackCounts ?? {};
+  const feedbackRows: MetricCount[] = ['relevant', 'irrelevant', 'wrong', 'missed']
+    .map((key) => ({ key, count: feedbackCounts[key] ?? 0 }))
+    .filter((row) => row.count > 0);
+  const feedbackTotal = feedbackRows.reduce((n, row) => n + row.count, 0);
+
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -730,6 +776,39 @@ export default function LocalMetricsPanel(): ReactNode {
                 Kinds detected:{' '}
                 {metrics.redactionKinds.length === 0 ? 'none' : metrics.redactionKinds.join(', ')}
               </p>
+            </DetailSection>
+
+            <DetailSection title="Your feedback (FR-7)">
+              {/* Says plainly what these verdicts do and do not do. The controls
+                  used to be inert from the user's side — recorded and read by
+                  nothing — and the honest fix is a reader plus a sentence, not
+                  a hint of a learning loop the design excludes (X-2). */}
+              <p className="metrics__line">
+                <strong>{feedbackTotal}</strong> verdict(s) recorded.
+              </p>
+              <LabeledCounts
+                rows={feedbackRows}
+                labels={FEEDBACK_VERDICT_LABELS}
+                empty="Nothing judged yet."
+              />
+              <p className="metrics__line">
+                Nothing is learned from these — ranking never reads them. They are labelled data
+                for the offline eval, and the lines you marked wrong become its negatives.
+              </p>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={exporting || feedbackTotal === 0}
+                onClick={() => void runExport()}
+                sx={{ mt: 1 }}
+              >
+                {exporting ? 'Exporting…' : 'Export for eval'}
+              </Button>
+              {exportResult !== null ? (
+                <p className="metrics__line" role="status">
+                  {exportResult}
+                </p>
+              ) : null}
             </DetailSection>
 
             <DetailSection title="Synthesis triggers">

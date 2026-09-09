@@ -230,6 +230,15 @@ export function BriefingView({
    */
   const [resolvedArtifactIds, setResolvedArtifactIds] = useState<Set<string>>(() => new Set());
   const [claimVerdicts, setClaimVerdicts] = useState<Record<string, FeedbackInput['verdict']>>({});
+  /**
+   * Whether to show the items the user judged away.
+   *
+   * A dismissal must be reversible and must never be silent: the count below
+   * the list says how many are hidden, and this reveals them — the same
+   * discipline the `+N more` overflow follows. Something that vanishes with no
+   * trace is indistinguishable from a bug.
+   */
+  const [showDismissed, setShowDismissed] = useState(false);
   /** A-4 cap for the changed list; replaced by the config value once known. */
   const [maxChangedItems, setMaxChangedItems] = useState(DEFAULT_MAX_CHANGED_ITEMS);
   /** True once the user has expanded past the cap. Never collapses again. */
@@ -490,6 +499,9 @@ export function BriefingView({
             briefingId={briefingId}
             claimId={claimId}
             {...(verdict === undefined ? {} : { initialVerdict: verdict })}
+            // Recorded locally the moment the store confirms, so a dismissed
+            // item leaves the list immediately instead of on the next refresh.
+            onVerdict={(next) => setClaimVerdicts((current) => ({ ...current, [claimId]: next }))}
           >
             {resolveAction}
           </FeedbackControls>,
@@ -549,9 +561,38 @@ export function BriefingView({
   // P2: every non-obligation claim, in canonical section order. Sorted rather
   // than concatenated per section so one flat list still reads in the order the
   // four-section layout would have shown.
-  const changedClaims = CHANGED_SECTIONS.flatMap((section) =>
+  const allChangedClaims = CHANGED_SECTIONS.flatMap((section) =>
     claims.filter((chunk) => sectionOf(chunk) === section && isLive(chunk)),
   );
+
+  /**
+   * Claims the user has judged out of the way.
+   *
+   * `wrong` and `irrelevant` both mean "get this off my screen" — one says the
+   * line is not true, the other that it does not matter — so both dismiss.
+   * `relevant` does NOT: hiding what somebody just called useful, on a list
+   * they are in the middle of reading, would punish the one positive judgement
+   * the controls offer.
+   *
+   * Separate from `isLive` above, which drops what the user RESOLVED in this
+   * view. Both remove a bullet; they answer different questions, and a
+   * resolution is not a judgement about the claim.
+   *
+   * DURABLE, not just until the next refresh. The renderer's claim id is the
+   * artifact id (see `claimIdOf`), which is stable across briefings, and
+   * `feedback.claimVerdicts` returns verdicts across every briefing — so a
+   * dismissal survives Refresh and survives a restart, which is what makes it
+   * a decision rather than a gesture.
+   */
+  const isDismissed = (chunk: ClaimChunk): boolean => {
+    const verdict = claimVerdicts[claimIdOf(chunk)];
+    return verdict === 'wrong' || verdict === 'irrelevant';
+  };
+
+  const dismissedCount = allChangedClaims.filter(isDismissed).length;
+  const changedClaims = showDismissed
+    ? allChangedClaims
+    : allChangedClaims.filter((chunk) => !isDismissed(chunk));
   const visibleChanged = showAllChanged ? changedClaims : changedClaims.slice(0, maxChangedItems);
   const hiddenChangedCount = changedClaims.length - visibleChanged.length;
 
@@ -651,6 +692,20 @@ export function BriefingView({
             <Box sx={{ mt: 1.5 }}>
               <Button size="small" onClick={() => setShowAllChanged(true)}>
                 Show {hiddenChangedCount} more
+              </Button>
+            </Box>
+          ) : null}
+
+          {/* Dismissals are disclosed and reversible. Same rule as the overflow
+              above and as the OI-1 still-processing note: a count stays
+              visible, because something that disappears with no trace is
+              indistinguishable from a bug. */}
+          {dismissedCount > 0 ? (
+            <Box sx={{ mt: 1 }}>
+              <Button size="small" color="inherit" onClick={() => setShowDismissed((v) => !v)}>
+                {showDismissed
+                  ? 'Hide what you marked'
+                  : `${dismissedCount} hidden by your feedback — show`}
               </Button>
             </Box>
           ) : null}

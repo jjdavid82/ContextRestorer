@@ -314,6 +314,16 @@ export interface LocalMetrics {
   /** Citation-gate drops by reason. `injection_pattern` is the T-1 detector. */
   gateDrops: MetricCount[];
   redactedClaims: number;
+  /**
+   * Verdicts recorded per kind (`relevant` / `irrelevant` / `wrong` /
+   * `missed`), all time. Empty when nothing has been judged.
+   *
+   * Shown so the user can see their feedback was stored. It deliberately does
+   * NOT claim the ranking changed — nothing learns from these (X-2); they
+   * exist to be exported as labelled data for the offline eval.
+   */
+  feedbackCounts: Record<string, number>;
+
   redactionCount: number;
   /** Detector kinds only — never any part of a redacted value. */
   redactionKinds: string[];
@@ -474,6 +484,24 @@ export interface BriefingScheduleResult {
   schedule?: BriefingScheduleView;
 }
 
+
+/**
+ * `feedback:export` — every recorded verdict written to a local JSON file.
+ *
+ * A LOCAL file on the same machine; nothing is uploaded. The `wrong` verdicts
+ * come out as `unsupportedClaims`, which is the exact shape a fixture's
+ * `ground_truth.unsupported_claims` takes — real, user-confirmed negatives for
+ * the offline eval.
+ */
+export interface FeedbackExportResult {
+  ok: boolean;
+  reason?: string;
+  /** Absolute path written. Present only when `ok`. */
+  path?: string;
+  total?: number;
+  counts?: Record<string, number>;
+}
+
 /** The full surface exposed on `window.contextRestorer`. */
 export interface ContextRestorerBridge {
   onboarding: {
@@ -550,6 +578,11 @@ export interface ContextRestorerBridge {
      * restart instead of asking the user to re-judge an unchanged claim.
      */
     claimVerdicts(claimIds: string[]): Promise<Record<string, FeedbackInput['verdict']>>;
+    /**
+     * Write every recorded verdict to a local JSON file (FR-7), and report the
+     * path. Nothing leaves the machine.
+     */
+    export(): Promise<FeedbackExportResult>;
   };
   health: {
     /** Returns an unsubscribe fn — same effect-cleanup contract as `onChunk`. */

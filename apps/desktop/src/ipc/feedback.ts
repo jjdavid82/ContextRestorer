@@ -49,6 +49,7 @@
  * `ipcMain.handle`. There is nothing in scope for it to wait on.
  */
 import { ipcMain } from 'electron';
+import type { LabeledVerdict } from '@cr/store';
 import type {
   BriefingMetric,
   CaughtUpResult,
@@ -75,6 +76,16 @@ export const METRICS_CHANNEL = 'briefing:metrics';
  * asking the user to re-judge something they already answered.
  */
 export const CLAIM_VERDICTS_CHANNEL = 'feedback:claimVerdicts';
+
+/**
+ * Invoke channel writing every recorded verdict to a local JSON file (FR-7).
+ *
+ * FR-7 says feedback "feeds offline eval only", and until this existed nothing
+ * read the table at all — the verdicts accumulated and their sole consumer was
+ * the UI redrawing the button the user had just pressed. This is the reader
+ * that makes the requirement true.
+ */
+export const EXPORT_CHANNEL = 'feedback:export';
 
 /**
  * The verdicts the store's CHECK constraint allows.
@@ -148,10 +159,34 @@ export interface BriefingCompletionStore {
   timeToReEntryMs(briefingId: string): number | null;
 }
 
+/**
+ * The read side of `FeedbackRepo`, for the export and the Diagnostics count.
+ *
+ * Separate from {@link FeedbackStore} — which is a pure sink — so a host that
+ * only wants to accept verdicts is not forced to grow two readers, and so this
+ * file states plainly that the write path and the "what did that do" path are
+ * different capabilities.
+ */
+export interface FeedbackReader {
+  listLabeled(sinceMs?: number): LabeledVerdict[];
+  countByVerdict(sinceMs?: number): Record<string, number>;
+}
+
 /** Everything the completion/feedback handlers need. Note the absence of any model client. */
 export interface FeedbackHandlerDeps {
   /** Verdict sink; `FeedbackRepo` in production. */
   feedback: FeedbackStore;
+  /**
+   * Read side, for `feedback:export`. Optional: absent, the channel reports
+   * `not_available` rather than writing an empty file that would read as "you
+   * have given no feedback".
+   */
+  feedbackReader?: FeedbackReader;
+  /**
+   * Directory the export is written into — `userData` in production. Paired
+   * with {@link FeedbackHandlerDeps.feedbackReader}: both or neither.
+   */
+  exportDir?: string;
   /** Briefing reader/stamper; `BriefingsRepo` in production. */
   briefings: BriefingCompletionStore;
   /** Injected time source for `caught_up_at`; nothing here calls `Date.now()`. */
@@ -221,6 +256,107 @@ export function parseFeedbackArg(arg: unknown): ParsedFeedback | null {
  *
  * Synchronous by construction — see the module header on AC-9. Never throws.
  */
+/**
+ * The shape `feedback:export` writes.
+ *
+ * Deliberately a plain document rather than a fixture: a verdict is a judgement
+ * about a REAL briefing, and the eval set is hand-authored scenarios with
+ * synthetic events. The two cannot be merged automatically, and pretending
+ * otherwise would manufacture fixtures nobody labelled. What this does is make
+ * the judgements legible enough to be turned into fixtures BY HAND — the
+ * bottleneck OI-5's ~70-example target actually has — and to be counted.
+ */
+export interface FeedbackExport {
+  /** Schema marker, so a consumer can refuse a shape it does not know. */
+  version: 1;
+  exportedAt: string;
+  counts: Record<string, number>;
+  /**
+   * Claims the user marked `wrong`, as bare sentences.
+   *
+   * Called out separately because this is the one list that maps directly onto
+   * something the eval already understands: a fixture's
+   * `ground_truth.unsupported_claims` is exactly a list of sentences that must
+   * not be asserted. These are real, user-confirmed negatives.
+   */
+  unsupportedClaims: string[];
+  verdicts: LabeledVerdict[];
+}
+
+/** Build the export document. Pure, so the shape is testable without a disk. */
+export function buildFeedbackExport(
+  verdicts: readonly LabeledVerdict[],
+  counts: Record<string, number>,
+  now: number,
+): FeedbackExport {
+  const unsupported = verdicts
+    .filter((v) => v.verdict === 'wrong' && v.claimText !== null && v.claimText.trim() !== '')
+    .map((v) => (v.claimText ?? '').trim());
+
+  return {
+    version: 1,
+    exportedAt: new Date(now).toISOString(),
+    counts,
+    // Deduped: the user can mark the same recurring claim wrong in several
+    // briefings, and a fixture wants the sentence once.
+    unsupportedClaims: [...new Set(unsupported)],
+    verdicts: [...verdicts],
+  };
+}
+
+/** `feedback:export` result. */
+export interface FeedbackExportResult {
+  ok: boolean;
+  reason?: string;
+  /** Absolute path written. Present only when `ok`. */
+  path?: string;
+  /** Verdicts written, so the panel can say what left the machine. */
+  total?: number;
+  counts?: Record<string, number>;
+}
+
+/**
+ * The whole of `feedback:export`: read, build, write, report the path.
+ *
+ * Writes to a LOCAL file and nothing else — this is the same machine, not an
+ * upload. SEC-6/X-3 are untouched: no network call, and the file lands beside
+ * the database it came from.
+ */
+export async function exportFeedback(
+  deps: FeedbackHandlerDeps,
+  writeFile: (path: string, contents: string) => Promise<void> = defaultWriteFile,
+): Promise<FeedbackExportResult> {
+  const reader = deps.feedbackReader;
+  const dir = deps.exportDir;
+  if (reader === undefined || dir === undefined) return { ok: false, reason: 'not_available' };
+
+  try {
+    const verdicts = reader.listLabeled();
+    const counts = reader.countByVerdict();
+    const now = deps.clock.now();
+    const document = buildFeedbackExport(verdicts, counts, now);
+
+    // Timestamped rather than overwritten: an export is evidence, and silently
+    // replacing the previous one would lose a comparison the user may want.
+    const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
+    const path = `${dir}/feedback-export-${stamp}.json`;
+    await writeFile(path, `${JSON.stringify(document, null, 2)}
+`);
+
+    return { ok: true, path, total: verdicts.length, counts };
+  } catch (error) {
+    console.error('[feedback] export failed', error);
+    return { ok: false, reason: 'internal_error' };
+  }
+}
+
+/** `fs.promises.writeFile`, imported lazily so this module loads under plain Node. */
+async function defaultWriteFile(path: string, contents: string): Promise<void> {
+  const { writeFile, mkdir } = await import('node:fs/promises');
+  await mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+  await writeFile(path, contents, 'utf8');
+}
+
 export function submitFeedback(arg: unknown, deps: FeedbackHandlerDeps): OkResult {
   const parsed = parseFeedbackArg(arg);
   if (parsed === null) return { ok: false, reason: 'invalid_feedback' };
@@ -449,4 +585,6 @@ export function registerFeedbackHandlers(deps: FeedbackHandlerDeps): void {
     CLAIM_VERDICTS_CHANNEL,
     (_event, arg: unknown): Record<string, FeedbackVerdict> => claimVerdicts(arg, deps),
   );
+
+  ipcMain.handle(EXPORT_CHANNEL, (): Promise<FeedbackExportResult> => exportFeedback(deps));
 }

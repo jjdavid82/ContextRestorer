@@ -176,7 +176,9 @@ function installBridge(
     },
     claim: { drilldown },
     shell: { openExternal },
-    feedback: { submit, claimVerdicts },
+    // `export` is bridge-contract only here: the briefing view never exports,
+    // that is the Diagnostics panel's button.
+    feedback: { submit, claimVerdicts, export: vi.fn(async () => ({ ok: true })) },
     health: { onSources: () => () => undefined },
     // `poll:refresh` — present only to satisfy the bridge contract; the briefing
     // view never forces a poll, same reasoning as `debug.metrics` below.
@@ -196,6 +198,7 @@ function installBridge(
         reEntry: { count: 0, p50Ms: null, p95Ms: null },
         gateDrops: [],
         redactedClaims: 0,
+        feedbackCounts: {},
         redactionCount: 0,
         redactionKinds: [],
         triggers: { total: 0, byReason: [], byOutcome: [] },
@@ -851,8 +854,11 @@ describe('FeedbackControls — verdicts (FR-7)', () => {
     // The clicked button itself reads as active — no separate "recorded" note.
     await waitFor(() => expect(relevant.getAttribute('aria-pressed')).toBe('true'));
 
-    // Changing one's mind must still work: the pressed state does not disable
-    // the other verdicts.
+    // Changing one's mind must still work: a recorded verdict does not disable
+    // the other buttons. Switching to `irrelevant` also DISMISSES the item now
+    // (see "judging an item out of the way"), so the assertion is that the
+    // second verdict was written and the bullet left — not that a button which
+    // has since unmounted still reads as pressed.
     const notRelevant = screen.getByRole('button', { name: 'Not relevant' });
     fireEvent.click(notRelevant);
 
@@ -862,8 +868,9 @@ describe('FeedbackControls — verdicts (FR-7)', () => {
       claimId: 'art-1',
       verdict: 'irrelevant',
     });
-    await waitFor(() => expect(notRelevant.getAttribute('aria-pressed')).toBe('true'));
-    expect(relevant.getAttribute('aria-pressed')).toBe('false');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Not relevant' })).toBeNull(),
+    );
   });
 
   it('offers the three claim verdicts, and only those, on a claim', async () => {
@@ -1054,5 +1061,89 @@ describe('the project badge', () => {
 
     await screen.findByText('Priya shipped the retry logic.');
     expect(screen.queryByTestId('project-badge')).toBeNull();
+  });
+});
+
+describe('judging an item out of the way (option 2)', () => {
+  /** The claim id the renderer uses IS the artifact id — see `claimIdOf`. */
+  const ARTIFACT = 'art-changed';
+
+  const changed = () =>
+    chunk({
+      section: 'Worth knowing',
+      claim: 'Q4 headcount is frozen.',
+      citation: citation({ artifactId: ARTIFACT }),
+    });
+
+  it('removes a claim the user marks Wrong, without waiting for a refresh', async () => {
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wrong' }));
+
+    // Gone once the store confirms — not before, and not only after a reload.
+    await waitFor(() => expect(screen.queryByText('Q4 headcount is frozen.')).toBeNull());
+    expect(h.submit).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'wrong', claimId: ARTIFACT }),
+    );
+  });
+
+  it('removes a claim the user marks Not relevant', async () => {
+    // Both verdicts mean "get this off my screen": one says the line is not
+    // true, the other that it does not matter.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not relevant' }));
+
+    await waitFor(() => expect(screen.queryByText('Q4 headcount is frozen.')).toBeNull());
+  });
+
+  it('KEEPS a claim the user marks Relevant', async () => {
+    // Hiding what somebody just called useful, on a list they are reading,
+    // would punish the one positive judgement the controls offer.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Relevant' }));
+
+    await waitFor(() => expect(h.submit).toHaveBeenCalled());
+    expect(screen.getByText('Q4 headcount is frozen.')).toBeTruthy();
+  });
+
+  it('discloses the count and can bring them back', async () => {
+    // A dismissal must never be silent: something that disappears with no
+    // trace is indistinguishable from a bug.
+    const h = installBridge();
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+    await screen.findByText('Q4 headcount is frozen.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wrong' }));
+    const reveal = await screen.findByRole('button', { name: /1 hidden by your feedback/i });
+
+    fireEvent.click(reveal);
+
+    expect(screen.getByText('Q4 headcount is frozen.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /hide what you marked/i })).toBeTruthy();
+  });
+
+  it('stays dismissed across a reload, from the stored verdict', async () => {
+    // The renderer's claim id is the artifact id, which is stable across
+    // briefings, and `claimVerdicts` reads verdicts across every briefing — so
+    // the dismissal is a decision, not a gesture that a refresh undoes.
+    const h = installBridge({ claimVerdicts: { [ARTIFACT]: 'wrong' } });
+    render(<BriefingView briefingId={BRIEFING_ID} />);
+    h.emitChunk(changed());
+
+    await waitFor(() => expect(h.claimVerdicts).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('Q4 headcount is frozen.')).toBeNull());
+    expect(await screen.findByRole('button', { name: /1 hidden by your feedback/i })).toBeTruthy();
   });
 });

@@ -55,6 +55,7 @@ import { registerPollHandlers } from './poll.js';
 import {
   registerFeedbackHandlers,
   type BriefingCompletionStore,
+  type FeedbackReader,
   type FeedbackStore,
 } from './feedback.js';
 import {
@@ -62,6 +63,7 @@ import {
   type AiCallStatsReader,
   type BriefingStatsReader,
   type ExtractionFailureReader,
+  type FeedbackCountReader,
 } from './metrics.js';
 import {
   registerModelSettingsHandlers,
@@ -146,6 +148,9 @@ export {
 export {
   registerFeedbackHandlers,
   submitFeedback,
+  exportFeedback,
+  buildFeedbackExport,
+  EXPORT_CHANNEL as FEEDBACK_EXPORT_CHANNEL,
   markBriefingCaughtUp,
   briefingMetrics,
   claimVerdicts,
@@ -162,6 +167,9 @@ export {
   MAX_CLAIM_IDS,
   type FeedbackHandlerDeps,
   type FeedbackStore,
+  type FeedbackReader,
+  type FeedbackExport,
+  type FeedbackExportResult,
   type BriefingCompletionStore,
   type ParsedFeedback,
   type BriefingMetric,
@@ -331,6 +339,16 @@ export interface IpcDeps {
    */
   briefings?: BriefingCompletionStore;
   /**
+   * Read side of `FeedbackRepo`, behind `feedback:export` (FR-7). Paired with
+   * {@link IpcDeps.exportDir}: both or neither, since an export with nowhere to
+   * write is not a feature.
+   */
+  feedbackReader?: FeedbackReader;
+  /** Where `feedback:export` writes — `userData` in production. */
+  exportDir?: string;
+  /** Verdict counts for the Diagnostics panel. Same repo instance in production. */
+  metricsFeedback?: FeedbackCountReader;
+  /**
    * Rehydration source behind `briefing:snapshot` (`BriefingsRepo` in
    * production — the SAME instance as {@link IpcDeps.briefings}, narrowed
    * differently, for the reason given on `BriefingSnapshotReader` itself).
@@ -493,6 +511,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       feedback: deps.feedback,
       briefings: deps.briefings,
       clock: deps.clock ?? systemClock,
+      // Both or neither — see `IpcDeps.feedbackReader`.
+      ...(deps.feedbackReader !== undefined && deps.exportDir !== undefined
+        ? { feedbackReader: deps.feedbackReader, exportDir: deps.exportDir }
+        : {}),
     });
   }
 
@@ -509,6 +531,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       briefings: deps.metricsBriefings,
       extractionFailures: deps.metricsExtractionFailures,
       logsDir: deps.logsDir,
+      ...(deps.metricsFeedback === undefined ? {} : { feedback: deps.metricsFeedback }),
     });
   }
 

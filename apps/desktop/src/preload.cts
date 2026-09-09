@@ -374,6 +374,16 @@ export interface LocalMetrics {
   gateDrops: MetricCount[];
   /** SEC-5: accepted claims that had something redacted. */
   redactedClaims: number;
+  /**
+   * Verdicts recorded per kind (`relevant` / `irrelevant` / `wrong` /
+   * `missed`), all time. Empty when nothing has been judged.
+   *
+   * Shown so the user can see their feedback was stored. It deliberately does
+   * NOT claim the ranking changed — nothing learns from these (X-2); they
+   * exist to be exported as labelled data for the offline eval.
+   */
+  feedbackCounts: Record<string, number>;
+
   /** SEC-5: total values redacted. */
   redactionCount: number;
   /** SEC-5: detector kinds that fired. Kinds only — never a redacted value. */
@@ -732,6 +742,11 @@ export interface ContextRestorerBridge {
      * answered. A claim with no key in the result has no verdict yet.
      */
     claimVerdicts(claimIds: string[]): Promise<Record<string, FeedbackVerdict>>;
+    /**
+     * Write every recorded verdict to a local JSON file (FR-7), and report the
+     * path. Nothing leaves the machine.
+     */
+    export(): Promise<FeedbackExportResult>;
   };
   health: {
     onSources(cb: (health: SourceHealth[]) => void): Unsubscribe;
@@ -787,6 +802,24 @@ export interface ContextRestorerBridge {
     get(): Promise<ModelInfo>;
     setChat(model: string): Promise<OkResult>;
   };
+}
+
+
+/**
+ * `feedback:export` — every recorded verdict written to a local JSON file.
+ *
+ * A LOCAL file on the same machine; nothing is uploaded. The `wrong` verdicts
+ * come out as `unsupportedClaims`, which is the exact shape a fixture's
+ * `ground_truth.unsupported_claims` takes — real, user-confirmed negatives for
+ * the offline eval.
+ */
+export interface FeedbackExportResult {
+  ok: boolean;
+  reason?: string;
+  /** Absolute path written. Present only when `ok`. */
+  path?: string;
+  total?: number;
+  counts?: Record<string, number>;
 }
 
 const bridge: ContextRestorerBridge = {
@@ -889,6 +922,7 @@ const bridge: ContextRestorerBridge = {
         claimIds: claimIds.map(String),
       }) as Promise<Record<string, FeedbackVerdict>>;
     },
+    export: () => ipcRenderer.invoke('feedback:export') as Promise<FeedbackExportResult>,
   },
   health: {
     onSources: (cb) => subscribe<SourceHealth[]>('health:sources', cb),

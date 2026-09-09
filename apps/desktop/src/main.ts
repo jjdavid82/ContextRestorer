@@ -1453,6 +1453,11 @@ if (!app.requestSingleInstanceLock()) {
       // Read by the poller every Slack cycle and by `slack:*` IPC — one
       // instance, since each repo prepares its whole statement set in its
       // constructor.
+      // One instance: the sink behind `feedback:submit`, the reader behind
+      // `feedback:export`, and the counter behind Diagnostics are the same
+      // table, and a second repo over the same handle would re-prepare every
+      // statement for no benefit.
+      const feedbackRepo = new FeedbackRepo(db!);
       const slackChannels = new SlackChannelsRepo(db!);
 
       /**
@@ -1543,7 +1548,13 @@ if (!app.requestSingleInstanceLock()) {
         // the SAME instance Layer 3 persists through and the schedule runner
         // reads `getMostRecent()` from — one prepared statement set, and no way
         // for two views of "the briefings table" to disagree.
-        feedback: new FeedbackRepo(db!),
+        feedback: feedbackRepo,
+        // FR-7's reader half: the export that finally makes recorded verdicts
+        // legible to something other than the button that wrote them, and the
+        // verdict counts the Diagnostics panel shows.
+        feedbackReader: feedbackRepo,
+        exportDir: app.getPath('userData'),
+        metricsFeedback: feedbackRepo,
         briefings,
         // `briefing:snapshot` rehydration (same `BriefingsRepo` instance as
         // `briefings` above, narrowed differently — see the field's own doc
