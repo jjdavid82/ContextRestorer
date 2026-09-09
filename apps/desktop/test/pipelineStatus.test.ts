@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Clock } from '@cr/core';
-import type { DebounceConfig } from '@cr/ai';
+import { MAX_BATCH_EVENTS, type DebounceConfig } from '@cr/ai';
 import type { DueThread } from '@cr/store';
 
 // `ipc/pipelineStatus.ts` only imports `electron` for types, same defensive
 // pattern as `health.test.ts`/`tray.test.ts`.
 vi.mock('electron', () => ({}));
 
-const { computePipelineStatus } = await import('../src/ipc/pipelineStatus.js');
+const { computePipelineStatus, estimateExtractionEta } = await import(
+  '../src/ipc/pipelineStatus.js'
+);
 
 const CLOCK: Clock = { now: () => 1_700_000_000_000 };
 
@@ -35,6 +37,8 @@ describe('computePipelineStatus', () => {
       synthesisDue: 0,
       synthesisInFlight: 0,
       parkedThreads: 0,
+      // No backlog means no wait to estimate. `null`, not 0 — see the field.
+      extractionEtaMs: null,
     });
   });
 
@@ -106,5 +110,57 @@ describe('computePipelineStatus', () => {
       clock: CLOCK,
     });
     expect(dueFn).toHaveBeenCalledWith(CLOCK.now(), { debounce: DEBOUNCE });
+  });
+});
+
+describe('estimateExtractionEta — the F2 first-run promise', () => {
+  /** An `AiCallsRepo` slice returning a fixed mean, or throwing. */
+  const meanOf = (value: number | null) => ({ recentMeanLatencyMs: () => value });
+
+  it('costs the backlog in model CALLS, not in events', () => {
+    // Layer 1 batches up to `MAX_BATCH_EVENTS` events per call, so a backlog of
+    // 100 events at 80s per call is not 100 × 80s. Getting this wrong overstates
+    // the wait by the batch factor.
+    const calls = Math.ceil(100 / MAX_BATCH_EVENTS);
+
+    expect(estimateExtractionEta(100, meanOf(80_000))).toBe(calls * 80_000);
+  });
+
+  it('rounds a partial batch up to a whole call', () => {
+    expect(estimateExtractionEta(1, meanOf(80_000))).toBe(80_000);
+  });
+
+  it('is null when there is no backlog', () => {
+    // Not 0: the renderer distinguishes "nothing to wait for" (no line at all)
+    // from "waiting, duration unknown".
+    expect(estimateExtractionEta(0, meanOf(80_000))).toBeNull();
+    expect(estimateExtractionEta(-3, meanOf(80_000))).toBeNull();
+  });
+
+  it('is null when no latency has been measured yet — the first-run case', () => {
+    // A user who has just connected has no completed Layer-1 calls, which is
+    // exactly when they are staring at this. A count with no promise attached
+    // is the honest answer.
+    expect(estimateExtractionEta(500, meanOf(null))).toBeNull();
+  });
+
+  it('is null when no latency source is wired at all', () => {
+    expect(estimateExtractionEta(500)).toBeNull();
+  });
+
+  it('is null rather than 0 for a nonsense measured latency', () => {
+    expect(estimateExtractionEta(500, meanOf(0))).toBeNull();
+    expect(estimateExtractionEta(500, meanOf(-1))).toBeNull();
+  });
+
+  it('degrades to null when the latency lookup throws', () => {
+    const angry = {
+      recentMeanLatencyMs: () => {
+        throw new Error('database is locked');
+      },
+    };
+
+    // A status strip must not fail over its own optional garnish.
+    expect(estimateExtractionEta(500, angry)).toBeNull();
   });
 });

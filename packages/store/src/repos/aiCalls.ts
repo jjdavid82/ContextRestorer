@@ -156,6 +156,41 @@ export class AiCallsRepo {
   }
 
   /**
+   * Mean latency of the most recent successful calls on one layer — the input
+   * to the extraction ETA the home page shows a new user (F2).
+   *
+   * Deliberately NOT {@link layerStats}'s all-time average. The number is
+   * answering "how long will the rest of this backlog take on THIS machine, as
+   * it is right now", and a lifetime mean drags in a different model, a
+   * different thermal state and a different amount of contention. A short
+   * trailing sample is the honest estimator.
+   *
+   * Restricted to `outcome = 'ok'` for the same reason: a burst of fast
+   * failures (a parse error returns in milliseconds) would make the estimate
+   * wildly optimistic, and an ETA that is confidently wrong is worse than no
+   * ETA — which is what `null` is for. `null` means "not enough evidence yet",
+   * never "instant".
+   *
+   * @param layer - 1, 2 or 3.
+   * @param sample - How many recent calls to average over.
+   */
+  recentMeanLatencyMs(layer: number, sample: number): number | null {
+    if (sample <= 0) return null;
+    const row = this.db
+      .prepare(
+        `SELECT AVG(latency_ms) AS m FROM (
+           SELECT latency_ms FROM ai_calls
+            WHERE layer = ? AND outcome = 'ok'
+            ORDER BY created_at DESC
+            LIMIT ?
+         )`,
+      )
+      .get(layer, Math.trunc(sample)) as { m: number | null } | undefined;
+    const mean = row?.m ?? null;
+    return mean === null ? null : Math.round(mean);
+  }
+
+  /**
    * Call counts per `(layer, outcome)` (Task 4.4, step 4).
    *
    * Kept separate from {@link layerStats} and deliberately NOT collapsed into an

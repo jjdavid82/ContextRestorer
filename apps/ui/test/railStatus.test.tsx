@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { RailStatus } from '../components/RailStatus';
+import { RailStatus, formatEta } from '../components/RailStatus';
 import type {
   ContextRestorerBridge,
   PipelineStatus,
@@ -193,6 +193,7 @@ describe('RailStatus refresh button', () => {
       synthesisDue: 0,
       synthesisInFlight: 0,
       parkedThreads: 0,
+      extractionEtaMs: null,
     };
     h.emitPipeline(base);
     expect(screen.queryByText(/stuck/i)).toBeNull();
@@ -210,6 +211,7 @@ describe('RailStatus refresh button', () => {
     synthesisDue: 0,
     synthesisInFlight: 0,
     parkedThreads: 0,
+    extractionEtaMs: null,
   };
 
   it('dismisses the stuck notice, then re-shows it only once the backlog grows past the dismissed count', () => {
@@ -261,5 +263,60 @@ describe('RailStatus refresh button', () => {
     render(<RailStatus />);
     expect(screen.getByText(/available in the desktop app/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
+  });
+});
+
+describe('the extraction ETA (F2)', () => {
+  const backlog = (extractionBacklog: number, extractionEtaMs: number | null): PipelineStatus => ({
+    extractionBacklog,
+    synthesisDue: 0,
+    synthesisInFlight: 0,
+    parkedThreads: 0,
+    extractionEtaMs,
+  });
+
+  it('states the count alone while no estimate has been earned', () => {
+    // The first-run state: no completed Layer-1 calls to average, so there is
+    // no honest number to quote. The count still tells the user work is moving.
+    const h = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h.emitHealth(HEALTH);
+
+    h.emitPipeline(backlog(420, null));
+
+    expect(screen.getByText('Reading 420 new messages…')).toBeTruthy();
+  });
+
+  it('appends the estimate once one exists', () => {
+    const h = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h.emitHealth(HEALTH);
+
+    h.emitPipeline(backlog(420, 12 * 60_000));
+
+    expect(screen.getByText('Reading 420 new messages… ~12 min left')).toBeTruthy();
+  });
+
+  it('singularises one message', () => {
+    const h = installBridge(vi.fn(async () => OK_COOLDOWN));
+    render(<RailStatus />);
+    h.emitHealth(HEALTH);
+
+    h.emitPipeline(backlog(1, null));
+
+    expect(screen.getByText('Reading 1 new message…')).toBeTruthy();
+  });
+});
+
+describe('formatEta', () => {
+  it('rounds to the roughest honest unit', () => {
+    // Deliberately coarse past the first hour: the ETA answers "minutes or
+    // hours", and quoting it to the minute would dress an estimate as a schedule.
+    expect(formatEta(20_000)).toBe('under a minute');
+    expect(formatEta(9 * 60_000)).toBe('~9 min');
+    expect(formatEta(59 * 60_000)).toBe('~59 min');
+    expect(formatEta(90 * 60_000)).toBe('~1.5 h');
+    expect(formatEta(3 * 3_600_000)).toBe('~3 h');
+    expect(formatEta(14 * 3_600_000)).toBe('~14 h');
   });
 });

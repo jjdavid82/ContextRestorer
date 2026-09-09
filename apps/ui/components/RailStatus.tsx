@@ -64,10 +64,33 @@ function formatLag(lagMs: number | null): string {
   return minutes < 60 ? `${minutes}m behind` : `${Math.round(minutes / 60)}h behind`;
 }
 
+/**
+ * A duration as the roughest honest unit (F2).
+ *
+ * Rounded hard on purpose. The ETA is an order-of-magnitude answer to "is this
+ * minutes or hours" — the only question a waiting user actually has — and
+ * quoting it to the minute past the first hour would dress a rough estimate up
+ * as a schedule.
+ */
+export function formatEta(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return 'under a minute';
+  if (minutes < 60) return `~${minutes} min`;
+  const hours = ms / 3_600_000;
+  if (hours < 10) return `~${Math.round(hours * 2) / 2} h`;
+  return `~${Math.round(hours)} h`;
+}
+
 function pipelineLine(status: PipelineStatus | null): string {
   if (status === null) return 'Waiting for first status…';
   if (status.extractionBacklog > 0) {
-    return `Reading ${status.extractionBacklog} new message${status.extractionBacklog === 1 ? '' : 's'}…`;
+    const head = `Reading ${status.extractionBacklog} new message${status.extractionBacklog === 1 ? '' : 's'}…`;
+    // Appended only once the estimate is earned: `null` means "no completed
+    // Layer-1 calls to average yet", which is the first-run state, and the
+    // count alone is more honest there than a guess.
+    return status.extractionEtaMs === null
+      ? head
+      : `${head} ${formatEta(status.extractionEtaMs)} left`;
   }
   if (status.synthesisInFlight > 0) {
     return `Summarizing ${status.synthesisInFlight} conversation${status.synthesisInFlight === 1 ? '' : 's'}…`;
