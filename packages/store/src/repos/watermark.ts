@@ -66,12 +66,14 @@ const RESET_ATTEMPTS_SQL = `
  *
  * Parking is otherwise terminal, and that is the bug this closes. `touch()`
  * does not clear `attempts` (a new message only restarts the quiet clock),
- * `resetAttempts` is called only after a synthesis succeeds, and `DUE_SQL`
- * filters out anything at or above the cap — so a parked thread is never
- * offered again, can never succeed, and can never be un-parked. A thread parked
- * for holding nothing but `noise` would stay invisible to Layer 2 even after a
- * real, non-noise message arrived on it: no delta, no obligation, nothing in
- * the briefing.
+ * `resetAttempts` is called only after a synthesis succeeds, and
+ * `DebounceScheduler.tick()` skips any thread whose `attempts` has reached the
+ * cap (`DUE_SQL` still returns it — the scheduler's skip-loop is what enforces
+ * parking) without ever running synthesis for it — so a parked thread is never
+ * actually synthesized, can never succeed, and can never be un-parked. A thread
+ * parked for holding nothing but `noise` would stay invisible to Layer 2 even
+ * after a real, non-noise message arrived on it: no delta, no obligation,
+ * nothing in the briefing.
  *
  * Two halves to the predicate, and the second is what makes this safe:
  *
@@ -110,9 +112,10 @@ const REVIVE_WITH_SIGNAL_SQL = `
  *
  * Unconditional, because the crossing it records happens exactly once per park
  * cycle: `DebounceScheduler.recordFailedAttempt` calls this on the attempt that
- * reaches the cap, and from then on `DUE_SQL` filters the thread out entirely,
- * so nothing can fire it — and therefore nothing can re-stamp it — until
- * `reviveWithSignal` or `resetAttempts` clears the field again.
+ * reaches the cap, and from then on `DebounceScheduler.tick()` skips the thread
+ * before it ever calls synthesis (`DUE_SQL` still lists it), so nothing can
+ * fire it — and therefore nothing can re-stamp it — until `reviveWithSignal` or
+ * `resetAttempts` clears the field again.
  *
  * An earlier draft guarded this with `WHERE parked_at IS NULL` to stop a
  * relaunch from pushing the reference point forward. That guard protected a

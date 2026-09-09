@@ -383,8 +383,18 @@ export class Layer2Synthesizer {
     // Collapsing them is what parked 79 all-noise threads on a real install
     // after 10 retries each, and then told the user their conversations
     // "couldn't be summarized".
+    //
+    // `context.partial` gates the terminal verdict: an empty result with
+    // `partial: true` is retrieval timing out (or the vector store rejecting —
+    // `withDeadline` folds both into the same signal), NOT a fully-read thread
+    // with nothing in it. Reading extraction state in that case would let a
+    // transient Ollama/LanceDB stall be recorded as `no_signal`, and the
+    // scheduler would settle the watermark on a thread that may still have a
+    // real delta waiting — the exact silent-loss this split exists to stop.
     if (context.chunks.length === 0) {
-      const state = this.threadExtraction?.threadExtractionState(threadKey);
+      const state = context.partial
+        ? undefined
+        : this.threadExtraction?.threadExtractionState(threadKey);
       const terminal = state !== undefined && state.events > 0 && state.unextracted === 0;
       const outcome: SynthesisOutcome = terminal ? 'no_signal' : 'no_context';
       this.log(trace, 0, outcome);

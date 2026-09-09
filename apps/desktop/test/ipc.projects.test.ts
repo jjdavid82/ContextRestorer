@@ -17,6 +17,13 @@ vi.mock('electron', () => ({ ipcMain: { handle } }));
 
 const { registerProjectsHandlers, parseRemoveProjectArg } = await import('../src/ipc/projects.js');
 
+/** Pull the registered `projects:declare` handler out of the `ipcMain.handle` calls. */
+function declareHandler(): (event: unknown, arg: unknown) => Promise<{ ok: boolean; reason?: string }> {
+  const call = handle.mock.calls.find((c) => c[0] === 'projects:declare');
+  if (call === undefined) throw new Error('projects:declare was not registered');
+  return call[1] as ReturnType<typeof declareHandler>;
+}
+
 type Module = typeof import('../src/ipc/projects.js');
 type Deps = Parameters<Module['registerProjectsHandlers']>[0];
 
@@ -40,6 +47,50 @@ function removeHandler(): (event: unknown, arg: unknown) => Promise<{ ok: boolea
 
 beforeEach(() => {
   handle.mockReset();
+});
+
+describe('projects:declare — the OI-3 floor counts what already exists', () => {
+  function declareDeps(existing: string[], declareProject = vi.fn()) {
+    return makeDeps({
+      config: { onboarding: { minDeclaredProjects: 3 } } as Deps['config'],
+      graph: {
+        listProjects: vi.fn(() => existing.map((name, i) => ({ projectId: `p${i}`, name }))),
+        getProjectByName: vi.fn((name: string) =>
+          existing.includes(name) ? { projectId: 'x', name } : undefined,
+        ),
+        declareProject,
+      } as unknown as Deps['graph'],
+    });
+  }
+
+  it('accepts a top-up that reaches the floor together with existing projects', async () => {
+    const declareProject = vi.fn();
+    registerProjectsHandlers(declareDeps(['alpha', 'beta'], declareProject));
+
+    await expect(declareHandler()({}, { names: ['gamma'] })).resolves.toEqual({ ok: true });
+    expect(declareProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('still rejects when existing + new is below the floor', async () => {
+    registerProjectsHandlers(declareDeps(['alpha']));
+
+    await expect(declareHandler()({}, { names: ['beta'] })).resolves.toEqual({
+      ok: false,
+      reason: 'too_few_projects',
+    });
+  });
+
+  it('does not count a re-submitted existing name twice', async () => {
+    registerProjectsHandlers(declareDeps(['alpha', 'beta']));
+
+    // 'alpha' already exists; only 'gamma' is net-new → total would be 3.
+    await expect(declareHandler()({}, { names: ['alpha', 'gamma'] })).resolves.toEqual({ ok: true });
+    // 'alpha' repeated, nothing net-new → total stays 2.
+    await expect(declareHandler()({}, { names: ['alpha'] })).resolves.toEqual({
+      ok: false,
+      reason: 'too_few_projects',
+    });
+  });
 });
 
 describe('parseRemoveProjectArg', () => {

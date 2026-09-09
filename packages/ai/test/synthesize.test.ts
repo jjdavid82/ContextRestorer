@@ -423,6 +423,21 @@ describe('Layer2Synthesizer — no_context vs no_signal', () => {
 
     await expect(makeSynth().synthesize(K)).resolves.toBe('no_context');
   });
+
+  it('stays retryable when retrieval timed out, even on a fully-extracted thread', async () => {
+    // `partial: true` with no chunks is retrieval timing out (or the vector
+    // store rejecting), NOT a thread that has been fully read and has nothing
+    // in it. Settling the watermark here would strand a real delta the next
+    // retrieval pass would have found.
+    retrieval.chunks = [];
+    retrieval.partial = true;
+
+    await expect(
+      synthWith(reader({ events: 4, unextracted: 0, signal: 2 })).synthesize(K),
+    ).resolves.toBe('no_context');
+
+    expect(loggedCalls()[0]).toMatchObject({ layer: 2, outcome: 'no_context' });
+  });
 });
 
 // ---------------------------------------------------------------------------

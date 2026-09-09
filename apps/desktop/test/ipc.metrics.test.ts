@@ -275,6 +275,46 @@ describe('collectLocalMetrics — recent activity feed', () => {
     logAt(NOW - 8 * 24 * 60 * 60 * 1_000, 1, 'error');
     expect(collectLocalMetrics(deps()).recentActivity).toEqual([]);
   });
+
+  it('reports a mid-stream model death as a fallback, not a bare model error', () => {
+    // `generateWithFallback` tops the briefing up via `appendTemplateRemainder`,
+    // which writes no `ai_calls` row — the generator's Layer-3 row keeps its
+    // `stream_error` outcome, so no `fallback_template_*` value is ever
+    // produced. The feed still owes "the briefing fell back".
+    logAt(NOW - 15_000, 3, 'stream_error');
+
+    expect(collectLocalMetrics(deps()).recentActivity).toEqual([
+      { atMs: NOW - 15_000, kind: 'briefing_fallback', severity: 'attention', count: 1 },
+    ]);
+  });
+
+  it('keeps a Layer 1/2 error a bare model error, not a fallback', () => {
+    // Same outcome string, different layer: one failed extraction is not a
+    // fallen-back briefing.
+    logAt(NOW - 15_000, 1, 'error');
+    logAt(NOW - 14_000, 2, 'stream_error');
+
+    expect(
+      collectLocalMetrics(deps()).recentActivity.map((e) => ({ kind: e.kind, severity: e.severity })),
+    ).toEqual([
+      { kind: 'model_error', severity: 'info' },
+      { kind: 'model_error', severity: 'info' },
+    ]);
+  });
+
+  it('a flood of benign non-writes does not bury a genuine fallback', () => {
+    // `not_meaningful` is the most common Layer-2 outcome; `no_context` the
+    // next. Before the outcome filter, 40 of them would fill every slot
+    // `listRecentNotable`'s LIMIT allows and push the one real incident off
+    // the end.
+    for (let i = 0; i < 40; i += 1) logAt(NOW - 1_000 - i, 2, i % 2 === 0 ? 'not_meaningful' : 'no_context');
+    logAt(NOW - 60_000, 3, 'fallback_template_error');
+
+    const feed = collectLocalMetrics(deps()).recentActivity;
+    expect(feed).toEqual([
+      { atMs: NOW - 60_000, kind: 'briefing_fallback', severity: 'attention', count: 1 },
+    ]);
+  });
 });
 
 describe('registerMetricsHandlers', () => {

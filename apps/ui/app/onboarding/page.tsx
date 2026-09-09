@@ -182,6 +182,18 @@ export default function OnboardingPage(): ReactNode {
    */
   const newCandidates = candidates.filter((c) => !declaredNames.includes(c.name));
 
+  /**
+   * How many projects would exist after saving — already-declared plus newly
+   * selected (minus any selection that just repeats a declared name). This, not
+   * `selected.length` alone, is what the handler's floor check now counts, so
+   * the button must gate on the same number or it will offer a save the
+   * handler rejects (or stay disabled after a save is already possible).
+   */
+  const declaredLower = new Set(declaredNames.map((n) => n.toLowerCase()));
+  const netNewCount = selected.filter((n) => !declaredLower.has(n.toLowerCase())).length;
+  const projectedTotal = declaredNames.length + netNewCount;
+  const belowFloor = projectedTotal < minProjects;
+
   const declare = useCallback(async (): Promise<void> => {
     setBusy(true);
     setDeclareError(null);
@@ -483,13 +495,13 @@ export default function OnboardingPage(): ReactNode {
                     a disabled button should say what would enable it. */}
                 <Button
                   variant="contained"
-                  disabled={busy || selected.length < minProjects}
+                  disabled={busy || belowFloor}
                   onClick={() => void declare()}
                 >
                   {busy
                     ? 'Saving…'
-                    : selected.length < minProjects
-                      ? `Pick ${minProjects - selected.length} more`
+                    : belowFloor
+                      ? `Pick ${minProjects - projectedTotal} more`
                       : 'Save projects'}
                 </Button>
               </Box>

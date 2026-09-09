@@ -1,8 +1,9 @@
 -- ============ When the scheduler gave up on a thread ============
 --
--- Parking is terminal: `DUE_SQL` filters out any thread at or above
--- `maxAttempts`, only a successful synthesis clears the counter, and a thread
--- that is never offered can never succeed. `touch()` does not clear it either —
+-- Parking is terminal: `DebounceScheduler.tick()` skips any thread at or above
+-- `maxAttempts` without running synthesis for it (`DUE_SQL` still returns it),
+-- only a successful synthesis clears the counter, and a thread that is never
+-- synthesized can never succeed. `touch()` does not clear it either —
 -- a new message restarts the quiet clock and nothing else. So a thread parked
 -- while it held nothing but `noise` stayed invisible to Layer 2 forever, even
 -- after a real message arrived on it: no delta, no obligation, nothing in the

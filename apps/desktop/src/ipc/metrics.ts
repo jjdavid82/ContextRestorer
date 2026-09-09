@@ -57,22 +57,42 @@ const ACTIVITY_LIMIT = 25;
 const FAILURE_OUTCOMES = new Set(['error', 'stream_error', 'budget_exceeded', 'schema_fail']);
 
 /**
- * Layer-3 outcomes that mean the model was actually unavailable and the
- * deterministic renderer stood in for it (`layer3/template.ts`'s
- * `OUTCOME_BY_REASON`).
+ * Explicit Layer-3 template-fallback outcomes, written by
+ * `layer3/template.ts`'s `renderTemplate` via `OUTCOME_BY_REASON` when the
+ * whole briefing was rendered deterministically because the model was
+ * unavailable.
  *
  * NOT `template`. Under P0 the deterministic briefing IS the product — every
  * delivered briefing is `mode = 'template'`, generated in single-digit
  * milliseconds with no model on the path at all — so reporting that as an
  * incident produced one identical "the model didn't respond in time" row per
  * briefing, describing a timeout that never happened on a call that was never
- * made. These four are the outcomes that mean something went wrong.
+ * made. These three are the outcomes that mean something went wrong.
  */
 const FALLBACK_OUTCOMES = new Set([
   'fallback_template_preflight',
   'fallback_template_error',
   'fallback_template_stream_error',
 ]);
+
+/**
+ * Layer-3 model failures where the deterministic renderer took over
+ * mid-briefing. `generateWithFallback` reaches this via `appendTemplateRemainder`,
+ * which writes no `ai_calls` row of its own — the generator's row keeps its
+ * `error` / `stream_error` outcome. Same user-visible consequence as a
+ * {@link FALLBACK_OUTCOMES} row (the briefing fell back), so the feed treats it
+ * the same way. Gated on `layer === 3`: an `error` / `stream_error` at Layer 1
+ * or 2 is a single failed extraction/synthesis, not a fallen-back briefing.
+ */
+const LAYER3_FALLBACK_OUTCOMES = new Set(['error', 'stream_error']);
+
+/**
+ * The exact `ai_calls.outcome` values the feed can render — passed to
+ * `listRecentNotable` so a high-volume benign non-`ok` outcome
+ * (`not_meaningful`, `no_context`) cannot fill the row budget and hide a rare
+ * genuine failure.
+ */
+const NOTABLE_OUTCOMES: readonly string[] = [...FAILURE_OUTCOMES, ...FALLBACK_OUTCOMES];
 
 /** The `AiCallsRepo` slice this module reads. Read-only, by construction. */
 export interface AiCallStatsReader {
@@ -81,6 +101,7 @@ export interface AiCallStatsReader {
   listRecentNotable(
     sinceMs: number,
     limit: number,
+    outcomes?: readonly string[],
   ): { layer: number; outcome: string; createdAt: number }[];
 }
 
@@ -165,8 +186,11 @@ function buildRecentActivity(deps: MetricsHandlerDeps, sinceMs: number): Activit
   // A model call that actually failed (not a benign non-write like
   // `not_meaningful`), and separately the case where the model was missing
   // entirely and the deterministic renderer covered for it.
-  for (const call of deps.aiCalls.listRecentNotable(sinceMs, ACTIVITY_LIMIT)) {
-    if (FALLBACK_OUTCOMES.has(call.outcome)) {
+  for (const call of deps.aiCalls.listRecentNotable(sinceMs, ACTIVITY_LIMIT, NOTABLE_OUTCOMES)) {
+    const fellBack =
+      FALLBACK_OUTCOMES.has(call.outcome) ||
+      (call.layer === 3 && LAYER3_FALLBACK_OUTCOMES.has(call.outcome));
+    if (fellBack) {
       out.push({ atMs: call.createdAt, kind: 'briefing_fallback', severity: 'attention', count: 1 });
       continue;
     }

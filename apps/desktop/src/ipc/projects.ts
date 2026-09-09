@@ -254,7 +254,26 @@ export function registerProjectsHandlers(deps: ProjectsHandlerDeps): void {
 
     const names = distinctNames(parsed);
     const minimum = deps.config.onboarding.minDeclaredProjects;
-    if (names.length < minimum) {
+
+    // Count what would exist AFTER this declaration, not just what this request
+    // carries: a user who already has projects on file (they went back a step,
+    // or the floor was raised after their first pass) is topping up, not
+    // re-declaring from zero. `declareAll` skips names that already exist, so
+    // the honest floor check is against the case-insensitive union of the
+    // existing names and the submitted ones — the same de-dup key
+    // `distinctNames` uses.
+    let existingKeys: Set<string>;
+    try {
+      existingKeys = new Set(
+        deps.graph.listProjects().map((project) => project.name.toLowerCase()),
+      );
+    } catch (error) {
+      console.error('[projects] declare could not read existing projects', error);
+      return { ok: false, reason: 'internal_error' };
+    }
+    const newCount = names.filter((name) => !existingKeys.has(name.toLowerCase())).length;
+
+    if (existingKeys.size + newCount < minimum) {
       // OI-3 — rejected before any write, so nothing is persisted.
       // A bare slug, like every other `reason` in this codebase. It used to
       // carry its own sentence ("too_few_projects: at least 3 required"), which
