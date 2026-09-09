@@ -252,11 +252,6 @@ export function parseFeedbackArg(arg: unknown): ParsedFeedback | null {
 }
 
 /**
- * The whole of `feedback:submit`: validate, one INSERT, acknowledge.
- *
- * Synchronous by construction — see the module header on AC-9. Never throws.
- */
-/**
  * The shape `feedback:export` writes.
  *
  * Deliberately a plain document rather than a fixture: a verdict is a judgement
@@ -357,6 +352,11 @@ async function defaultWriteFile(path: string, contents: string): Promise<void> {
   await writeFile(path, contents, 'utf8');
 }
 
+/**
+ * The whole of `feedback:submit`: validate, one INSERT, acknowledge.
+ *
+ * Synchronous by construction — see the module header on AC-9. Never throws.
+ */
 export function submitFeedback(arg: unknown, deps: FeedbackHandlerDeps): OkResult {
   const parsed = parseFeedbackArg(arg);
   if (parsed === null) return { ok: false, reason: 'invalid_feedback' };

@@ -572,12 +572,13 @@ export interface ContextRestorerBridge {
     /** Resolves with `{ ok }` once the verdict is persisted (design §5, <=1s). */
     submit(f: FeedbackInput): Promise<OkResult>;
     /**
-     * The verdict already on file for each claim id — across every briefing,
-     * not just the current one — keyed by claim id. A claim absent from the
-     * result has no verdict yet. Lets the UI seed "✓ recorded" after a
-     * restart instead of asking the user to re-judge an unchanged claim.
+     * The verdict already on file for each claim key (`<artifact id><U+001F>
+     * <claim sentence>`, the key `submit` records) — across every briefing, not
+     * just the current one. A key absent from the result has no verdict yet;
+     * a reworded claim is a different key and comes back unanswered. Lets the
+     * UI seed "✓ recorded" after a restart without re-judging an unchanged claim.
      */
-    claimVerdicts(claimIds: string[]): Promise<Record<string, FeedbackInput['verdict']>>;
+    claimVerdicts(claimKeys: string[]): Promise<Record<string, FeedbackInput['verdict']>>;
     /**
      * Write every recorded verdict to a local JSON file (FR-7), and report the
      * path. Nothing leaves the machine.

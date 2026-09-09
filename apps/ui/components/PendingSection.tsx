@@ -63,12 +63,13 @@ export interface PendingSectionProps {
   /** Invoked with the pending item's artifact id when its citation chip is clicked. */
   onCitationClick?: (claimId: string) => void;
   /**
-   * Per-item slot (drill-down panel, feedback); receives the item's claim id
-   * and, when {@link PendingSectionProps.onResolve} is wired, the "Mark
-   * resolved" button as a second argument — passed through rather than rendered
-   * here so it lands INSIDE `FeedbackControls`' row.
+   * Per-item slot (drill-down panel, feedback); receives the item's citation
+   * artifact id and its description (the two together key the verdict — see
+   * `BriefingView.feedbackKeyOf`) and, when {@link PendingSectionProps.onResolve}
+   * is wired, the "Mark resolved" button as a third argument — passed through
+   * rather than rendered here so it lands INSIDE `FeedbackControls`' row.
    */
-  renderDetail?: (claimId: string, resolveAction?: ReactNode) => ReactNode;
+  renderDetail?: (artifactId: string, claimText: string, resolveAction?: ReactNode) => ReactNode;
   /** Invoked with the pending item's own `pendingId` when the user marks it dealt with. */
   onResolve?: (pendingId: string) => void;
   /** Streamed "Waiting on you" claims, rendered beneath the pending items. */
@@ -241,7 +242,9 @@ export function PendingSection({
                     {item.sourceQuote}
                   </Typography>
                 ) : null}
-                {renderDetail !== undefined ? renderDetail(claimId, resolveAction) : resolveAction}
+                {renderDetail !== undefined
+                  ? renderDetail(claimId, item.description, resolveAction)
+                  : resolveAction}
               </ClaimBullet>
             );
           })}

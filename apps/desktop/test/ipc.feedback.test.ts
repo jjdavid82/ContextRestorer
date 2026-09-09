@@ -19,6 +19,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from 'better-sqlite3';
+import { feedbackClaimKey } from '@cr/core';
 import { BriefingsRepo, FeedbackRepo, migrate, openDb } from '@cr/store';
 
 const handle = vi.fn();
@@ -534,6 +535,40 @@ describe('feedback:export — the reader FR-7 always implied (option 1)', () => 
     // replacing the previous one loses a comparison.
     expect(result.path).toMatch(/^\/data\/feedback-export-.*\.json$/);
     expect(JSON.parse(written[0]?.contents ?? '{}')).toMatchObject({ version: 1 });
+  });
+
+  it('end to end: a real "wrong" verdict on a streamed claim exports as an unsupported claim', async () => {
+    // The gap the fake `reader` above hides: `FeedbackControls` submits
+    // `feedbackClaimKey(artifactId, sentence)` as `claimId` (all it has on the
+    // wire), while `briefing_claims.claim_id` is a random uuid. Against the
+    // real repo the join has to reconstruct that key or every exported verdict
+    // comes back textless and `unsupportedClaims` is always empty.
+    const briefingId = seedBriefing('brief-e2e');
+    const sentence = 'The launch slipped to March.';
+    db.prepare(
+      `INSERT INTO artifacts (artifact_id, source, kind, external_ref, first_seen_at, last_seen_at)
+       VALUES ('art-e2e', 'slack', 'thread', 'ref-e2e', 1000, 1000)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO briefing_claims (claim_id, briefing_id, ordinal, section, text, citation_artifact_id)
+       VALUES ('uuid-random-1', ?, 1, 'Worth knowing', ?, 'art-e2e')`,
+    ).run(briefingId, sentence);
+
+    expect(
+      submitFeedback(
+        { briefingId, claimId: feedbackClaimKey('art-e2e', sentence), verdict: 'wrong' },
+        makeDeps(),
+      ),
+    ).toEqual({ ok: true });
+
+    const result = await exportFeedback(
+      { ...makeDeps(), feedbackReader: feedback, exportDir: '/data' },
+      async () => {},
+    );
+
+    expect(result.ok).toBe(true);
+    const doc = buildFeedbackExport(feedback.listLabeled(), feedback.countByVerdict(), 0);
+    expect(doc.unsupportedClaims).toEqual([sentence]);
   });
 
   it('reports not_available rather than writing an empty file', async () => {

@@ -735,13 +735,15 @@ export interface ContextRestorerBridge {
   feedback: {
     submit(feedback: FeedbackSubmission): Promise<OkResult>;
     /**
-     * The verdict already on file for each of `claimIds`, keyed by claim id —
-     * across every briefing, not just the current one. Seeds "✓ recorded" so a
-     * restarted app (or a still-open pending item resurfacing under a new
-     * `briefingId`) does not ask the user to re-judge something already
-     * answered. A claim with no key in the result has no verdict yet.
+     * The verdict already on file for each claim key — `<artifact id><U+001F>
+     * <claim sentence>`, the same key `feedback.submit` records — across every
+     * briefing, not just the current one. Seeds "✓ recorded" so a restarted app
+     * (or a still-open pending item resurfacing under a new `briefingId`) does
+     * not ask the user to re-judge something already answered. A key absent
+     * from the result has no verdict yet; a reworded claim is a different key
+     * and correctly comes back unanswered.
      */
-    claimVerdicts(claimIds: string[]): Promise<Record<string, FeedbackVerdict>>;
+    claimVerdicts(claimKeys: string[]): Promise<Record<string, FeedbackVerdict>>;
     /**
      * Write every recorded verdict to a local JSON file (FR-7), and report the
      * path. Nothing leaves the machine.
