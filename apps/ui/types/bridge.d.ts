@@ -115,6 +115,16 @@ export interface PendingItemView {
    * to trust that their declaration did anything.
    */
   projectName?: string;
+  /**
+   * `projects.project_id` for the project named by {@link projectName}.
+   *
+   * Carried alongside the label so the renderer can *compare* the tag rather
+   * than only print it: the briefing project filter and the per-claim project
+   * suggestion both have to match it against a declared project id, and a bare
+   * display string cannot be matched against anything. Absent exactly when
+   * `projectName` is — the two always travel together.
+   */
+  projectId?: string;
 }
 
 /** A citation anchoring a claim to a concrete ingested event. */
@@ -134,6 +144,16 @@ export interface Citation {
    * to trust that their declaration did anything.
    */
   projectName?: string;
+  /**
+   * `projects.project_id` for the project named by {@link projectName}.
+   *
+   * Carried alongside the label so the renderer can *compare* the tag rather
+   * than only print it: the briefing project filter and the per-claim project
+   * suggestion both have to match it against a declared project id, and a bare
+   * display string cannot be matched against anything. Absent exactly when
+   * `projectName` is — the two always travel together.
+   */
+  projectId?: string;
 }
 
 /** `briefing:chunk` — one streamed, already-validated claim of the briefing. */

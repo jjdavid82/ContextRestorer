@@ -775,9 +775,9 @@ export function BriefingView({
               select
               size="small"
               variant="standard"
-              label="Project"
+              label="File under"
               value={labelEntry?.projectId ?? ''}
-              aria-label="Project for this item"
+              aria-label="File this item under a project"
               onChange={(e) => labelClaim(artifactId, e.target.value)}
               // A machine guess (migration 013) is shown as a pre-selection but
               // flagged as one — never presented as the user's own filing (X-2).
@@ -868,6 +868,31 @@ export function BriefingView({
   );
 
   /**
+   * Artifact → the project id its channel tag names, for every row on screen.
+   *
+   * Built from what the main process already sent rather than fetched: both
+   * `briefing:chunk` and `briefing:pending` carry the tag alongside the label
+   * they display (`citation.projectId` / `PendingItem.projectId`), so the map
+   * is exactly the rows the filter can be asked about, and it costs no IPC.
+   *
+   * Obligations are included because the filter applies to them too.
+   */
+  const channelTags = new Map<string, string>();
+  for (const chunk of claims) {
+    const tagged = chunk.citation.projectId;
+    if (tagged !== undefined) channelTags.set(chunk.citation.artifactId, tagged);
+  }
+  for (const item of pending) {
+    if (item.citationArtifactId !== null && item.projectId !== undefined) {
+      channelTags.set(item.citationArtifactId, item.projectId);
+    }
+  }
+
+  /** The project the artifact's channel is tagged with, if any. */
+  const channelTagOf = (artifactId: string | null): string | undefined =>
+    artifactId === null ? undefined : channelTags.get(artifactId);
+
+  /**
    * Does one artifact pass the project filter?
    *
    * `''` shows everything; {@link UNFILED_FILTER} shows only rows carrying no
@@ -889,10 +914,15 @@ export function BriefingView({
     // still surfaces under "Not filed" for the user to confirm, and does not
     // appear when filtering to the guessed project as though it had been filed
     // there (X-2: inference may suggest, never decide).
-    const userFiled = entry?.origin === 'user' ? entry.projectId : undefined;
-    return projectFilter === UNFILED_FILTER
-      ? userFiled === undefined
-      : userFiled === projectFilter;
+    //
+    // The channel tag is the second half of "filed", and the reason this is not
+    // just `claimProjects`. A tag is not an inference either: the user chose it
+    // per channel, in onboarding or Settings, and the row is already displaying
+    // it. Reading only `claimProjects` meant filtering to a project hid rows
+    // that visibly carried that project's badge — the filter contradicting the
+    // screen it was filtering.
+    const filed = entry?.origin === 'user' ? entry.projectId : channelTagOf(artifactId);
+    return projectFilter === UNFILED_FILTER ? filed === undefined : filed === projectFilter;
   };
 
   const matchesFilter = (chunk: ClaimChunk): boolean => artifactPassesFilter(claimIdOf(chunk));

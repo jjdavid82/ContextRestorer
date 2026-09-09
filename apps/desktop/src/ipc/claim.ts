@@ -57,6 +57,7 @@ import { ipcMain } from 'electron';
 import type { Artifact, Event, Person, SourceId } from '@cr/core';
 import type { Drilldown, DrilldownEvent } from '../preload.cjs';
 import { detectProject } from './projectMatch.js';
+import { projectForArtifact, type StakesReader } from './projectTag.js';
 
 export type { Drilldown, DrilldownEvent };
 
@@ -173,6 +174,22 @@ export interface ClaimHandlerDeps {
    * outcome as a user who has declared no projects.
    */
   projects?: ProjectLister;
+  /**
+   * The channel→project `belongs_to` edge, read through the same
+   * {@link projectForArtifact} the briefing badge uses (`GraphRepo` in
+   * production — the very object already passed as
+   * {@link ClaimHandlerDeps.artifacts}).
+   *
+   * Detection consults this BEFORE the name matcher. A channel tag is not an
+   * inference: the user chose it, per channel, in onboarding or Settings. A
+   * name match is an inference. Suggesting from the weaker signal while the
+   * stronger one sat unread is what let a claim show one project on its badge
+   * and a different one in its dropdown.
+   *
+   * Optional like the rest: without it detection simply falls back to name
+   * matching alone, which is what it did before.
+   */
+  tags?: StakesReader;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -616,14 +633,22 @@ export function detectClaimProjects(arg: unknown, deps: ClaimHandlerDeps): Claim
       if (already.has(claimId)) continue;
 
       try {
-        const match = detectProject(detectionText(claimId, deps), projects);
-        if (match === null) continue; // Not clear enough — left blank for the user.
-        deps.labels.suggestProject(
-          claimId,
-          match.projectId,
-          deps.clock.now(),
-          parsed.briefingId,
-        );
+        // Strongest signal first: the channel tag the user set themselves.
+        // Only when the thread's artifact carries no tag does the name matcher
+        // get a turn. Both still land as `origin = 'auto'` — a suggestion the
+        // user confirms — because neither is a per-claim decision they made,
+        // and X-2 lets inference suggest but never decide.
+        const tagged = projectForArtifact(deps.tags, claimId);
+        const declared = new Set(projects.map((p) => p.projectId));
+        // A tag pointing at a project that has since been deleted is stale, not
+        // a suggestion; fall through to the matcher rather than offering an id
+        // no dropdown option carries.
+        const chosen =
+          tagged !== undefined && declared.has(tagged.projectId)
+            ? tagged.projectId
+            : (detectProject(detectionText(claimId, deps), projects)?.projectId ?? null);
+        if (chosen === null) continue; // Not clear enough — left blank for the user.
+        deps.labels.suggestProject(claimId, chosen, deps.clock.now(), parsed.briefingId);
       } catch (error) {
         // One unreadable thread must not cost the other rows their suggestion.
         console.error('[claim] project detection failed', claimId, error);

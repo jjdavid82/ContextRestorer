@@ -62,6 +62,15 @@ const DELETE_ORDER: readonly string[] = [
   // state_deltas references artifacts and itself (`supersedes`).
   'state_deltas',
   // Extractions reference events; both must precede their parents.
+  //
+  // `extraction_failures.event_id` is a foreign key into `events` too
+  // (migration 009), and was missed when this list was written — the table
+  // landed on one branch while right-to-delete was being built on another.
+  // With `foreign_keys = ON` (`db.ts`) that is not a slow leak but an outright
+  // abort: `DELETE FROM events` raises FOREIGN KEY constraint failed the moment
+  // a single event has a write-off row, so SEC-8 erasure failed entirely for
+  // any user whose Layer 1 had ever given up on an event.
+  'extraction_failures',
   'extractions',
   'events',
   // Selected channels reference `projects` (migration 006's `project_id`), so
@@ -152,6 +161,18 @@ export function purgeRawEventsOlderThan(db: Database, cutoffMs: number): RawEven
           WHERE event_id IN (SELECT event_id FROM events WHERE occurred_at < ?)`,
       ).run(cutoffMs);
 
+      // `extraction_failures` points at `events` as well (migration 009). Same
+      // omission, same consequence as in DELETE_ORDER above, but on a path that
+      // runs unattended: the daily sweep threw on the first aged-out event that
+      // Layer 1 had written off, so retention silently stopped happening rather
+      // than reporting a problem. Its rows are an audit trail keyed by
+      // `event_id` alone — once the event is gone the row names nothing, so it
+      // expires with its parent rather than being preserved like derived state.
+      db.prepare(
+        `DELETE FROM extraction_failures
+          WHERE event_id IN (SELECT event_id FROM events WHERE occurred_at < ?)`,
+      ).run(cutoffMs);
+
       const rowsDeleted = db.prepare('DELETE FROM events WHERE occurred_at < ?').run(cutoffMs)
         .changes;
 
@@ -198,10 +219,16 @@ export interface DeleteEverythingResult {
  *
  * Scope and non-scope, both deliberate:
  *
- *   - **In scope:** every table in the schema except `schema_version`. The
- *     database is left structurally intact (tables, indexes, views and the
- *     append-only triggers all survive) and semantically empty, so the app can
- *     keep running and start ingesting afresh without a re-migration.
+ *   - **In scope:** every table carrying user data — i.e. everything in
+ *     {@link DELETE_ORDER}. The database is left structurally intact (tables,
+ *     indexes, views and the append-only triggers all survive) and semantically
+ *     empty, so the app can keep running and start ingesting afresh without a
+ *     re-migration.
+ *   - **Deliberately out of scope:** `schema_version` (see DELETE_ORDER) and
+ *     `app_settings`, which holds a UI preference the user chose — the selected
+ *     chat model — and no observed data. Erasing what was collected about them
+ *     should not also reset the app's configuration. Everything else belongs in
+ *     DELETE_ORDER; a table absent from it is a bug, not a category.
  *   - **Out of scope:** LanceDB and the narrative `.md` files. This function
  *     performs no I/O beyond SQLite; it reports their ids and paths instead.
  *     Mixing a filesystem unlink into a SQL transaction would create a window

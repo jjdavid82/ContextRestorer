@@ -53,6 +53,7 @@ import type {
   PendingItem as PendingItemView,
 } from '../preload.cjs';
 import { deepLinkFor, resolveEvents, type ArtifactReader, type ThreadEventReader } from './claim.js';
+import { projectForArtifact, PROJECT_REL, type StakesReader } from './projectTag.js';
 
 export type { PendingItemView };
 
@@ -79,13 +80,6 @@ export const SNAPSHOT_CHANNEL = 'briefing:snapshot';
  * renderer's first-run path needs no separate capability check.
  */
 export const RESUME_POINT_CHANNEL = 'briefing:resumePoint';
-
-/**
- * Edge kind joining an artifact to the project whose stakes weight applies.
- * Must match `PROJECT_REL` in `@cr/ai`'s retrieval — duplicated as a literal
- * rather than imported so this module keeps zero `@cr/ai` imports (see above).
- */
-const PROJECT_REL = 'belongs_to';
 
 /** Stakes weight for an item whose artifact belongs to no declared project. */
 export const DEFAULT_STAKES_WEIGHT = 1.0;
@@ -175,17 +169,7 @@ export interface ResolutionDeltaWriter {
  * — with no graph every item scores at {@link DEFAULT_STAKES_WEIGHT}, which
  * degrades ranking to "confidence, then oldest first" rather than failing.
  */
-export interface StakesReader {
-  relatedIds(fromId: string, rel: string): string[];
-  /**
-   * `name` is optional so every existing test double — which only ever needed
-   * the weight — still satisfies this interface. A `GraphRepo` returns a full
-   * `Project` and therefore always carries it; a double that omits it simply
-   * yields no project label, which the renderer already has to handle for the
-   * untagged case.
-   */
-  getProject(projectId: string): { stakesWeight: number; name?: string } | undefined;
-}
+export type { StakesReader } from './projectTag.js';
 
 /**
  * A `briefing_claims` row, narrowed to what {@link getBriefingSnapshot} needs
@@ -334,18 +318,10 @@ export function projectNameFor(
   graph: StakesReader | undefined,
   artifactId: string | null,
 ): string | undefined {
-  if (graph === undefined || artifactId === null) return undefined;
-
-  let best: { weight: number; name: string } | undefined;
-  for (const projectId of graph.relatedIds(artifactId, PROJECT_REL)) {
-    const project = graph.getProject(projectId);
-    const name = project?.name?.trim();
-    if (project === undefined || name === undefined || name === '') continue;
-    const weight = Number.isFinite(project.stakesWeight) ? project.stakesWeight : 0;
-    if (best === undefined || weight > best.weight) best = { weight, name };
-  }
-  return best?.name;
+  return projectForArtifact(graph, artifactId)?.name;
 }
+
+export { projectForArtifact } from './projectTag.js';
 
 /**
  * Order open items by what they cost the user to ignore, and project them onto
@@ -397,7 +373,9 @@ export function rankPendingItems(
   // `confidence` DO cross, so the renderer can paint the low-confidence flag and
   // wire the drill-down without a second round trip.
   return scored.map(({ item }) => {
-    const projectName = projectNameFor(graph, item.citationArtifactId);
+    // Obligations are subject to the same project filter as changed items, so
+    // they need the tag's id and not only its label.
+    const project = projectForArtifact(graph, item.citationArtifactId);
     return {
       pendingId: item.pendingId,
       description: item.description,
@@ -409,7 +387,9 @@ export function rankPendingItems(
       sourceQuote: sourceQuoteFor(item.citationArtifactId, sources?.artifacts, sources?.events),
       // `exactOptionalPropertyTypes`: an untagged item has no KEY, not a key
       // holding `undefined`.
-      ...(projectName === undefined ? {} : { projectName }),
+      ...(project === undefined
+        ? {}
+        : { projectName: project.name, projectId: project.projectId }),
     };
   });
 }
@@ -665,7 +645,10 @@ export function citationForArtifact(
   const externalUrl =
     latest === undefined ? undefined : deepLinkFor(latest.source, latest.sourceEventId);
 
-  const projectName = projectNameFor(graph, artifactId);
+  // Both halves of the tag, not just the display string: `projectId` is what
+  // lets the renderer's project filter and the per-claim suggestion treat this
+  // channel tag as the user decision it is. See {@link projectForArtifact}.
+  const project = projectForArtifact(graph, artifactId);
 
   return {
     eventId: latest?.eventId ?? '',
@@ -673,7 +656,9 @@ export function citationForArtifact(
     source: latest?.source ?? artifact.source,
     // `exactOptionalPropertyTypes`: an absent link is an absent KEY.
     ...(externalUrl !== undefined ? { externalUrl } : {}),
-    ...(projectName === undefined ? {} : { projectName }),
+    ...(project === undefined
+      ? {}
+      : { projectName: project.name, projectId: project.projectId }),
   };
 }
 
