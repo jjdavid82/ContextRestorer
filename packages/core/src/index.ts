@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './deltas.js';
 export * from './ids.js';
 export * from './config.js';
 export * from './clock.js';

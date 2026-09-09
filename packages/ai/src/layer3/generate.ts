@@ -53,6 +53,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  isUserActionDelta,
   newId,
   systemClock,
   type AppConfig,
@@ -645,7 +646,14 @@ export class BriefingGenerator {
       chunks = retrieved.chunks;
       // D-6: the `current_state_deltas` view. A superseded delta's row is still
       // on disk and is deliberately not read here.
-      tips = this.deltas.currentForWindow(window.windowStart, window.windowEnd);
+      //
+      // User-action deltas ("Mark resolved") are dropped: they exist only to
+      // supersede an obligation on `current_state_deltas`, which they still do —
+      // narrating "you marked this done" back at the user on every briefing
+      // until it ages out of the window is noise, not news.
+      tips = this.deltas
+        .currentForWindow(window.windowStart, window.windowEnd)
+        .filter((delta) => !isUserActionDelta(delta));
     } catch (error) {
       retrievalSpan.end();
       // `forBriefing` is documented as never throwing, but "documented" is not

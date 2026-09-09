@@ -28,7 +28,13 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
-import { FakeClock, type AppConfig, type Artifact } from '@cr/core';
+import {
+  FakeClock,
+  MANUAL_RESOLVE_MODEL,
+  MANUAL_RESOLVE_PROMPT_VERSION,
+  type AppConfig,
+  type Artifact,
+} from '@cr/core';
 import {
   AiCallsRepo,
   BriefingsRepo,
@@ -485,6 +491,31 @@ describe('D-6 supersession', () => {
     const result = await makeGenerator().generate(WINDOW);
 
     expect(briefings.getById(result.briefingId)?.deltaIds).toEqual([tip.deltaId]);
+  });
+
+  it('drops a user-action "Mark resolved" delta from the prompt and the briefing row', async () => {
+    // The user dealt with an obligation offline: a request delta, then a
+    // user-authored `resolution` tip. The obligation must stop being restated —
+    // and the "you marked this done" line must not take its place.
+    appendDelta('C1:1', { summary: 'RESOLVED_OBLIGATION_TEXT needs your reply.', kind: 'decision' });
+    const userResolve = deltas.append({
+      threadKey: 'C1:1',
+      artifactId: null,
+      summary: 'You marked this done: RESOLVED_OBLIGATION_TEXT needs your reply.',
+      kind: 'resolution',
+      confidence: 1,
+      sourceEventIds: [],
+      citationArtifactIds: [A1],
+      model: MANUAL_RESOLVE_MODEL,
+      promptVersion: MANUAL_RESOLVE_PROMPT_VERSION,
+      createdAt: NOW - 60_000,
+    });
+
+    const result = await makeGenerator().generate(WINDOW);
+
+    expect(sentPrompt()).not.toContain('RESOLVED_OBLIGATION_TEXT');
+    expect(sentPrompt()).not.toContain('You marked this done');
+    expect(briefings.getById(result.briefingId)?.deltaIds).not.toContain(userResolve.deltaId);
   });
 });
 
