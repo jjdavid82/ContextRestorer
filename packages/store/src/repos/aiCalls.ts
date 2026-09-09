@@ -156,6 +156,41 @@ export class AiCallsRepo {
   }
 
   /**
+   * Mean latency of the most recent successful calls on one layer — the input
+   * to the extraction ETA the home page shows a new user (F2).
+   *
+   * Deliberately NOT {@link layerStats}'s all-time average. The number is
+   * answering "how long will the rest of this backlog take on THIS machine, as
+   * it is right now", and a lifetime mean drags in a different model, a
+   * different thermal state and a different amount of contention. A short
+   * trailing sample is the honest estimator.
+   *
+   * Restricted to `outcome = 'ok'` for the same reason: a burst of fast
+   * failures (a parse error returns in milliseconds) would make the estimate
+   * wildly optimistic, and an ETA that is confidently wrong is worse than no
+   * ETA — which is what `null` is for. `null` means "not enough evidence yet",
+   * never "instant".
+   *
+   * @param layer - 1, 2 or 3.
+   * @param sample - How many recent calls to average over.
+   */
+  recentMeanLatencyMs(layer: number, sample: number): number | null {
+    if (sample <= 0) return null;
+    const row = this.db
+      .prepare(
+        `SELECT AVG(latency_ms) AS m FROM (
+           SELECT latency_ms FROM ai_calls
+            WHERE layer = ? AND outcome = 'ok'
+            ORDER BY created_at DESC
+            LIMIT ?
+         )`,
+      )
+      .get(layer, Math.trunc(sample)) as { m: number | null } | undefined;
+    const mean = row?.m ?? null;
+    return mean === null ? null : Math.round(mean);
+  }
+
+  /**
    * Call counts per `(layer, outcome)` (Task 4.4, step 4).
    *
    * Kept separate from {@link layerStats} and deliberately NOT collapsed into an
@@ -182,21 +217,35 @@ export class AiCallsRepo {
    * Model calls that did NOT succeed, newest first, within `[sinceMs, now]`
    * (Diagnostics "recent activity").
    *
-   * `outcome != 'ok'` is the only filter: what counts as a *failure* versus a
-   * benign non-success (`not_meaningful`) is a judgement the reader makes, for
-   * the same reason {@link outcomeStats} does not collapse an "errors" number.
+   * What counts as a *failure* versus a benign non-success (`not_meaningful`) is
+   * a judgement the reader makes, for the same reason {@link outcomeStats} does
+   * not collapse an "errors" number — so the reader passes the exact `outcomes`
+   * it wants to see. This matters for correctness, not just tidiness: the two
+   * highest-volume non-`ok` Layer-2 outcomes (`not_meaningful`, `no_context`)
+   * would otherwise fill every one of the `limit` slots and push a rare but
+   * genuine `fallback_template_*` row off the end, so the panel would never
+   * show the incident it exists to surface. Omitting `outcomes` keeps the old
+   * "anything but `ok`" behaviour.
+   *
    * The panel wants a short recent list, so `limit` is mandatory and small.
    */
-  listRecentNotable(sinceMs: number, limit: number): AiCallNotable[] {
+  listRecentNotable(sinceMs: number, limit: number, outcomes?: readonly string[]): AiCallNotable[] {
+    const filter =
+      outcomes && outcomes.length > 0
+        ? `outcome IN (${outcomes.map(() => '?').join(', ')})`
+        : `outcome <> 'ok'`;
+    const params =
+      outcomes && outcomes.length > 0 ? [...outcomes, sinceMs, limit] : [sinceMs, limit];
+
     const rows = this.db
       .prepare(
         `SELECT layer, outcome, created_at
            FROM ai_calls
-          WHERE outcome <> 'ok' AND created_at >= ?
+          WHERE ${filter} AND created_at >= ?
           ORDER BY created_at DESC
           LIMIT ?`,
       )
-      .all(sinceMs, limit) as { layer: number; outcome: string; created_at: number }[];
+      .all(...params) as { layer: number; outcome: string; created_at: number }[];
 
     return rows.map((row) => ({
       layer: row.layer,

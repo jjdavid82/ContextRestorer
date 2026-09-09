@@ -197,11 +197,13 @@ describe('EventsRepo.listUnextracted', () => {
     repo.insertIfAbsent(makeEvent({ eventId: 'e-3', sourceEventId: 's-3', occurredAt: 3_000 }));
   };
 
-  it('returns only events with no extraction row, oldest first', () => {
+  it('returns only events with no extraction row, newest first', () => {
     seedThree();
     insertExtraction('x-2', 'e-2');
 
-    expect(repo.listUnextracted().map((e) => e.eventId)).toEqual(['e-1', 'e-3']);
+    // Newest first (F2): the window a returning user asks about is what has to
+    // be extractable in minutes, not the oldest mail in the mailbox.
+    expect(repo.listUnextracted().map((e) => e.eventId)).toEqual(['e-3', 'e-1']);
   });
 
   it('agrees with countUnextracted', () => {
@@ -214,7 +216,9 @@ describe('EventsRepo.listUnextracted', () => {
   it('honours a limit, and distinguishes a limit of 0 from an absent one', () => {
     seedThree();
 
-    expect(repo.listUnextracted(2).map((e) => e.eventId)).toEqual(['e-1', 'e-2']);
+    // The limit takes the NEWEST n, which is what makes a bounded sweep on a
+    // huge backlog still cover the window the user is asking about.
+    expect(repo.listUnextracted(2).map((e) => e.eventId)).toEqual(['e-3', 'e-2']);
     expect(repo.listUnextracted(0)).toEqual([]);
     expect(repo.listUnextracted()).toHaveLength(3);
   });
@@ -233,5 +237,90 @@ describe('EventsRepo.listUnextracted', () => {
 
   it('returns an empty array for an empty database', () => {
     expect(repo.listUnextracted()).toEqual([]);
+  });
+});
+
+describe('EventsRepo.threadExtractionState', () => {
+  /**
+   * The query that lets Layer 2 tell its two kinds of empty apart: "retrieval
+   * has nothing YET" (extraction still running — retry) from "retrieval will
+   * never have anything" (every event extracted, all of it noise — settle).
+   * Collapsing the two is what parked 79 all-noise threads on a real install
+   * and reported them to the user as summarization failures.
+   */
+  const insertClassified = (
+    extractionId: string,
+    eventId: string,
+    cls: 'noise' | 'question' | 'status_update',
+  ) =>
+    db
+      .prepare(
+        `INSERT INTO extractions
+           (extraction_id, event_id, class, confidence,
+            participants_json, artifacts_json, model, prompt_version, created_at)
+         VALUES (?, ?, ?, 0.9, '[]', '[]', 'm', 'v1', 1000)`,
+      )
+      .run(extractionId, eventId, cls);
+
+  it('reports an unextracted backlog, which is the retryable case', () => {
+    repo.insertIfAbsent(makeEvent({ eventId: 'e1', sourceEventId: 's1' }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'e2', sourceEventId: 's2' }));
+    insertClassified('x1', 'e1', 'noise');
+
+    expect(repo.threadExtractionState('C1:1')).toEqual({
+      events: 2,
+      unextracted: 1,
+      signal: 0,
+    });
+  });
+
+  it('reports zero signal for a fully-extracted all-noise thread — the terminal case', () => {
+    repo.insertIfAbsent(makeEvent({ eventId: 'e1', sourceEventId: 's1' }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'e2', sourceEventId: 's2' }));
+    insertClassified('x1', 'e1', 'noise');
+    insertClassified('x2', 'e2', 'noise');
+
+    expect(repo.threadExtractionState('C1:1')).toEqual({
+      events: 2,
+      unextracted: 0,
+      signal: 0,
+    });
+  });
+
+  it('counts every non-noise class as signal', () => {
+    repo.insertIfAbsent(makeEvent({ eventId: 'e1', sourceEventId: 's1' }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'e2', sourceEventId: 's2' }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'e3', sourceEventId: 's3' }));
+    insertClassified('x1', 'e1', 'question');
+    insertClassified('x2', 'e2', 'status_update');
+    insertClassified('x3', 'e3', 'noise');
+
+    expect(repo.threadExtractionState('C1:1')).toEqual({
+      events: 3,
+      unextracted: 0,
+      signal: 2,
+    });
+  });
+
+  it('is scoped to the thread asked about', () => {
+    repo.insertIfAbsent(makeEvent({ eventId: 'e1', sourceEventId: 's1', threadKey: 'C1:1' }));
+    repo.insertIfAbsent(makeEvent({ eventId: 'e2', sourceEventId: 's2', threadKey: 'C2:2' }));
+    insertClassified('x2', 'e2', 'status_update');
+
+    expect(repo.threadExtractionState('C1:1')).toEqual({
+      events: 1,
+      unextracted: 1,
+      signal: 0,
+    });
+  });
+
+  it('returns zeroes for a thread with no events, never null', () => {
+    // `events: 0` must not read as "fully extracted, nothing to say": Layer 2
+    // requires `events > 0` before concluding a thread is terminally empty.
+    expect(repo.threadExtractionState('nope')).toEqual({
+      events: 0,
+      unextracted: 0,
+      signal: 0,
+    });
   });
 });

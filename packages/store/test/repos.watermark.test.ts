@@ -488,3 +488,170 @@ describe('WatermarkRepo.countPendingSynthesis — the OI-1 disclosure', () => {
     expect(repo.countPendingSynthesis(0)).toBe(0);
   });
 });
+
+describe('WatermarkRepo.markParked / reviveWithSignal — parking is no longer terminal', () => {
+  /**
+   * Parking used to be permanent: `due()` filters out anything at or above the
+   * cap, only a success clears the counter, and a thread that is never offered
+   * can never succeed. A thread parked while it held nothing but `noise` was
+   * therefore deaf to a real message arriving on it later — no delta, no
+   * obligation, nothing in the briefing, and the Diagnostics panel meanwhile
+   * claiming it would be "picked up again automatically".
+   *
+   * The revive is deliberately narrower than "the thread has signal", and the
+   * poison-thread cases below are why: a thread that failed repeatedly usually
+   * HAS context (that is what it kept failing on), so the broad predicate would
+   * un-park it every tick, forever.
+   */
+  let events: EventsRepo;
+  let extractions: ExtractionsRepo;
+
+  const PARKED_AT = 5_000;
+
+  beforeEach(() => {
+    events = new EventsRepo(db);
+    extractions = new ExtractionsRepo(db);
+  });
+
+  /** One event on `THREAD`, extracted as `cls` at `createdAt`. */
+  const eventWithClass = (
+    eventId: string,
+    cls: 'noise' | 'status_update',
+    createdAt: number,
+  ): void => {
+    events.insertIfAbsent({
+      eventId,
+      source: 'slack',
+      sourceEventId: `s-${eventId}`,
+      threadKey: THREAD,
+      actorId: 'U1',
+      occurredAt: 1_000,
+      ingestedAt: 1_000,
+      payload: { text: 'hello' },
+      redactionCount: 0,
+    });
+    extractions.insert({
+      eventId,
+      class: cls,
+      confidence: 0.9,
+      participants: [],
+      artifacts: [],
+      model: 'm',
+      promptVersion: 'v1',
+      createdAt,
+    });
+  };
+
+  /** Park `THREAD` at `PARKED_AT` with a full attempt budget spent. */
+  const park = (): void => {
+    repo.touch(THREAD, 'slack', 1_000);
+    for (let i = 0; i < MAX_ATTEMPTS; i += 1) repo.incrementAttempts(THREAD);
+    repo.markParked(THREAD, PARKED_AT);
+  };
+
+  it('uses parked_at as the reference point the revive compares against', () => {
+    park();
+    eventWithClass('e-new', 'status_update', PARKED_AT + 1);
+
+    // Newer than the park: revives.
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(1);
+
+    // Re-park with the reference point moved PAST that extraction, and the same
+    // content no longer counts as new. `markParked` is an unconditional write
+    // because the scheduler calls it exactly once per park cycle — see the SQL.
+    for (let i = 0; i < MAX_ATTEMPTS; i += 1) repo.incrementAttempts(THREAD);
+    repo.markParked(THREAD, PARKED_AT + 500);
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+  });
+
+  it('revives an all-noise thread once real signal arrives after the park', () => {
+    eventWithClass('e-noise', 'noise', PARKED_AT - 100);
+    park();
+
+    // Nothing to work with yet: still all noise.
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+    expect(repo.get(THREAD)?.attempts).toBe(MAX_ATTEMPTS);
+
+    // A real message lands and Layer 1 classifies it as something citable.
+    eventWithClass('e-real', 'status_update', PARKED_AT + 1);
+
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(1);
+    const wm = repo.get(THREAD);
+    expect(wm?.attempts).toBe(0);
+    // And it is offered again, which is the whole point.
+    expect(
+      repo.due(1_000 + QUIET_MS + 1, config, 0).map((row) => row.threadKey),
+    ).toContain(THREAD);
+  });
+
+  it('leaves a poison thread parked when its signal PREDATES the park', () => {
+    // The case the naive "has signal" predicate breaks on: this thread has
+    // context, which is exactly what it kept failing to synthesize.
+    eventWithClass('e-real', 'status_update', PARKED_AT - 100);
+    park();
+
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+    expect(repo.get(THREAD)?.attempts).toBe(MAX_ATTEMPTS);
+    // Repeated ticks must not change that — this is the loop that would have
+    // burned the synthesis budget forever.
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+  });
+
+  it('gives a poison thread one fresh budget when NEW content arrives, and cannot loop', () => {
+    eventWithClass('e-old', 'status_update', PARKED_AT - 100);
+    park();
+    eventWithClass('e-new', 'status_update', PARKED_AT + 1);
+
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(1);
+    expect(repo.get(THREAD)?.attempts).toBe(0);
+
+    // It fails again and re-parks — with a NEWER reference point, so the same
+    // content cannot revive it a second time.
+    for (let i = 0; i < MAX_ATTEMPTS; i += 1) repo.incrementAttempts(THREAD);
+    repo.markParked(THREAD, PARKED_AT + 100);
+
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+  });
+
+  it('never revives a thread with no parked_at at all', () => {
+    // NULL means "not parked": the scheduler stamps on the crossing, so a row
+    // at the cap with no stamp can only be one that predates the column — and
+    // migration 010 backfills those. Comparing against NULL matching nothing is
+    // what keeps an un-stamped row from being revived by signal it already had.
+    repo.touch(THREAD, 'slack', 1_000);
+    for (let i = 0; i < MAX_ATTEMPTS; i += 1) repo.incrementAttempts(THREAD);
+    eventWithClass('e-real', 'status_update', 9_999);
+
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+  });
+
+  it('ignores threads still inside their retry budget', () => {
+    repo.touch(THREAD, 'slack', 1_000);
+    repo.incrementAttempts(THREAD);
+    eventWithClass('e-real', 'status_update', 9_999);
+
+    // `due()` will offer it again on the next tick anyway; touching its counter
+    // here would hand it extra retries it has not earned.
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+    expect(repo.get(THREAD)?.attempts).toBe(1);
+  });
+
+  it('clears parked_at on a successful synthesis, so the next park starts fresh', () => {
+    eventWithClass('e-real', 'status_update', PARKED_AT - 100);
+    park();
+
+    repo.resetAttempts(THREAD);
+    // Re-park with no new content. A stale `parked_at` would have made this
+    // thread's revive window start in the past and un-park it immediately.
+    for (let i = 0; i < MAX_ATTEMPTS; i += 1) repo.incrementAttempts(THREAD);
+    repo.markParked(THREAD, PARKED_AT + 1_000);
+
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+  });
+
+  it('is a no-op on an unknown thread key', () => {
+    expect(() => repo.markParked('nope', 1)).not.toThrow();
+    expect(repo.reviveWithSignal(MAX_ATTEMPTS)).toBe(0);
+  });
+});

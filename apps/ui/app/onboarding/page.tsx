@@ -39,14 +39,25 @@ import type { OnboardingStatus, ProjectCandidate, SourceId } from '../../types/b
  */
 
 /**
- * Suggested project count — a hint only, not enforced (OI-3 relaxed).
+ * Fallback floor, used only until `onboarding:status` answers.
  *
- * The mandatory 3-project floor was dropped: declared-project stakes have no
- * ranking effect yet (nothing creates the `belongs_to` edge the ranker's
- * `wStakes` term reads). `config.onboarding.minDeclaredProjects` is now `0` and
- * `projects:declare` accepts an empty declaration.
+ * The real number is `status.minDeclaredProjects`
+ * (`config.onboarding.minDeclaredProjects`, `3` as shipped) — the same value
+ * `projects:declare` rejects against. This screen used to carry its own
+ * constant instead, describe the step as "optional", and offer a "Skip for
+ * now" button; because the config floor was 3, that button's only possible
+ * outcome was a rejected declaration with the raw reason string printed at the
+ * user. The floor is read from the handler now, so the copy, the gate and the
+ * enforcement cannot disagree again.
+ *
+ * OI-3 calls declaration mandatory and assisted, and A-2 made it load-bearing:
+ * tagging a Slack channel with a declared project is what creates the
+ * `belongs_to` edge the ranker's `wStakes` term reads. Without at least one
+ * project, ranking degrades to recency plus participation — and the home
+ * screen's briefing action is gated on having one, so skipping here would only
+ * strand the user there.
  */
-const SUGGESTED_MIN_PROJECTS = 3;
+const FALLBACK_MIN_PROJECTS = 3;
 
 /** Soft upper bound used only in the hint text; declaring more is allowed. */
 const SUGGESTED_MAX_PROJECTS = 5;
@@ -150,13 +161,55 @@ export default function OnboardingPage(): ReactNode {
     setCustomName('');
   }, [customName]);
 
+  /**
+   * The floor `projects:declare` enforces, as reported by `onboarding:status`.
+   *
+   * Falls back to {@link FALLBACK_MIN_PROJECTS} only while the status request
+   * is in flight — never to a locally-invented number once it has answered.
+   */
+  const minProjects = status?.minDeclaredProjects ?? FALLBACK_MIN_PROJECTS;
+
+  /** Projects already on file, from `onboarding:status`. */
+  const declaredNames = status?.projectsDeclared ?? [];
+
+  /**
+   * Suggestions that are not already declared.
+   *
+   * A suggestion whose name matches an existing project would otherwise render
+   * a second, unchecked box for something the user already has —
+   * `projects:declare` dedupes by name, so ticking it would change nothing and
+   * leaving it unticked would look like a project was missing.
+   */
+  const newCandidates = candidates.filter((c) => !declaredNames.includes(c.name));
+
+  /**
+   * How many projects would exist after saving — already-declared plus newly
+   * selected (minus any selection that just repeats a declared name). This, not
+   * `selected.length` alone, is what the handler's floor check now counts, so
+   * the button must gate on the same number or it will offer a save the
+   * handler rejects (or stay disabled after a save is already possible).
+   */
+  const declaredLower = new Set(declaredNames.map((n) => n.toLowerCase()));
+  const netNewCount = selected.filter((n) => !declaredLower.has(n.toLowerCase())).length;
+  const projectedTotal = declaredNames.length + netNewCount;
+  const belowFloor = projectedTotal < minProjects;
+
   const declare = useCallback(async (): Promise<void> => {
     setBusy(true);
     setDeclareError(null);
     try {
       const result = await getBridge().projects.declare(selected);
       if (!result.ok) {
-        setDeclareError(result.reason ?? 'declaration was rejected');
+        // Reasons are bare slugs (`ipc/projects.ts`); the sentence is composed
+        // here, from the same floor the button is gated on. Printing the slug
+        // is what this screen used to do.
+        setDeclareError(
+          result.reason === 'too_few_projects'
+            ? `pick at least ${minProjects} project${minProjects === 1 ? '' : 's'} first`
+            : result.reason === 'invalid_names'
+              ? 'one of those names could not be saved — try a shorter one'
+              : (result.reason ?? 'declaration was rejected'),
+        );
         return;
       }
       await refreshStatus();
@@ -166,7 +219,7 @@ export default function OnboardingPage(): ReactNode {
     } finally {
       setBusy(false);
     }
-  }, [refreshStatus, selected]);
+  }, [minProjects, refreshStatus, selected]);
 
   // Set as soon as a connect attempt starts, cleared once it settles. The main
   // process copies the sign-in URL to the clipboard as it opens the system
@@ -299,20 +352,58 @@ export default function OnboardingPage(): ReactNode {
           <Card sx={CARD_SX}>
             <CardContent>
               <Typography component="h2" sx={{ fontSize: '1.15rem', fontWeight: 650, mb: 1 }}>
-                3. Declare your projects (optional)
+                3. Declare your projects
               </Typography>
               <Typography sx={{ color: 'text.secondary', fontSize: '0.9rem', mb: 2 }}>
-                Optionally pick {SUGGESTED_MIN_PROJECTS}–{SUGGESTED_MAX_PROJECTS} things you are
-                working on, or skip this step. You can edit any name, type your own, or come back
-                later.
+                {/* `minDeclaredProjects` is a config value and may legitimately
+                    be 0, which "pick at least 0" would render as nonsense. */}
+                {minProjects > 0
+                  ? `Pick at least ${minProjects} of the things you are working on — ${minProjects}–${SUGGESTED_MAX_PROJECTS} works best.`
+                  : `Pick a few of the things you are working on — up to ${SUGGESTED_MAX_PROJECTS} works best.`}{' '}
+                This is what ranks your briefings: tag a Slack channel with one of these in Settings
+                and its threads outrank whatever merely happened last. You can edit any name, type
+                your own, or change them later.
               </Typography>
 
-              {candidates.length > 0 ? (
+              {/* Already-declared projects first, checked and locked.
+                  Locked because this step is add-only, which is the same
+                  contract the "Manage projects" link on the last step states:
+                  removing one lives in Settings → Projects, where it actually
+                  works. An unchecked box here would silently do nothing on
+                  save — a worse lie than no box at all. */}
+              {declaredNames.length > 0 ? (
                 <Box
                   component="ul"
                   sx={{ listStyle: 'none', p: 0, m: 0, display: 'flex', flexDirection: 'column' }}
                 >
-                  {candidates.map((candidate) => (
+                  {declaredNames.map((name) => (
+                    <Box component="li" key={`declared:${name}`}>
+                      <FormControlLabel
+                        sx={{ m: 0 }}
+                        control={<Checkbox size="small" checked disabled />}
+                        label={
+                          <Box component="span">
+                            {name}{' '}
+                            <Box
+                              component="span"
+                              sx={{ color: 'text.secondary', fontSize: '0.82rem' }}
+                            >
+                              (already declared — remove in Settings)
+                            </Box>
+                          </Box>
+                        }
+                      />
+                    </Box>
+                  ))}
+                </Box>
+              ) : null}
+
+              {newCandidates.length > 0 ? (
+                <Box
+                  component="ul"
+                  sx={{ listStyle: 'none', p: 0, m: 0, display: 'flex', flexDirection: 'column' }}
+                >
+                  {newCandidates.map((candidate) => (
                     <Box component="li" key={`${candidate.source}:${candidate.name}`}>
                       <FormControlLabel
                         sx={{ m: 0 }}
@@ -337,8 +428,12 @@ export default function OnboardingPage(): ReactNode {
                 </Box>
               ) : (
                 <Typography sx={{ color: 'text.secondary', fontSize: '0.9rem' }}>
-                  No suggestions yet — that just means there is not enough synced activity to guess
-                  from. Type your projects below.
+                  {/* Two different empty states, and saying the wrong one is a
+                      small lie: "not enough activity" is false when the reason
+                      is that every suggestion is already on the list above. */}
+                  {candidates.length > 0
+                    ? 'Every suggestion is already declared. Add another below if you want one.'
+                    : 'No suggestions yet — that just means there is not enough synced activity to guess from. Type your projects below.'}
                 </Typography>
               )}
 
@@ -394,8 +489,20 @@ export default function OnboardingPage(): ReactNode {
                 <Button variant="outlined" onClick={() => setStep('sync')}>
                   Back
                 </Button>
-                <Button variant="contained" disabled={busy} onClick={() => void declare()}>
-                  {busy ? 'Saving…' : selected.length === 0 ? 'Skip for now' : 'Save projects'}
+                {/* Gated on the floor the handler enforces, so the button can
+                    no longer offer an action whose only outcome is a rejection.
+                    The count is on the label rather than in a separate hint —
+                    a disabled button should say what would enable it. */}
+                <Button
+                  variant="contained"
+                  disabled={busy || belowFloor}
+                  onClick={() => void declare()}
+                >
+                  {busy
+                    ? 'Saving…'
+                    : belowFloor
+                      ? `Pick ${minProjects - projectedTotal} more`
+                      : 'Save projects'}
                 </Button>
               </Box>
             </CardContent>

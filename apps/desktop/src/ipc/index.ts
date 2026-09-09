@@ -49,12 +49,13 @@ import {
   type RelinkProjects,
   type SlackChannelStore,
 } from './slackChannels.js';
-import { registerClaimHandlers } from './claim.js';
+import { registerClaimHandlers, type ClaimProjectStore } from './claim.js';
 import { registerExternalHandlers } from './external.js';
 import { registerPollHandlers } from './poll.js';
 import {
   registerFeedbackHandlers,
   type BriefingCompletionStore,
+  type FeedbackReader,
   type FeedbackStore,
 } from './feedback.js';
 import {
@@ -62,11 +63,18 @@ import {
   type AiCallStatsReader,
   type BriefingStatsReader,
   type ExtractionFailureReader,
+  type FeedbackCountReader,
 } from './metrics.js';
 import {
   registerModelSettingsHandlers,
   type ModelSettingsStore,
 } from './modelSettings.js';
+import {
+  registerPrivacyHandlers,
+  type FileRemover,
+  type PrivacyStore,
+  type VectorEvictor,
+} from './privacy.js';
 
 export { toHealthPayload, HEALTH_CHANNEL, type SourceHealth } from './health.js';
 export {
@@ -85,6 +93,7 @@ export {
   getBriefingSnapshot,
   getResumePoint,
   citationForArtifact,
+  projectNameFor,
   parseBriefingWindow,
   parsePendingIdArg,
   parseSnapshotIdArg,
@@ -108,6 +117,17 @@ export {
 export {
   registerClaimHandlers,
   drilldown,
+  setClaimProject,
+  listClaimProjects,
+  detectClaimProjects,
+  detectionText,
+  parseSetProjectArg,
+  parseClaimProjectsArg,
+  parseDetectArg,
+  SET_PROJECT_CHANNEL,
+  PROJECTS_CHANNEL,
+  DETECT_PROJECTS_CHANNEL,
+  MAX_DETECTION_CHARS,
   resolveEvents,
   parseDrilldownArg,
   toDrilldownEvent,
@@ -122,6 +142,9 @@ export {
   type ClaimHandlerDeps,
   type ArtifactReader,
   type ThreadEventReader,
+  type ClaimProjectStore,
+  type ClaimProjectSelection,
+  type ProjectLister,
 } from './claim.js';
 export {
   registerExternalHandlers,
@@ -145,6 +168,9 @@ export {
 export {
   registerFeedbackHandlers,
   submitFeedback,
+  exportFeedback,
+  buildFeedbackExport,
+  EXPORT_CHANNEL as FEEDBACK_EXPORT_CHANNEL,
   markBriefingCaughtUp,
   briefingMetrics,
   claimVerdicts,
@@ -161,6 +187,9 @@ export {
   MAX_CLAIM_IDS,
   type FeedbackHandlerDeps,
   type FeedbackStore,
+  type FeedbackReader,
+  type FeedbackExport,
+  type FeedbackExportResult,
   type BriefingCompletionStore,
   type ParsedFeedback,
   type BriefingMetric,
@@ -216,6 +245,23 @@ export {
   type ModelSettingsStore,
   type ModelInfo,
 } from './modelSettings.js';
+export {
+  registerPrivacyHandlers,
+  dataSummary,
+  deleteEverythingNow,
+  isConfirmed,
+  retentionCutoff,
+  CONFIRM_PHRASE,
+  PRIVACY_STATS_CHANNEL,
+  PRIVACY_DELETE_CHANNEL,
+  type PrivacyDeps,
+  type PrivacyStore,
+  type VectorEvictor,
+  type CredentialPurger,
+  type FileRemover,
+  type DataSummary,
+  type DeleteEverythingReport,
+} from './privacy.js';
 
 /** Process-level singletons the handler table needs. Built once, in `main.ts`. */
 export interface IpcDeps {
@@ -265,6 +311,16 @@ export interface IpcDeps {
    * actually holds the whole repo, so it is what gets passed in.
    */
   projectStore?: GraphRepo;
+  /**
+   * Per-claim project label store (`ClaimProjectsRepo`, migration 011) behind
+   * `claim:setProject` / `claim:projects`.
+   *
+   * Optional like every other repo here. Absent leaves both label channels
+   * unregistered, which the briefing view reads as "labelling is not available"
+   * — an unhandled channel rejects, whereas a handler with no store would
+   * silently accept labels and drop them.
+   */
+  claimLabels?: ClaimProjectStore;
   /**
    * Invoked after `projects:remove` deletes a project. `main.ts` wires this to
    * `relinkProjects(slackChannels.list())` so the ingestion pipeline's
@@ -329,6 +385,16 @@ export interface IpcDeps {
    * (`BriefingsRepo`). See {@link IpcDeps.feedback} for why the two are paired.
    */
   briefings?: BriefingCompletionStore;
+  /**
+   * Read side of `FeedbackRepo`, behind `feedback:export` (FR-7). Paired with
+   * {@link IpcDeps.exportDir}: both or neither, since an export with nowhere to
+   * write is not a feature.
+   */
+  feedbackReader?: FeedbackReader;
+  /** Where `feedback:export` writes — `userData` in production. */
+  exportDir?: string;
+  /** Verdict counts for the Diagnostics panel. Same repo instance in production. */
+  metricsFeedback?: FeedbackCountReader;
   /**
    * Rehydration source behind `briefing:snapshot` (`BriefingsRepo` in
    * production — the SAME instance as {@link IpcDeps.briefings}, narrowed
@@ -396,6 +462,36 @@ export interface IpcDeps {
   modelSettings?: ModelSettingsStore;
   /** `config.model.chat`, BEFORE any persisted override is applied — see `IpcDeps.modelSettings`. */
   defaultChatModel?: string;
+  /**
+   * SEC-8 right-to-delete store behind `privacy:stats` / `privacy:deleteEverything`
+   * — `main.ts`'s adapter over `retention.ts` bound to the live handle.
+   *
+   * Optional like every other feature-scoped store here, and the ONE place
+   * where an unregistered channel is not merely inconvenient: the panel reports
+   * "not available in this build" rather than offering a delete button that
+   * resolves without erasing anything. A confirmation the app silently ignored
+   * would be the worst possible failure on this screen.
+   *
+   * `vault` (always present) doubles as the credential purger, so it is not a
+   * separate field: a wipe must revoke the same tokens the OAuth handlers
+   * wrote, and a second vault instance over the same file could disagree about
+   * what is stored.
+   */
+  privacyStore?: PrivacyStore;
+  /**
+   * LanceDB handle for the vector half of a wipe. Separate from
+   * {@link IpcDeps.privacyStore} because the vector gate can fail
+   * independently of the database gate — a host in that state still owes the
+   * user a SQLite wipe, and the report says the vectors were not reached.
+   */
+  privacyVectors?: VectorEvictor;
+  /** `fs.promises.unlink` override, for tests. Production leaves it unset. */
+  privacyUnlink?: FileRemover;
+  /**
+   * Run after a completed wipe. `main.ts` rebuilds the channel → project
+   * resolver from the now-empty selection; see `PrivacyDeps.afterDelete`.
+   */
+  onDataDeleted?: () => void;
 }
 
 /**
@@ -480,7 +576,22 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   // the same `EventsRepo` the project suggester reads; no new instances, since
   // each repo prepares its whole statement set in its constructor.
   if (deps.events !== undefined && deps.projectStore !== undefined) {
-    registerClaimHandlers({ artifacts: deps.projectStore, events: deps.events });
+    registerClaimHandlers({
+      artifacts: deps.projectStore,
+      events: deps.events,
+      // Per-claim project labels (migration 011). Passed through unconditionally:
+      // `registerClaimHandlers` itself skips the two label channels when this is
+      // absent, so a host without the repo keeps `claim:drilldown` and nothing else.
+      ...(deps.claimLabels !== undefined
+        ? {
+            labels: deps.claimLabels,
+            clock: deps.clock ?? systemClock,
+            // Auto-detection reads the declared project names out of the same
+            // `GraphRepo` instance the artifact lookup above uses.
+            projects: deps.projectStore,
+          }
+        : {}),
+    });
   }
 
   // FR-11 completion signal + FR-12 verdict capture: `briefing:caughtUp`,
@@ -492,6 +603,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       feedback: deps.feedback,
       briefings: deps.briefings,
       clock: deps.clock ?? systemClock,
+      // Both or neither — see `IpcDeps.feedbackReader`.
+      ...(deps.feedbackReader !== undefined && deps.exportDir !== undefined
+        ? { feedbackReader: deps.feedbackReader, exportDir: deps.exportDir }
+        : {}),
     });
   }
 
@@ -508,6 +623,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       briefings: deps.metricsBriefings,
       extractionFailures: deps.metricsExtractionFailures,
       logsDir: deps.logsDir,
+      ...(deps.metricsFeedback === undefined ? {} : { feedback: deps.metricsFeedback }),
     });
   }
 
@@ -545,6 +661,21 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       settings: deps.modelSettings,
       defaultChatModel: deps.defaultChatModel,
       ollamaBaseUrl: deps.config.model.ollamaBaseUrl,
+    });
+  }
+
+  // SEC-8 "Your data" panel: `privacy:stats` and `privacy:deleteEverything`.
+  // Gated on the store alone — `vault` is always present, and the vector store
+  // is deliberately optional (see `IpcDeps.privacyVectors`).
+  if (deps.privacyStore !== undefined) {
+    registerPrivacyHandlers({
+      store: deps.privacyStore,
+      vault: deps.vault,
+      ...(deps.privacyVectors !== undefined ? { vectors: deps.privacyVectors } : {}),
+      ...(deps.privacyUnlink !== undefined ? { unlink: deps.privacyUnlink } : {}),
+      ...(deps.onDataDeleted !== undefined ? { afterDelete: deps.onDataDeleted } : {}),
+      rawEventDays: deps.config.retention.rawEventDays,
+      clock: deps.clock ?? systemClock,
     });
   }
 }

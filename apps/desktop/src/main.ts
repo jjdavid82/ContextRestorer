@@ -31,6 +31,7 @@ import {
   AppSettingsRepo,
   BriefingSchedulesRepo,
   BriefingsRepo,
+  ClaimProjectsRepo,
   DeltasRepo,
   EventsRepo,
   ExtractionsRepo,
@@ -43,8 +44,11 @@ import {
   migrate,
   openDb,
   openVectors,
+  purgeRawEventsOlderThan,
   rebuildProjectLinks,
   SlackChannelProjectResolver,
+  deleteEverything,
+  userDataSummary,
   type SelectedSlackChannel,
   type VectorStore,
 } from '@cr/store';
@@ -72,9 +76,11 @@ import { registerAutostart } from './autostart.js';
 import { CHAT_MODEL_SETTING_KEY, registerIpcHandlers, startHealthPush } from './ipc/index.js';
 import { backfillMissingResolutionDeltas } from './ipc/briefing.js';
 import { deepLinkFor, resolveEvents } from './ipc/claim.js';
+import { projectNameFor } from './ipc/briefing.js';
 import { ensureFreshTokens } from './ipc/oauth.js';
 import { registerPipelineStatusPush } from './ipc/pipelineStatus.js';
 import { BriefingScheduleRunner } from './scheduler/briefingSchedule.js';
+import { startRetentionPurge } from './scheduler/retentionPurge.js';
 import { notify } from './notifications.js';
 import type { BriefingChunk, BriefingDone, Citation } from './preload.cjs';
 
@@ -218,6 +224,12 @@ let stopHealthPush: (() => void) | null = null;
 
 /** Disposer for the `pipeline:status` push loop, returned by `registerPipelineStatusPush`. */
 let stopPipelineStatusPush: (() => void) | null = null;
+
+/**
+ * Disposer for the 90-day raw-event purge loop (NFR retention), returned by
+ * `startRetentionPurge`. Stopped on quit like every other timer here.
+ */
+let stopRetentionPurge: (() => void) | null = null;
 
 // Set before any `app.getPath()` call. Electron derives `userData` from the app name,
 // which otherwise comes from package.json — i.e. the scoped `@cr/desktop`. Pinning it
@@ -961,6 +973,13 @@ function createLayer12(
     appConfig.model.chat,
     `layer2-synthesize.${appConfig.promptVersions.layer2}`,
     systemClock,
+    // Lets Layer 2 tell "no context YET" from "no context, ever". Without it
+    // every thread whose events are all `noise` — 72% of them on a real
+    // install — burns its whole retry budget and parks, which the Diagnostics
+    // panel then reports as a summarization failure. The SAME `EventsRepo`
+    // instance the extraction sweep reads, so the two can never disagree about
+    // what is extracted.
+    events,
   );
 
   const scheduler = new DebounceScheduler({
@@ -1034,12 +1053,18 @@ function citationFor(
   const externalUrl =
     latest === undefined ? undefined : deepLinkFor(latest.source, latest.sourceEventId);
 
+  // The declared project behind this item, for its label. Resolved through the
+  // SAME helper `briefing:snapshot` uses, so a claim carries the same project
+  // whether it arrived live or was rehydrated after a page navigation.
+  const projectName = projectNameFor(graph, artifactId);
+
   return {
     eventId: latest?.eventId ?? '',
     artifactId,
     source: latest?.source ?? artifact.source,
     // `exactOptionalPropertyTypes`: an absent link is an absent KEY.
     ...(externalUrl !== undefined ? { externalUrl } : {}),
+    ...(projectName === undefined ? {} : { projectName }),
   };
 }
 
@@ -1305,6 +1330,10 @@ if (!app.requestSingleInstanceLock()) {
       const pending = new PendingItemsRepo(db!);
       const briefings = new BriefingsRepo(db!);
       const schedules = new BriefingSchedulesRepo(db!);
+      // Per-claim project LABELS (migration 011). Separate from `graph`'s
+      // `belongs_to` edges on purpose: this writes no edge, so nothing here
+      // reaches `ranker.ts`. See the migration header.
+      const claimLabels = new ClaimProjectsRepo(db!);
       watermarks = new WatermarkRepo(db!);
 
       // Layer 3, assembled before the handler table so `startGeneration` is the
@@ -1439,6 +1468,11 @@ if (!app.requestSingleInstanceLock()) {
       // Read by the poller every Slack cycle and by `slack:*` IPC — one
       // instance, since each repo prepares its whole statement set in its
       // constructor.
+      // One instance: the sink behind `feedback:submit`, the reader behind
+      // `feedback:export`, and the counter behind Diagnostics are the same
+      // table, and a second repo over the same handle would re-prepare every
+      // statement for no benefit.
+      const feedbackRepo = new FeedbackRepo(db!);
       const slackChannels = new SlackChannelsRepo(db!);
 
       /**
@@ -1498,6 +1532,9 @@ if (!app.requestSingleInstanceLock()) {
         // would re-prepare every statement for no benefit.
         events,
         projectStore: graph,
+        // `claim:setProject` / `claim:projects` — the per-claim project labels
+        // the briefing view's dropdown writes and reads back.
+        claimLabels,
         // Settings "Projects" panel: after `projects:remove` deletes a project,
         // rebuild the channel → project resolver and `belongs_to` edges so a
         // channel the FK just untagged is no longer mapped to a dead id. Reuses
@@ -1529,7 +1566,13 @@ if (!app.requestSingleInstanceLock()) {
         // the SAME instance Layer 3 persists through and the schedule runner
         // reads `getMostRecent()` from — one prepared statement set, and no way
         // for two views of "the briefings table" to disagree.
-        feedback: new FeedbackRepo(db!),
+        feedback: feedbackRepo,
+        // FR-7's reader half: the export that finally makes recorded verdicts
+        // legible to something other than the button that wrote them, and the
+        // verdict counts the Diagnostics panel shows.
+        feedbackReader: feedbackRepo,
+        exportDir: app.getPath('userData'),
+        metricsFeedback: feedbackRepo,
         briefings,
         // `briefing:snapshot` rehydration (same `BriefingsRepo` instance as
         // `briefings` above, narrowed differently — see the field's own doc
@@ -1552,6 +1595,36 @@ if (!app.requestSingleInstanceLock()) {
         // are set by `runPreflightGate`, which always runs before this point.
         modelSettings: appSettings!,
         defaultChatModel: defaultChatModel!,
+        // SEC-8 "Your data" panel. The adapter is where `retention.ts` gets
+        // bound to the live handle — `ipc/privacy.ts` holds no `better-sqlite3`
+        // reference of its own, for the same reason every other handler module
+        // takes a narrow structural store.
+        privacyStore: {
+          summary: (cutoffMs) => userDataSummary(db!, cutoffMs),
+          deleteEverything: () => deleteEverything(db!),
+        },
+        // The vector half of a wipe. `vectors!` is non-null here (the vector
+        // gate ran and returned true), but the dep stays optional so a build
+        // whose gate failed still owes the user a SQLite erasure.
+        privacyVectors: vectors!,
+        // A completed wipe leaves this closure holding channel tags for
+        // projects that no longer exist, and the ingestion pipeline reads it on
+        // every new thread — so re-derive it from the (now empty) selection
+        // rather than letting the next poll cycle tag artifacts onto deleted
+        // project ids.
+        onDataDeleted: () => relinkProjects(slackChannels.list()),
+      });
+
+      // NFR retention, the acting half: `config.retention.rawEventDays` named a
+      // promise nothing kept until this call — raw Slack/Gmail payloads
+      // accumulated for the life of the install. Same `db` handle and the same
+      // vector store the wipe above uses, so the two paths cannot disagree
+      // about what "aged out" means.
+      stopRetentionPurge = startRetentionPurge({
+        purge: (cutoffMs) => purgeRawEventsOlderThan(db!, cutoffMs),
+        evictVectors: (eventIds) => vectors!.deleteByEventIds(eventIds),
+        rawEventDays: config!.retention.rawEventDays,
+        clock: systemClock,
       });
 
       // FR-3, the acting half: saved schedules now actually fire. Called WITHOUT
@@ -1607,6 +1680,10 @@ if (!app.requestSingleInstanceLock()) {
         events,
         watermarks: watermarks!,
         scheduler: layer12.scheduler,
+        // F2: the measured Layer-1 pace behind the extraction ETA. The same
+        // `ai_calls` sink every layer writes to, so the estimate is derived
+        // from this machine's real calls rather than a guess.
+        aiCalls,
         debounce: config!.debounce,
         maxAttempts: DEFAULT_MAX_ATTEMPTS,
         clock: systemClock,
@@ -1638,6 +1715,11 @@ if (!app.requestSingleInstanceLock()) {
     isQuitting = true;
     stopHealthPush?.();
     stopHealthPush = null;
+    // Cancels the pending purge timer; an in-flight purge is left to finish —
+    // it holds an open SQLite transaction, and `db.close()` below would fail
+    // rather than corrupt anything if it were still running.
+    stopRetentionPurge?.();
+    stopRetentionPurge = null;
     stopPipelineStatusPush?.();
     stopPipelineStatusPush = null;
     // Cancels pending timers; an in-flight cycle is allowed to finish.

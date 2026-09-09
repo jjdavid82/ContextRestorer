@@ -250,17 +250,11 @@ describe('collectLocalMetrics — recent activity feed', () => {
     recordWriteoff('e1', NOW - 40_000);
     recordWriteoff('e2', NOW - 30_000);
 
-    // A template-mode briefing.
-    const b = briefings.create({
-      windowStart: NOW - 86_400_000,
-      windowEnd: NOW,
-      generatedAt: NOW - 20_000,
-      mode: 'llm',
-      narrativePath: '/b.md',
-      deltaIds: [],
-      threadsStillProcessing: 0,
-    });
-    briefings.markTemplateMode(b.briefingId);
+    // A briefing the model was genuinely unavailable for. NOT a template-mode
+    // briefing: under P0 every delivered briefing is template-mode by design,
+    // and treating that as an incident produced one identical "the model
+    // didn't respond in time" row per briefing for a call never made.
+    logAt(NOW - 20_000, 3, 'fallback_template_preflight');
 
     // A citation-gate injection drop, via a real trace line.
     writeBriefingTrace({ outcome: 'ok', gateDrops: { injection_pattern: 1 } });
@@ -268,7 +262,7 @@ describe('collectLocalMetrics — recent activity feed', () => {
     const feed = collectLocalMetrics(deps()).recentActivity;
 
     expect(feed.map((e) => ({ kind: e.kind, severity: e.severity, count: e.count }))).toEqual([
-      { kind: 'template_fallback', severity: 'info', count: 1 },
+      { kind: 'briefing_fallback', severity: 'attention', count: 1 },
       { kind: 'extraction_writeoff', severity: 'info', count: 2 },
       { kind: 'model_error', severity: 'info', count: 1 },
       { kind: 'gate_injection', severity: 'attention', count: 1 },
@@ -280,6 +274,46 @@ describe('collectLocalMetrics — recent activity feed', () => {
   it('excludes events older than the 7-day window', () => {
     logAt(NOW - 8 * 24 * 60 * 60 * 1_000, 1, 'error');
     expect(collectLocalMetrics(deps()).recentActivity).toEqual([]);
+  });
+
+  it('reports a mid-stream model death as a fallback, not a bare model error', () => {
+    // `generateWithFallback` tops the briefing up via `appendTemplateRemainder`,
+    // which writes no `ai_calls` row — the generator's Layer-3 row keeps its
+    // `stream_error` outcome, so no `fallback_template_*` value is ever
+    // produced. The feed still owes "the briefing fell back".
+    logAt(NOW - 15_000, 3, 'stream_error');
+
+    expect(collectLocalMetrics(deps()).recentActivity).toEqual([
+      { atMs: NOW - 15_000, kind: 'briefing_fallback', severity: 'attention', count: 1 },
+    ]);
+  });
+
+  it('keeps a Layer 1/2 error a bare model error, not a fallback', () => {
+    // Same outcome string, different layer: one failed extraction is not a
+    // fallen-back briefing.
+    logAt(NOW - 15_000, 1, 'error');
+    logAt(NOW - 14_000, 2, 'stream_error');
+
+    expect(
+      collectLocalMetrics(deps()).recentActivity.map((e) => ({ kind: e.kind, severity: e.severity })),
+    ).toEqual([
+      { kind: 'model_error', severity: 'info' },
+      { kind: 'model_error', severity: 'info' },
+    ]);
+  });
+
+  it('a flood of benign non-writes does not bury a genuine fallback', () => {
+    // `not_meaningful` is the most common Layer-2 outcome; `no_context` the
+    // next. Before the outcome filter, 40 of them would fill every slot
+    // `listRecentNotable`'s LIMIT allows and push the one real incident off
+    // the end.
+    for (let i = 0; i < 40; i += 1) logAt(NOW - 1_000 - i, 2, i % 2 === 0 ? 'not_meaningful' : 'no_context');
+    logAt(NOW - 60_000, 3, 'fallback_template_error');
+
+    const feed = collectLocalMetrics(deps()).recentActivity;
+    expect(feed).toEqual([
+      { atMs: NOW - 60_000, kind: 'briefing_fallback', severity: 'attention', count: 1 },
+    ]);
   });
 });
 
@@ -305,6 +339,44 @@ describe('registerMetricsHandlers', () => {
     expect(withJunk).toEqual(withNothing);
     expect((withJunk as { layers: unknown[] }).layers).toEqual([
       { layer: 2, calls: 1, meanLatencyMs: 42 },
+    ]);
+  });
+});
+
+describe('the deterministic path is not an incident', () => {
+  it('reports NOTHING for an ordinary template-mode briefing', () => {
+    // The regression this replaced: `mode = 'template'` on a delivered
+    // briefing was reported as "the model didn't respond in time", once per
+    // briefing. Under P0 that is EVERY delivered briefing — 50 of them on a
+    // real install, each generated in single-digit milliseconds with no model
+    // on the path — so the feed described 50 timeouts that never happened and
+    // buried the one real failure among them.
+    const b = briefings.create({
+      windowStart: NOW - 86_400_000,
+      windowEnd: NOW,
+      generatedAt: NOW - 20_000,
+      mode: 'llm',
+      narrativePath: '/b.md',
+      deltaIds: [],
+      threadsStillProcessing: 0,
+    });
+    briefings.markTemplateMode(b.briefingId);
+    // The `ai_calls` row the deterministic renderer actually writes.
+    logAt(NOW - 20_000, 3, 'template');
+
+    expect(collectLocalMetrics(deps()).recentActivity).toEqual([]);
+  });
+
+  it('DOES report a briefing the model was unavailable for', () => {
+    // The honest signal, which the old rule missed entirely: these outcomes
+    // were in neither the failure set nor the template rule, so a genuine
+    // Ollama-down fallback produced no activity row at all.
+    logAt(NOW - 10_000, 3, 'fallback_template_preflight');
+
+    const feed = collectLocalMetrics(deps()).recentActivity;
+
+    expect(feed).toEqual([
+      { atMs: NOW - 10_000, kind: 'briefing_fallback', severity: 'attention', count: 1 },
     ]);
   });
 });

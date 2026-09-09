@@ -3,6 +3,8 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Collapse from '@mui/material/Collapse';
+import MenuItem from '@mui/material/MenuItem';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
@@ -11,6 +13,8 @@ import type {
   BriefingDone,
   BriefingWindow,
   ClaimChunk,
+  ClaimProjectSelection,
+  DeclaredProject,
   FeedbackInput,
   PendingItemView,
   Unsubscribe,
@@ -103,6 +107,27 @@ const CHANGED_SECTIONS = STREAMED_SECTIONS;
  */
 const DEFAULT_MAX_CHANGED_ITEMS = 7;
 
+/**
+ * Filter sentinel for "rows carrying no project label".
+ *
+ * A sentinel rather than `null`, because MUI's `Select` uses `''` for its own
+ * empty state and the two mean opposite things here: `''` shows everything,
+ * this shows only what has NOT been filed. Prefixed so it can never collide
+ * with a real `projectId` (a uuid).
+ */
+export const UNFILED_FILTER = '@unfiled';
+
+/**
+ * One claim's project label, as the view holds it: which project, and whether
+ * the user filed it (`'user'`) or name-match detection only suggested it
+ * (`'auto'`). A claim absent from the map is unlabelled. The origin is kept so a
+ * guess is never shown as the user's own filing (X-2) — see migration 013.
+ */
+interface ClaimLabel {
+  projectId: string;
+  origin: 'user' | 'auto';
+}
+
 /** Tooltip for the merged changed group — the union of the three sections it replaces. */
 const CHANGED_GROUP_MEANING =
   'Decisions, progress, things that closed without you, and context worth knowing';
@@ -129,6 +154,24 @@ function describe(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+/**
+ * A sentence for a `claim:setProject` failure. The channel answers with an
+ * internal token (`invalid_selection` / `not_wired` / `internal_error`); this
+ * keeps that token out of the error banner the user reads.
+ */
+function labelErrorText(reason: string | undefined): string {
+  switch (reason) {
+    case 'invalid_selection':
+      return 'that selection was not valid';
+    case 'not_wired':
+      return 'project labelling is not available in this build';
+    case 'internal_error':
+      return 'something went wrong saving it — please try again';
+    default:
+      return 'please try again';
+  }
+}
+
 /** Canonical section for a chunk, folding anything unrecognised into the default. */
 function sectionOf(chunk: ClaimChunk): BriefingSection {
   const match = BRIEFING_SECTIONS.find((s) => s.toLowerCase() === chunk.section.toLowerCase());
@@ -146,6 +189,26 @@ function sectionOf(chunk: ClaimChunk): BriefingSection {
  */
 function claimIdOf(chunk: ClaimChunk): string {
   return chunk.citation.artifactId;
+}
+
+/**
+ * The key a user verdict (FR-12) is recorded against:
+ * `<artifact id><U+001F><claim sentence>`.
+ *
+ * NOT just the artifact id. One thread's artifact backs a different claim in
+ * every briefing it recurs in ("reply to Sarah" one week, "Sarah escalated" the
+ * next), and `feedback.claimVerdicts` replays verdicts across every briefing —
+ * so an artifact-only key means marking one week's claim "not relevant"
+ * silently hides next week's, and every future development on that thread. The
+ * sentence in the key scopes the verdict to the claim it was given on.
+ *
+ * Mirrors `@cr/core`'s `feedbackClaimKey` and the store's `char(31)` join
+ * expression; kept as a local copy because the renderer takes no `@cr/core`
+ * dependency (it talks only through the bridge).
+ */
+const FEEDBACK_KEY_SEP = String.fromCharCode(31);
+function feedbackKeyOf(artifactId: string, claimText: string): string {
+  return `${artifactId}${FEEDBACK_KEY_SEP}${claimText}`;
 }
 
 /**
@@ -230,6 +293,15 @@ export function BriefingView({
    */
   const [resolvedArtifactIds, setResolvedArtifactIds] = useState<Set<string>>(() => new Set());
   const [claimVerdicts, setClaimVerdicts] = useState<Record<string, FeedbackInput['verdict']>>({});
+  /**
+   * Whether to show the items the user judged away.
+   *
+   * A dismissal must be reversible and must never be silent: the count below
+   * the list says how many are hidden, and this reveals them — the same
+   * discipline the `+N more` overflow follows. Something that vanishes with no
+   * trace is indistinguishable from a bug.
+   */
+  const [showDismissed, setShowDismissed] = useState(false);
   /** A-4 cap for the changed list; replaced by the config value once known. */
   const [maxChangedItems, setMaxChangedItems] = useState(DEFAULT_MAX_CHANGED_ITEMS);
   /** True once the user has expanded past the cap. Never collapses again. */
@@ -237,6 +309,34 @@ export function BriefingView({
   // Tracks which claim ids a lookup has already been sent for, so a claim that
   // comes back with NO verdict does not get re-queried on every re-render.
   const requestedVerdictIds = useRef<Set<string>>(new Set());
+
+  /**
+   * Per-claim project labels (migration 011) — a LABEL only. Choosing a project
+   * here records how the user files this row for later filtering; it writes no
+   * `belongs_to` edge and changes no ranking, unlike tagging a channel in
+   * Settings. Empty list = no declared projects, which hides the control
+   * entirely rather than offering a dropdown with nothing in it.
+   */
+  const [declaredProjects, setDeclaredProjects] = useState<DeclaredProject[]>([]);
+  /** `claimId -> {@link ClaimLabel}`; a claim absent from the map is unlabelled. */
+  const [claimProjects, setClaimProjects] = useState<ReadonlyMap<string, ClaimLabel>>(new Map());
+  const [labelError, setLabelError] = useState<string | null>(null);
+  /**
+   * Claim ids whose label write is still in flight, with the value the user
+   * chose. A server read that started before the write landed comes back
+   * without it; reconciling against this map stops that stale read from
+   * clobbering a selection the user just made (or just cleared).
+   */
+  const inFlightLabels = useRef<Map<string, ClaimLabel | null>>(new Map());
+  /**
+   * Which project the changed list is filtered to: a project id, the
+   * {@link UNFILED_FILTER} sentinel, or `''` for "everything".
+   *
+   * Deliberately NOT persisted. A filter that survives a restart is a filter
+   * the user eventually forgets is on, and this one hides briefing content —
+   * the failure mode is believing nothing changed when something did.
+   */
+  const [projectFilter, setProjectFilter] = useState<string>('');
 
   // Frozen on first render so the effect's dependency array stays stable; a
   // window recomputed every render would re-request the briefing in a loop.
@@ -367,35 +467,208 @@ export function BriefingView({
     setOpenClaimId((current) => (current === claimId ? null : claimId));
   }, []);
 
-  // Replays feedback already on file (FR-12) as claim ids appear, so a restart
-  // — or a still-open pending item resurfacing under a new `briefingId` — does
-  // not ask the user to re-judge a claim they already answered. Runs off
-  // `pending`/`claims` rather than once on mount: streamed claims arrive one
-  // chunk at a time, each with a claim id nothing has looked up yet.
+  /**
+   * The declared projects the dropdown offers. Read once — the list changes only
+   * from the onboarding page, which is a full page load away.
+   *
+   * Best-effort: a failed read leaves the list empty, which hides the control.
+   * A briefing that renders without labelling beats one that does not render.
+   */
   useEffect(() => {
-    const ids = new Set<string>();
-    for (const item of pending) {
-      if (item.citationArtifactId !== null) ids.add(item.citationArtifactId);
+    let active = true;
+    try {
+      getBridge()
+        .projects.list()
+        .then((declared) => {
+          if (active) setDeclaredProjects(declared);
+        })
+        .catch(() => undefined);
+    } catch {
+      // No bridge (plain browser / static export) — no labelling, no crash.
     }
-    for (const c of claims) ids.add(claimIdOf(c));
+    return () => {
+      active = false;
+    };
+  }, []);
 
-    const newIds = [...ids].filter((id) => !requestedVerdictIds.current.has(id));
-    if (newIds.length === 0) return;
-    for (const id of newIds) requestedVerdictIds.current.add(id);
+  /**
+   * Fold a server label list into the map — MERGE, never replace.
+   *
+   * `claim.projects` and `claim.detectProjects` each resolve on their own
+   * schedule. A replace by whichever lands second would wipe a label the other
+   * had already applied, or one the user set in between. Every server row is a
+   * FILED thread, so an additive merge loses nothing real; a row the user has a
+   * write in flight for is skipped so a read that predates that write cannot
+   * undo it.
+   */
+  const mergeServerLabels = useCallback((tags: readonly ClaimProjectSelection[]): void => {
+    setClaimProjects((current) => {
+      const next = new Map(current);
+      for (const tag of tags) {
+        if (inFlightLabels.current.has(tag.claimId)) continue;
+        if (tag.projectId === null) continue;
+        next.set(tag.claimId, { projectId: tag.projectId, origin: tag.origin ?? 'user' });
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * Labels already on file, so re-opening a briefing shows what was chosen.
+   *
+   * Keyed on `briefingId` rather than run once: Home can swap the briefing under
+   * this component (a refresh mints a new id).
+   */
+  useEffect(() => {
+    if (briefingId === null) return;
+    let active = true;
 
     try {
       getBridge()
-        .feedback.claimVerdicts(newIds)
+        .claim.projects(briefingId)
+        .then((tags) => {
+          if (active) mergeServerLabels(tags);
+        })
+        .catch(() => undefined);
+    } catch {
+      // Unreachable in practice — a briefingId implies a working bridge.
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [briefingId, mergeServerLabels]);
+
+  /**
+   * Auto-detection (migration 013): file the rows whose SOURCE TEXT names
+   * exactly one declared project, and leave every other row blank.
+   *
+   * Runs once the stream has ended, not per chunk: the claim set is stable by
+   * then, so this is one round trip for the whole briefing instead of one per
+   * bullet. The main process skips any row already filed, and re-running is
+   * harmless — so a late chunk arriving after `done` (the snapshot-rehydrate
+   * race the `claimKey` comment describes) re-runs it once via `claims.length`
+   * rather than leaving that row unscanned.
+   *
+   * Best-effort throughout: detection failing leaves every dropdown exactly as
+   * the user left it, which is the same state as declaring no projects.
+   */
+  useEffect(() => {
+    if (done === null || briefingId === null || declaredProjects.length === 0) return;
+    const claimIds = claims.map((c) => claimIdOf(c));
+    if (claimIds.length === 0) return;
+
+    let active = true;
+    try {
+      getBridge()
+        .claim.detectProjects(briefingId, claimIds)
+        .then((tags) => {
+          if (active) mergeServerLabels(tags);
+        })
+        .catch(() => undefined);
+    } catch {
+      // No bridge — nothing to detect against.
+    }
+
+    return () => {
+      active = false;
+    };
+    // `claims` itself is read but only its LENGTH is a dependency: while the
+    // stream is open `done` is null and this does not run, so the length only
+    // changes here when a straggler chunk lands after completion — exactly when
+    // a re-scan is wanted, and not once per streamed bullet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done, briefingId, declaredProjects.length, claims.length, mergeServerLabels]);
+
+  /**
+   * Label one claim, or clear it with `''` (the "No project" option's value).
+   *
+   * Optimistic: the dropdown moves immediately and rolls back if the write
+   * fails, because a select that visibly lags a click reads as broken. The
+   * rollback restores the PREVIOUS value rather than clearing, so a failed
+   * re-label does not look like a successful un-label. The choice is recorded in
+   * `inFlightLabels` until the write settles, so a detection round trip that is
+   * still in the air cannot overwrite it.
+   */
+  const labelClaim = useCallback(
+    (claimId: string, projectId: string): void => {
+      if (briefingId === null) return;
+      setLabelError(null);
+
+      const previous = claimProjects.get(claimId);
+      const chosen: ClaimLabel | null = projectId === '' ? null : { projectId, origin: 'user' };
+      inFlightLabels.current.set(claimId, chosen);
+      setClaimProjects((current) => {
+        const next = new Map(current);
+        if (chosen === null) next.delete(claimId);
+        else next.set(claimId, chosen);
+        return next;
+      });
+
+      const settle = (): void => {
+        inFlightLabels.current.delete(claimId);
+      };
+      const rollback = (reason: string): void => {
+        setLabelError(reason);
+        setClaimProjects((current) => {
+          const next = new Map(current);
+          if (previous === undefined) next.delete(claimId);
+          else next.set(claimId, previous);
+          return next;
+        });
+      };
+
+      try {
+        getBridge()
+          .claim.setProject(briefingId, claimId, projectId === '' ? null : projectId)
+          .then((result) => {
+            if (!result.ok) rollback(labelErrorText(result.reason));
+          })
+          .catch((cause: unknown) => rollback(describe(cause)))
+          .finally(settle);
+      } catch (cause) {
+        settle();
+        rollback(describe(cause));
+      }
+    },
+    [briefingId, claimProjects],
+  );
+
+  // Replays feedback already on file (FR-12) as claims appear, so a restart
+  // — or a still-open pending item resurfacing under a new `briefingId` — does
+  // not ask the user to re-judge a claim they already answered. Runs off
+  // `pending`/`claims` rather than once on mount: streamed claims arrive one
+  // chunk at a time, each with a key nothing has looked up yet.
+  //
+  // Keyed by `feedbackKeyOf` (artifact + sentence), not the bare artifact id: a
+  // reworded claim about the same thread is a different key, so it correctly
+  // gets no verdict back and is shown rather than pre-dismissed.
+  useEffect(() => {
+    const keys = new Set<string>();
+    for (const item of pending) {
+      if (item.citationArtifactId !== null) {
+        keys.add(feedbackKeyOf(item.citationArtifactId, item.description));
+      }
+    }
+    for (const c of claims) keys.add(feedbackKeyOf(claimIdOf(c), c.claim));
+
+    const newKeys = [...keys].filter((k) => !requestedVerdictIds.current.has(k));
+    if (newKeys.length === 0) return;
+    for (const k of newKeys) requestedVerdictIds.current.add(k);
+
+    try {
+      getBridge()
+        .feedback.claimVerdicts(newKeys)
         .then((result) => {
           setClaimVerdicts((current) => ({ ...current, ...result }));
         })
         .catch(() => {
           // Best-effort: a failed lookup just leaves those claims seeded as
           // unanswered, same as before this feature existed.
-          for (const id of newIds) requestedVerdictIds.current.delete(id);
+          for (const k of newKeys) requestedVerdictIds.current.delete(k);
         });
     } catch {
-      for (const id of newIds) requestedVerdictIds.current.delete(id);
+      for (const k of newKeys) requestedVerdictIds.current.delete(k);
     }
   }, [pending, claims]);
 
@@ -469,29 +742,77 @@ export function BriefingView({
    * INSIDE `FeedbackControls`' row (same line as Relevant/Not relevant/Wrong),
    * and only this function has the `FeedbackControls` element to put it in.
    * `bulletsForChunks` (streamed claims, no pending item behind them) calls
-   * this with no second argument, so nothing extra renders there.
+   * this with no `resolveAction`, so nothing extra renders there.
+   *
+   * `artifactId` drives the drill-down (`claim:drilldown` resolves provenance
+   * from it); `claimText` is only used to build the verdict key, which is
+   * scoped to the exact sentence so a verdict cannot leak onto a sibling or a
+   * later reworded claim about the same thread.
    */
   const renderDetail = useCallback(
-    (claimId: string, resolveAction?: ReactNode): ReactNode => {
+    (artifactId: string, claimText: string, resolveAction?: ReactNode): ReactNode => {
+      const feedbackKey = feedbackKeyOf(artifactId, claimText);
       const detail: ReactNode[] = [];
       // `unmountOnExit` keeps `DrillDownPanel` unmounted while closed, so its
       // `claim:drilldown` fetch only fires when the user actually opens it —
       // same as the previous conditional mount, now with a slide animation.
       detail.push(
-        <Collapse key="drilldown" in={openClaimId === claimId} unmountOnExit>
-          <DrillDownPanel claimId={claimId} onClose={() => setOpenClaimId(null)} />
+        <Collapse key="drilldown" in={openClaimId === artifactId} unmountOnExit>
+          <DrillDownPanel claimId={artifactId} onClose={() => setOpenClaimId(null)} />
         </Collapse>,
       );
       if (briefingId !== null) {
-        const verdict = claimVerdicts[claimId];
+        const verdict = claimVerdicts[feedbackKey];
+        // The project label sits on the same row as the verdict buttons and the
+        // resolve action, per this function's contract above. Rendered only when
+        // projects exist: an empty dropdown is a dead control, and the place to
+        // declare a project is onboarding, not here.
+        const labelEntry = claimProjects.get(artifactId);
+        const projectLabel =
+          declaredProjects.length === 0 ? null : (
+            <TextField
+              key="project"
+              select
+              size="small"
+              variant="standard"
+              label="Project"
+              value={labelEntry?.projectId ?? ''}
+              aria-label="Project for this item"
+              onChange={(e) => labelClaim(artifactId, e.target.value)}
+              // A machine guess (migration 013) is shown as a pre-selection but
+              // flagged as one — never presented as the user's own filing (X-2).
+              {...(labelEntry?.origin === 'auto'
+                ? { helperText: 'Suggested — pick to confirm' }
+                : {})}
+              sx={{ minWidth: 150, ml: 'auto' }}
+            >
+              {/* Explicitly selectable, not just an empty initial state: clearing
+                  a label the user set has to be reachable from the same control. */}
+              <MenuItem value="">
+                <em>No project</em>
+              </MenuItem>
+              {declaredProjects.map((project) => (
+                <MenuItem key={project.projectId} value={project.projectId}>
+                  {project.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          );
+
         detail.push(
           <FeedbackControls
             key="feedback"
             briefingId={briefingId}
-            claimId={claimId}
+            claimId={feedbackKey}
             {...(verdict === undefined ? {} : { initialVerdict: verdict })}
+            // Recorded locally the moment the store confirms, so a dismissed
+            // item leaves the list immediately instead of on the next refresh.
+            onVerdict={(next) =>
+              setClaimVerdicts((current) => ({ ...current, [feedbackKey]: next }))
+            }
           >
             {resolveAction}
+            {projectLabel}
           </FeedbackControls>,
         );
       } else if (resolveAction !== undefined) {
@@ -502,7 +823,7 @@ export function BriefingView({
       }
       return detail.length === 0 ? null : detail;
     },
-    [briefingId, openClaimId, claimVerdicts],
+    [briefingId, openClaimId, claimVerdicts, declaredProjects, claimProjects, labelClaim],
   );
 
   const bulletsForChunks = (chunks: readonly ClaimChunk[]): ReactNode[] =>
@@ -517,9 +838,13 @@ export function BriefingView({
           text={chunk.claim}
           claimId={claimId}
           citationLabel={CITATION_CHIP_LABEL} // standardized across every claim, see ClaimBullet.tsx
+          // The declared project behind this claim, resolved in the main
+          // process from the `belongs_to` edge (`ipc/briefing.ts`). Absent for
+          // an untagged thread, which renders no badge at all.
+          projectName={chunk.citation.projectName}
           onCitationClick={toggleDrilldown}
         >
-          {renderDetail(claimId)}
+          {renderDetail(claimId, chunk.claim)}
         </ClaimBullet>
       );
     });
@@ -535,19 +860,104 @@ export function BriefingView({
   // good here — it is not re-backed by an open pending item, so the check above
   // would otherwise let the streamed "Waiting on you" bullet reappear.
   const isLive = (chunk: ClaimChunk): boolean => !resolvedArtifactIds.has(claimIdOf(chunk));
-  const waitingOnYouClaims = claims.filter(
+  const allWaitingOnYouClaims = claims.filter(
     (chunk) =>
       sectionOf(chunk) === 'Waiting on you' &&
       !pendingArtifactIds.has(claimIdOf(chunk)) &&
       isLive(chunk),
   );
 
+  /**
+   * Does one artifact pass the project filter?
+   *
+   * `''` shows everything; {@link UNFILED_FILTER} shows only rows carrying no
+   * label; anything else is a `projectId`.
+   *
+   * Applied to EVERY section of the panel, obligations included, by explicit
+   * user decision. The risk that motivated exempting them still exists — a
+   * filter left on can hide something that is genuinely waiting on you — so it
+   * is answered by disclosure instead of by exemption: `filteredOutCount`
+   * counts across all three lists and is stated next to the control, with a
+   * one-click way out. AC-3's cap exemption for obligations is untouched; that
+   * is about the display cap, not about this filter.
+   */
+  const artifactPassesFilter = (artifactId: string | null): boolean => {
+    if (projectFilter === '') return true;
+    const entry = artifactId === null ? undefined : claimProjects.get(artifactId);
+    // Only a label the USER filed counts as "filed" here. An `'auto'` suggestion
+    // (migration 013) is a name match, not a decision — so an auto-only row
+    // still surfaces under "Not filed" for the user to confirm, and does not
+    // appear when filtering to the guessed project as though it had been filed
+    // there (X-2: inference may suggest, never decide).
+    const userFiled = entry?.origin === 'user' ? entry.projectId : undefined;
+    return projectFilter === UNFILED_FILTER
+      ? userFiled === undefined
+      : userFiled === projectFilter;
+  };
+
+  const matchesFilter = (chunk: ClaimChunk): boolean => artifactPassesFilter(claimIdOf(chunk));
+
   // P2: every non-obligation claim, in canonical section order. Sorted rather
   // than concatenated per section so one flat list still reads in the order the
   // four-section layout would have shown.
-  const changedClaims = CHANGED_SECTIONS.flatMap((section) =>
+  const allChangedClaims = CHANGED_SECTIONS.flatMap((section) =>
     claims.filter((chunk) => sectionOf(chunk) === section && isLive(chunk)),
   );
+
+  /**
+   * Claims the user has judged out of the way.
+   *
+   * `wrong` and `irrelevant` both mean "get this off my screen" — one says the
+   * line is not true, the other that it does not matter — so both dismiss.
+   * `relevant` does NOT: hiding what somebody just called useful, on a list
+   * they are in the middle of reading, would punish the one positive judgement
+   * the controls offer.
+   *
+   * Separate from `isLive` above, which drops what the user RESOLVED in this
+   * view. Both remove a bullet; they answer different questions, and a
+   * resolution is not a judgement about the claim.
+   *
+   * DURABLE, not just until the next refresh. `feedback.claimVerdicts` returns
+   * verdicts across every briefing, so a dismissal survives Refresh and a
+   * restart — which is what makes it a decision rather than a gesture.
+   *
+   * Scoped by `feedbackKeyOf` (artifact + exact sentence), NOT the bare
+   * artifact id: a thread recurs with a differently-worded claim in each
+   * briefing, and an artifact-scoped dismissal would silently hide every future
+   * development on that thread once one of its claims was marked away.
+   */
+  const isDismissed = (chunk: ClaimChunk): boolean => {
+    const verdict = claimVerdicts[feedbackKeyOf(claimIdOf(chunk), chunk.claim)];
+    return verdict === 'wrong' || verdict === 'irrelevant';
+  };
+
+  // The project filter and the dismissal filter compose: a changed row is shown
+  // only if it passes the project filter AND has not been judged away. Each
+  // count below is then true to what its heading sits above.
+  const projectFilteredChanged = allChangedClaims.filter(matchesFilter);
+  const waitingOnYouClaims = allWaitingOnYouClaims.filter(matchesFilter);
+  const filteredPending = pending.filter((item) =>
+    artifactPassesFilter(item.citationArtifactId),
+  );
+
+  const dismissedCount = projectFilteredChanged.filter(isDismissed).length;
+  const changedClaims = showDismissed
+    ? projectFilteredChanged
+    : projectFilteredChanged.filter((chunk) => !isDismissed(chunk));
+
+  /**
+   * Everything the PROJECT filter is hiding, across all three lists — the
+   * dismissal filter has its own separate `dismissedCount` disclosure. Stated
+   * outright next to the control: a filter left on that silently emptied the
+   * obligations section would read as "nothing needs you", the one false
+   * reassurance this panel must never give.
+   */
+  const filteredOutCount =
+    allChangedClaims.length -
+    projectFilteredChanged.length +
+    (allWaitingOnYouClaims.length - waitingOnYouClaims.length) +
+    (pending.length - filteredPending.length);
+
   const visibleChanged = showAllChanged ? changedClaims : changedClaims.slice(0, maxChangedItems);
   const hiddenChangedCount = changedClaims.length - visibleChanged.length;
 
@@ -567,6 +977,78 @@ export function BriefingView({
         Ranked by the projects you declared — nothing is learned from what you click. Early
         briefings will be rough; flagging a wrong item helps us fix the model offline.
       </Typography>
+
+      {/*
+        Panel-level filter: it governs every section below, so it sits above all
+        of them rather than inside one. Only offered once there is something to
+        filter BY — an empty dropdown is a dead control, and projects are
+        declared during onboarding, not here.
+      */}
+      {declaredProjects.length > 0 ? (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            flexWrap: 'wrap',
+            mb: 2,
+            pb: 2,
+            borderBottom: 1,
+            borderColor: 'divider',
+          }}
+        >
+          <TextField
+            select
+            size="small"
+            variant="standard"
+            label="Filter by project"
+            value={projectFilter}
+            aria-label="Filter this briefing by project"
+            onChange={(e) => setProjectFilter(e.target.value)}
+            sx={{ minWidth: 190 }}
+          >
+            <MenuItem value="">All projects</MenuItem>
+            <MenuItem value={UNFILED_FILTER}>
+              <em>Not filed</em>
+            </MenuItem>
+            {declaredProjects.map((project) => (
+              <MenuItem key={project.projectId} value={project.projectId}>
+                {project.name}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          {/*
+            Every section's heading reports its FILTERED count, so the hidden
+            remainder has to be stated outright — otherwise a filter left on
+            reads as "nothing changed" and, now that obligations are filtered
+            too, as "nothing needs you". That false reassurance is the one thing
+            this panel must never produce.
+          */}
+          {filteredOutCount > 0 ? (
+            <Typography role="status" sx={{ color: 'text.secondary', fontSize: '0.85rem' }}>
+              {filteredOutCount} item{filteredOutCount === 1 ? '' : 's'} hidden by this filter,
+              including anything waiting on you.{' '}
+              <Box
+                component="button"
+                type="button"
+                onClick={() => setProjectFilter('')}
+                sx={{
+                  background: 'none',
+                  border: 0,
+                  p: 0,
+                  font: 'inherit',
+                  color: 'primary.main',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                Show all
+              </Box>
+            </Typography>
+          ) : null}
+        </Box>
+      ) : null}
 
       {error !== null ? (
         <Typography role="alert" sx={{ color: 'error.main', mb: 1 }}>
@@ -596,8 +1078,13 @@ export function BriefingView({
             Could not mark resolved: {resolveError}
           </Typography>
         ) : null}
+        {labelError !== null ? (
+          <Typography role="alert" sx={{ color: 'error.main', mb: 1 }}>
+            Could not save the project: {labelError}
+          </Typography>
+        ) : null}
         <PendingSection
-          items={pending}
+          items={filteredPending}
           loading={pendingLoading}
           onCitationClick={toggleDrilldown}
           renderDetail={renderDetail}
@@ -647,6 +1134,20 @@ export function BriefingView({
             <Box sx={{ mt: 1.5 }}>
               <Button size="small" onClick={() => setShowAllChanged(true)}>
                 Show {hiddenChangedCount} more
+              </Button>
+            </Box>
+          ) : null}
+
+          {/* Dismissals are disclosed and reversible. Same rule as the overflow
+              above and as the OI-1 still-processing note: a count stays
+              visible, because something that disappears with no trace is
+              indistinguishable from a bug. */}
+          {dismissedCount > 0 ? (
+            <Box sx={{ mt: 1 }}>
+              <Button size="small" color="inherit" onClick={() => setShowDismissed((v) => !v)}>
+                {showDismissed
+                  ? 'Hide what you marked'
+                  : `${dismissedCount} hidden by your feedback — show`}
               </Button>
             </Box>
           ) : null}

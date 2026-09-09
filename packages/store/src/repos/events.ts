@@ -83,9 +83,11 @@ export class EventsRepo {
   private readonly stmtByThread: Database.Statement<[string]>;
   private readonly stmtWindow: Database.Statement<[number, number]>;
   private readonly stmtCountUnextracted: Database.Statement<[]>;
+  private readonly stmtUnextractedThreadCounts: Database.Statement<[]>;
   private readonly stmtListUnextracted: Database.Statement<[number]>;
   private readonly stmtNewestByPrefix: Database.Statement<[string, string]>;
   private readonly stmtNewestBySource: Database.Statement<[string]>;
+  private readonly stmtThreadExtractionState: Database.Statement<[string]>;
 
   constructor(private db: Database.Database) {
     this.stmtInsert = this.db.prepare(
@@ -112,13 +114,26 @@ export class EventsRepo {
        WHERE NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)`,
     );
 
+    // Per-thread unextracted counts, for the Layer-1 call estimate. Layer 1
+    // batches per thread, so the number of model calls the backlog costs is
+    // `SUM(ceil(threadCount / batchSize))`, not `total / batchSize`.
+    this.stmtUnextractedThreadCounts = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM events e
+        WHERE NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
+        GROUP BY e.thread_key`,
+    );
+
     // Same predicate as the count above, returning the rows themselves. SQLite
     // treats a negative LIMIT as "no limit", which is how the unbounded call is
     // expressed without a second prepared statement.
+    //
+    // NEWEST first, which reverses the original ordering. See
+    // {@link listUnextracted} for why: draining oldest-first is the right shape
+    // for a queue and the wrong shape for this product.
     this.stmtListUnextracted = this.db.prepare(
       `SELECT * FROM events e
        WHERE NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
-       ORDER BY occurred_at ASC, event_id ASC
+       ORDER BY occurred_at DESC, event_id DESC
        LIMIT ?`,
     );
 
@@ -132,6 +147,26 @@ export class EventsRepo {
     this.stmtNewestBySource = this.db.prepare(
       `SELECT MAX(occurred_at) AS m FROM events WHERE source = ?`,
     );
+
+    // LEFT JOIN, not a NOT EXISTS pair: one index-driven pass over the thread's
+    // events answers all three counts, and `idx_events_thread` plus
+    // `idx_extractions_event` (migration 009) make it a lookup rather than a scan.
+    this.stmtThreadExtractionState = this.db.prepare(
+      // COALESCE, not decoration: `SUM` over zero rows is NULL, so an unknown
+      // thread would otherwise return `unextracted: null` behind a `number`
+      // type — and `null === 0` is false, which would quietly route Layer 2's
+      // terminal-empty decision the wrong way.
+      `SELECT COUNT(*) AS events,
+              COALESCE(SUM(CASE WHEN x.event_id IS NULL THEN 1 ELSE 0 END), 0) AS unextracted,
+              COALESCE(
+                SUM(CASE WHEN x.class IS NOT NULL AND x.class <> 'noise' THEN 1 ELSE 0 END),
+                0
+              ) AS signal
+         FROM events e
+         LEFT JOIN extractions x ON x.event_id = e.event_id
+        WHERE e.thread_key = ?`,
+    );
+
   }
 
   /**
@@ -198,6 +233,37 @@ export class EventsRepo {
     return row?.m ?? null;
   }
 
+  /**
+   * Layer-1 progress for ONE thread: how many events it has, how many are still
+   * unextracted, and how many carry a class other than `noise`.
+   *
+   * Exists so Layer 2 can tell its two kinds of empty apart. Retrieval returning
+   * no chunks for a thread has two causes with opposite lifetimes: extraction is
+   * still in flight (transient — a chunk is coming), or every event on the
+   * thread was classified `noise` and therefore contributed no chunk at all
+   * (`layer1/extract.ts` only embeds non-noise events), which is permanent. The
+   * scheduler used to retry both for its whole budget and then park the thread,
+   * reporting a summarization failure for a conversation that simply had nothing
+   * in it.
+   *
+   * `unextracted === 0` is the load-bearing half, and it settles the question on
+   * its own: `extractEvent` upserts the chunk BEFORE writing the `extractions`
+   * row, so once every event on a thread has a row, every chunk that thread will
+   * ever have is already in the vector store. `signal` is reported alongside
+   * because it is the same query and it lets the caller say *why* the thread is
+   * empty rather than only that it is.
+   */
+  threadExtractionState(threadKey: string): {
+    events: number;
+    unextracted: number;
+    signal: number;
+  } {
+    const row = this.stmtThreadExtractionState.get(threadKey) as
+      | { events: number; unextracted: number; signal: number }
+      | undefined;
+    return row ?? { events: 0, unextracted: 0, signal: 0 };
+  }
+
   /** How many events still have no Layer-1 extraction — the ingestion backlog. */
   countUnextracted(): number {
     const row = this.stmtCountUnextracted.get() as { n: number } | undefined;
@@ -205,15 +271,58 @@ export class EventsRepo {
   }
 
   /**
-   * The events behind {@link countUnextracted}, oldest first — the work list for
-   * Layer 1 and for the periodic recovery sweep.
+   * Roughly how many Layer-1 **model calls** the current extraction backlog
+   * costs — `SUM(ceil(threadUnextracted / batchSize))` over every thread that
+   * has unextracted events.
+   *
+   * `countUnextracted() / batchSize` is wrong for a real mailbox: Layer 1
+   * batches a *thread's* events into one call (`extractThread`), so 400 events
+   * scattered across 300 threads is ~300 calls, not 100, and an ETA built on
+   * the event count alone understates the wait by the fan-out.
+   *
+   * Still an estimate: it counts structural-noise events the pre-filter drops
+   * for free, so it can overstate a noise-heavy backlog — the safe direction
+   * for a "how long will this take" number.
+   *
+   * @param batchSize - `MAX_BATCH_EVENTS` from `@cr/ai`, passed in so the store
+   *   keeps no dependency on the extractor. Values `< 1` are treated as `1`.
+   */
+  unextractedModelCallEstimate(batchSize: number): number {
+    const size = Math.max(1, Math.trunc(batchSize));
+    const rows = this.stmtUnextractedThreadCounts.all() as Array<{ cnt: number }>;
+    let calls = 0;
+    for (const { cnt } of rows) calls += Math.ceil(cnt / size);
+    return calls;
+  }
+
+  /**
+   * The events behind {@link countUnextracted}, **newest first** — the work list
+   * for Layer 1 and for the periodic recovery sweep.
    *
    * "Needs extraction" is defined solely as "has no row in `extractions`". That
    * is what makes the sweep self-healing: an event whose extraction failed the
    * schema check (no row written) or whose worker crashed mid-flight is
    * indistinguishable from one that was never attempted, and both are correctly
-   * re-queued. Ordering is oldest-first so a backlog drains in the order the
-   * user experienced it.
+   * re-queued.
+   *
+   * ### Why newest-first, against the obvious instinct
+   *
+   * This used to be oldest-first, "so a backlog drains in the order the user
+   * experienced it" — the right shape for a queue, and the wrong one for this
+   * product. Layer 1 costs ~21s per event of backfill on the shipped model, so a
+   * first connect with a real mailbox behind it takes HOURS before anything is
+   * briefable, and oldest-first spends every one of those hours on the mail the
+   * user cares about least. A returning user asks "what happened while I was
+   * out"; newest-first is what makes that window answerable in minutes.
+   *
+   * This is a THREAD-selection order, not a within-thread reading order. Each
+   * `extractions` row is written independently, and `WatermarkRepo`'s `DUE_SQL`
+   * holds a thread out of synthesis until EVERY event on it has a row — so a
+   * thread cannot be summarized from a partial read of itself. But the model
+   * DOES read a thread's events in sequence during batched Layer-1 extraction,
+   * so `Layer1Extractor.extractThread` re-sorts each thread's slice back into
+   * `(occurred_at, event_id)` order before prompting: this ordering decides
+   * which threads are reached first, not how any one of them is read.
    *
    * @param limit - Maximum rows to return. Omit for all of them.
    */

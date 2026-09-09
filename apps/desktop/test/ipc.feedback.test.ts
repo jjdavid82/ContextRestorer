@@ -19,6 +19,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from 'better-sqlite3';
+import { feedbackClaimKey } from '@cr/core';
 import { BriefingsRepo, FeedbackRepo, migrate, openDb } from '@cr/store';
 
 const handle = vi.fn();
@@ -27,11 +28,14 @@ vi.mock('electron', () => ({ ipcMain: { handle } }));
 const {
   CAUGHT_UP_CHANNEL,
   CLAIM_VERDICTS_CHANNEL,
+  EXPORT_CHANNEL,
   METRICS_CHANNEL,
   MAX_CLAIM_IDS,
   MAX_METRICS_IDS,
   MAX_NOTE_CHARS,
   SUBMIT_CHANNEL,
+  buildFeedbackExport,
+  exportFeedback,
   briefingMetrics,
   claimVerdicts,
   markBriefingCaughtUp,
@@ -424,7 +428,7 @@ describe('feedback:claimVerdicts', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('registerFeedbackHandlers', () => {
-  it('registers exactly the four channels the preload allowlists', () => {
+  it('registers exactly the five channels the preload allowlists', () => {
     registerFeedbackHandlers(makeDeps());
 
     expect(handle.mock.calls.map((call) => call[0] as string)).toEqual([
@@ -432,11 +436,16 @@ describe('registerFeedbackHandlers', () => {
       CAUGHT_UP_CHANNEL,
       METRICS_CHANNEL,
       CLAIM_VERDICTS_CHANNEL,
+      EXPORT_CHANNEL,
     ]);
     expect(SUBMIT_CHANNEL).toBe('feedback:submit');
     expect(CAUGHT_UP_CHANNEL).toBe('briefing:caughtUp');
     expect(METRICS_CHANNEL).toBe('briefing:metrics');
     expect(CLAIM_VERDICTS_CHANNEL).toBe('feedback:claimVerdicts');
+    // Registered unconditionally; it answers `not_available` when the reader
+    // is absent, so a missing dep is a legible result rather than a channel
+    // the renderer's invoke rejects on.
+    expect(EXPORT_CHANNEL).toBe('feedback:export');
   });
 
   it('routes an invoke through to the store', () => {
@@ -450,5 +459,138 @@ describe('registerFeedbackHandlers', () => {
 
     expect(submitHandler({}, { briefingId, verdict: 'relevant' })).toEqual({ ok: true });
     expect(feedback.listForBriefing(briefingId)).toHaveLength(1);
+  });
+});
+
+describe('feedback:export — the reader FR-7 always implied (option 1)', () => {
+  const verdicts = [
+    {
+      feedbackId: 'f-1',
+      briefingId: 'b-1',
+      claimId: 'c-1',
+      verdict: 'wrong' as const,
+      note: null,
+      createdAt: 1_000,
+      claimText: 'The team postponed the migration to Q4.',
+      section: 'Worth knowing',
+      citationArtifactId: 'art-1',
+    },
+    {
+      feedbackId: 'f-2',
+      briefingId: 'b-1',
+      claimId: 'c-2',
+      verdict: 'relevant' as const,
+      note: null,
+      createdAt: 2_000,
+      claimText: 'Priya shipped the retry logic.',
+      section: 'Worth knowing',
+      citationArtifactId: 'art-2',
+    },
+  ];
+
+  const reader = {
+    listLabeled: () => verdicts,
+    countByVerdict: () => ({ wrong: 1, relevant: 1 }),
+  };
+
+  it('turns the wrong verdicts into the shape a fixture negative takes', () => {
+    // `ground_truth.unsupported_claims` in the eval fixtures is exactly a list
+    // of sentences that must not be asserted. These are real, user-confirmed
+    // ones — the scarce input the ~70-example target actually needs.
+    const doc = buildFeedbackExport(verdicts, { wrong: 1, relevant: 1 }, 1_700_000_000_000);
+
+    expect(doc.unsupportedClaims).toEqual(['The team postponed the migration to Q4.']);
+    expect(doc.version).toBe(1);
+    expect(doc.verdicts).toHaveLength(2);
+  });
+
+  it('dedupes a claim marked wrong in several briefings', () => {
+    // A recurring claim can be judged repeatedly; a fixture wants the sentence
+    // once.
+    const twice = [verdicts[0]!, { ...verdicts[0]!, feedbackId: 'f-3', briefingId: 'b-2' }];
+
+    expect(buildFeedbackExport(twice, {}, 0).unsupportedClaims).toHaveLength(1);
+  });
+
+  it('skips a wrong verdict whose claim text is gone', () => {
+    // Retention can remove the claim. A negative with no sentence is not a
+    // label, and emitting an empty string would poison the fixture.
+    const orphan = [{ ...verdicts[0]!, claimText: null }];
+
+    expect(buildFeedbackExport(orphan, {}, 0).unsupportedClaims).toEqual([]);
+  });
+
+  it('writes a timestamped file and reports its path', async () => {
+    const written: Array<{ path: string; contents: string }> = [];
+    const result = await exportFeedback(
+      { ...makeDeps(), feedbackReader: reader, exportDir: '/data' },
+      async (path, contents) => {
+        written.push({ path, contents });
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.total).toBe(2);
+    // Timestamped rather than overwritten: an export is evidence, and silently
+    // replacing the previous one loses a comparison.
+    expect(result.path).toMatch(/^\/data\/feedback-export-.*\.json$/);
+    expect(JSON.parse(written[0]?.contents ?? '{}')).toMatchObject({ version: 1 });
+  });
+
+  it('end to end: a real "wrong" verdict on a streamed claim exports as an unsupported claim', async () => {
+    // The gap the fake `reader` above hides: `FeedbackControls` submits
+    // `feedbackClaimKey(artifactId, sentence)` as `claimId` (all it has on the
+    // wire), while `briefing_claims.claim_id` is a random uuid. Against the
+    // real repo the join has to reconstruct that key or every exported verdict
+    // comes back textless and `unsupportedClaims` is always empty.
+    const briefingId = seedBriefing('brief-e2e');
+    const sentence = 'The launch slipped to March.';
+    db.prepare(
+      `INSERT INTO artifacts (artifact_id, source, kind, external_ref, first_seen_at, last_seen_at)
+       VALUES ('art-e2e', 'slack', 'thread', 'ref-e2e', 1000, 1000)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO briefing_claims (claim_id, briefing_id, ordinal, section, text, citation_artifact_id)
+       VALUES ('uuid-random-1', ?, 1, 'Worth knowing', ?, 'art-e2e')`,
+    ).run(briefingId, sentence);
+
+    expect(
+      submitFeedback(
+        { briefingId, claimId: feedbackClaimKey('art-e2e', sentence), verdict: 'wrong' },
+        makeDeps(),
+      ),
+    ).toEqual({ ok: true });
+
+    const result = await exportFeedback(
+      { ...makeDeps(), feedbackReader: feedback, exportDir: '/data' },
+      async () => {},
+    );
+
+    expect(result.ok).toBe(true);
+    const doc = buildFeedbackExport(feedback.listLabeled(), feedback.countByVerdict(), 0);
+    expect(doc.unsupportedClaims).toEqual([sentence]);
+  });
+
+  it('reports not_available rather than writing an empty file', async () => {
+    // An export with no reader would produce a document saying "you have given
+    // no feedback", which is a different and false claim.
+    const written: string[] = [];
+    const result = await exportFeedback(makeDeps(), async (path) => {
+      written.push(path);
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'not_available' });
+    expect(written).toEqual([]);
+  });
+
+  it('degrades a write failure to a reported error, never a throw', async () => {
+    const result = await exportFeedback(
+      { ...makeDeps(), feedbackReader: reader, exportDir: '/data' },
+      async () => {
+        throw new Error('disk full');
+      },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'internal_error' });
   });
 });

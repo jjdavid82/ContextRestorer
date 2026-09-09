@@ -177,7 +177,14 @@ export interface ResolutionDeltaWriter {
  */
 export interface StakesReader {
   relatedIds(fromId: string, rel: string): string[];
-  getProject(projectId: string): { stakesWeight: number } | undefined;
+  /**
+   * `name` is optional so every existing test double — which only ever needed
+   * the weight — still satisfies this interface. A `GraphRepo` returns a full
+   * `Project` and therefore always carries it; a double that omits it simply
+   * yields no project label, which the renderer already has to handle for the
+   * untagged case.
+   */
+  getProject(projectId: string): { stakesWeight: number; name?: string } | undefined;
 }
 
 /**
@@ -309,6 +316,38 @@ function stakesWeightFor(
 }
 
 /**
+ * The name of the project an artifact belongs to, for the item's label.
+ *
+ * Until now the project was invisible to the user: it decided WHICH items
+ * surfaced and in WHAT ORDER (it is the largest ranking weight after
+ * obligation), while nothing on screen said so — the one ranking signal the
+ * user declared themselves, and the one they had no way to verify was working.
+ *
+ * Picks the HIGHEST-stakes project when an artifact belongs to several, which
+ * is deliberately the same rule {@link stakesWeightFor} applies. The label has
+ * to name the project that actually moved this item up the list; showing a
+ * different one would be worse than showing none.
+ *
+ * `undefined` for an untagged artifact — the ordinary case, not a defect.
+ */
+export function projectNameFor(
+  graph: StakesReader | undefined,
+  artifactId: string | null,
+): string | undefined {
+  if (graph === undefined || artifactId === null) return undefined;
+
+  let best: { weight: number; name: string } | undefined;
+  for (const projectId of graph.relatedIds(artifactId, PROJECT_REL)) {
+    const project = graph.getProject(projectId);
+    const name = project?.name?.trim();
+    if (project === undefined || name === undefined || name === '') continue;
+    const weight = Number.isFinite(project.stakesWeight) ? project.stakesWeight : 0;
+    if (best === undefined || weight > best.weight) best = { weight, name };
+  }
+  return best?.name;
+}
+
+/**
  * Order open items by what they cost the user to ignore, and project them onto
  * the renderer's view shape.
  *
@@ -357,16 +396,22 @@ export function rankPendingItems(
   // and have no business crossing the context bridge. `citationArtifactId` and
   // `confidence` DO cross, so the renderer can paint the low-confidence flag and
   // wire the drill-down without a second round trip.
-  return scored.map(({ item }) => ({
-    pendingId: item.pendingId,
-    description: item.description,
-    confidence: item.confidence,
-    citationArtifactId: item.citationArtifactId,
-    // P4: verbatim evidence, inline, for obligations only. Resolved here rather
-    // than by a second round trip per item — this path is the first-paint read
-    // and must stay one screenful in one call.
-    sourceQuote: sourceQuoteFor(item.citationArtifactId, sources?.artifacts, sources?.events),
-  }));
+  return scored.map(({ item }) => {
+    const projectName = projectNameFor(graph, item.citationArtifactId);
+    return {
+      pendingId: item.pendingId,
+      description: item.description,
+      confidence: item.confidence,
+      citationArtifactId: item.citationArtifactId,
+      // P4: verbatim evidence, inline, for obligations only. Resolved here
+      // rather than by a second round trip per item — this path is the
+      // first-paint read and must stay one screenful in one call.
+      sourceQuote: sourceQuoteFor(item.citationArtifactId, sources?.artifacts, sources?.events),
+      // `exactOptionalPropertyTypes`: an untagged item has no KEY, not a key
+      // holding `undefined`.
+      ...(projectName === undefined ? {} : { projectName }),
+    };
+  });
 }
 
 /**
@@ -606,6 +651,12 @@ export function citationForArtifact(
   artifactId: string,
   artifacts: ArtifactReader,
   events: ThreadEventReader,
+  /**
+   * Supplies the declared project this artifact belongs to, for the item's
+   * label. Optional and last, so every existing call site stays valid and a
+   * host wired without a graph simply renders no project.
+   */
+  graph?: StakesReader,
 ): BriefingChunk['citation'] | undefined {
   const artifact = artifacts.getArtifact(artifactId);
   if (artifact === undefined) return undefined;
@@ -614,12 +665,15 @@ export function citationForArtifact(
   const externalUrl =
     latest === undefined ? undefined : deepLinkFor(latest.source, latest.sourceEventId);
 
+  const projectName = projectNameFor(graph, artifactId);
+
   return {
     eventId: latest?.eventId ?? '',
     artifactId,
     source: latest?.source ?? artifact.source,
     // `exactOptionalPropertyTypes`: an absent link is an absent KEY.
     ...(externalUrl !== undefined ? { externalUrl } : {}),
+    ...(projectName === undefined ? {} : { projectName }),
   };
 }
 
@@ -656,7 +710,12 @@ export function getBriefingSnapshot(arg: unknown, deps: BriefingHandlerDeps): Br
     const claims: BriefingChunk[] = [];
     for (const claim of deps.briefings.listClaims(briefingId)) {
       if (claim.citationArtifactId === null) continue;
-      const citation = citationForArtifact(claim.citationArtifactId, deps.artifacts, deps.events);
+      const citation = citationForArtifact(
+        claim.citationArtifactId,
+        deps.artifacts,
+        deps.events,
+        deps.graph,
+      );
       if (citation === undefined) continue;
       claims.push({ briefingId, section: claim.section, claim: claim.text, citation });
     }
