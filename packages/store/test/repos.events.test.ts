@@ -197,11 +197,13 @@ describe('EventsRepo.listUnextracted', () => {
     repo.insertIfAbsent(makeEvent({ eventId: 'e-3', sourceEventId: 's-3', occurredAt: 3_000 }));
   };
 
-  it('returns only events with no extraction row, oldest first', () => {
+  it('returns only events with no extraction row, newest first', () => {
     seedThree();
     insertExtraction('x-2', 'e-2');
 
-    expect(repo.listUnextracted().map((e) => e.eventId)).toEqual(['e-1', 'e-3']);
+    // Newest first (F2): the window a returning user asks about is what has to
+    // be extractable in minutes, not the oldest mail in the mailbox.
+    expect(repo.listUnextracted().map((e) => e.eventId)).toEqual(['e-3', 'e-1']);
   });
 
   it('agrees with countUnextracted', () => {
@@ -214,7 +216,9 @@ describe('EventsRepo.listUnextracted', () => {
   it('honours a limit, and distinguishes a limit of 0 from an absent one', () => {
     seedThree();
 
-    expect(repo.listUnextracted(2).map((e) => e.eventId)).toEqual(['e-1', 'e-2']);
+    // The limit takes the NEWEST n, which is what makes a bounded sweep on a
+    // huge backlog still cover the window the user is asking about.
+    expect(repo.listUnextracted(2).map((e) => e.eventId)).toEqual(['e-3', 'e-2']);
     expect(repo.listUnextracted(0)).toEqual([]);
     expect(repo.listUnextracted()).toHaveLength(3);
   });

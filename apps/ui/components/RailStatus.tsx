@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { getBridge, hasBridge } from '../lib/bridge';
+import { formatEta, formatLag } from '../lib/pipelineFormat';
 import type { PipelineStatus, SourceHealth, SourceId } from '../types/bridge';
 
 /**
@@ -57,17 +58,16 @@ const RefreshIcon = (
   </svg>
 );
 
-function formatLag(lagMs: number | null): string {
-  if (lagMs === null) return 'lag unknown';
-  if (lagMs < 60_000) return 'up to date';
-  const minutes = Math.round(lagMs / 60_000);
-  return minutes < 60 ? `${minutes}m behind` : `${Math.round(minutes / 60)}h behind`;
-}
-
 function pipelineLine(status: PipelineStatus | null): string {
   if (status === null) return 'Waiting for first status…';
   if (status.extractionBacklog > 0) {
-    return `Reading ${status.extractionBacklog} new message${status.extractionBacklog === 1 ? '' : 's'}…`;
+    const head = `Reading ${status.extractionBacklog} new message${status.extractionBacklog === 1 ? '' : 's'}…`;
+    // Appended only once the estimate is earned: `null` means "no completed
+    // Layer-1 calls to average yet", which is the first-run state, and the
+    // count alone is more honest there than a guess.
+    return status.extractionEtaMs === null
+      ? head
+      : `${head} ${formatEta(status.extractionEtaMs)} left`;
   }
   if (status.synthesisInFlight > 0) {
     return `Summarizing ${status.synthesisInFlight} conversation${status.synthesisInFlight === 1 ? '' : 's'}…`;

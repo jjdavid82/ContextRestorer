@@ -385,9 +385,13 @@ describe('findUnextractedEvents', () => {
 
     // `e-never` was never attempted (the crash case). Both it and the
     // schema-failed event are outstanding; the successful one is not.
-    expect(findUnextractedEvents(events).map((e) => e.eventId)).toEqual(['e-fail', 'e-never']);
+    // Newest first (F2): `e-never` occurred at 3_000, `e-fail` at 2_000. The
+    // order is part of the contract now — a bounded sweep must cover the window
+    // a returning user is asking about, not the oldest mail in the mailbox.
+    expect(findUnextractedEvents(events).map((e) => e.eventId)).toEqual(['e-never', 'e-fail']);
 
-    // A sweep can bound its batch size without losing the oldest-first order.
-    expect(findUnextractedEvents(events, 1).map((e) => e.eventId)).toEqual(['e-fail']);
+    // A bounded sweep therefore takes the NEWEST of the outstanding events,
+    // which is the whole point of the reversal.
+    expect(findUnextractedEvents(events, 1).map((e) => e.eventId)).toEqual(['e-never']);
   });
 });

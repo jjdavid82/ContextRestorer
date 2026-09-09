@@ -567,8 +567,20 @@ export class Layer1Extractor {
    *
    * Exactly ONE `ai_calls` row per batched call. That row now represents N
    * events, which is the honest accounting: it was one call.
+   *
+   * ### Input is sorted chronologically here
+   *
+   * `extractBatch` numbers the events `[event 0]…[event N]` in array order and
+   * the batch boundaries are `slice`d in that order, so the model reads the
+   * conversation in whatever order the caller passed. The recovery sweep feeds
+   * `EventsRepo.listUnextracted()`, which is `occurred_at DESC` (F2: spend a
+   * bounded budget on the recent window), so without this sort a multi-event
+   * thread would be classified back-to-front — "Done, attached." before "Can
+   * you send the report?" — degrading obligation and reference detection. The
+   * sort is stable on `(occurred_at, event_id)` and does not change the
+   * one-row-per-event output contract.
    */
-  async extractThread(events: readonly Event[], traceId: string): Promise<ThreadExtractResult> {
+  async extractThread(input: readonly Event[], traceId: string): Promise<ThreadExtractResult> {
     const result: ThreadExtractResult = {
       extracted: 0,
       prefiltered: 0,
@@ -576,7 +588,11 @@ export class Layer1Extractor {
       abandoned: 0,
       modelCalls: 0,
     };
-    if (events.length === 0) return result;
+    if (input.length === 0) return result;
+
+    const events = [...input].sort(
+      (a, b) => a.occurredAt - b.occurredAt || (a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0),
+    );
 
     // The pre-filter runs FIRST and per event, so structural noise never enters
     // a prompt at all — batching must not smuggle back the cost P3 part 1
@@ -802,12 +818,22 @@ export class Layer1Extractor {
  * `@cr/store`.
  */
 export interface UnextractedEventSource {
-  /** Events with no `extractions` row, oldest first. */
+  /** Events with no `extractions` row, newest first (see {@link findUnextractedEvents}). */
   listUnextracted(limit?: number): Event[];
 }
 
 /**
- * Events that still need Layer-1 extraction, oldest first.
+ * Events that still need Layer-1 extraction, **newest first**.
+ *
+ * The ordering is the store's (`EventsRepo.listUnextracted`) and it is
+ * deliberate (F2): extraction costs roughly 21s per backfilled event, so a
+ * bounded sweep must spend its budget on the window a returning user is asking
+ * about rather than on the oldest mail in the mailbox. That newest-first order
+ * decides which THREADS the sweep reaches first; each thread's own events are
+ * re-sorted chronologically by {@link Layer1Extractor.extractThread} before the
+ * model sees them, so a conversation is never classified back-to-front.
+ * `WatermarkRepo`'s `DUE_SQL` still holds a thread out of synthesis until every
+ * event on it has a row.
  *
  * This is the recovery half of Task 2.2 Step 4. It is the *only* definition of
  * "needs extraction" in the system: an event is outstanding exactly when no

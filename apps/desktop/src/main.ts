@@ -1614,6 +1614,10 @@ if (!app.requestSingleInstanceLock()) {
         events,
         watermarks: watermarks!,
         scheduler: layer12.scheduler,
+        // F2: the measured Layer-1 pace behind the extraction ETA. The same
+        // `ai_calls` sink every layer writes to, so the estimate is derived
+        // from this machine's real calls rather than a guess.
+        aiCalls,
         debounce: config!.debounce,
         maxAttempts: DEFAULT_MAX_ATTEMPTS,
         clock: systemClock,

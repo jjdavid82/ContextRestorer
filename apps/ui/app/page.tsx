@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { BriefingView } from '../components/BriefingView';
 import { PageToolbar } from '../components/PageToolbar';
+import { WarmingNotice } from '../components/WarmingNotice';
 import { getBridge } from '../lib/bridge';
 import {
   parseWindowStart,
@@ -246,6 +247,13 @@ export default function HomePage(): ReactNode {
             Briefing failed: {briefingError}
           </Typography>
         ) : null}
+
+        {/* F2: above the briefing, not instead of it. A backlog does not make
+            the briefing wrong — it makes it INCOMPLETE, and the deterministic
+            path still renders whatever deltas already exist. Saying so is the
+            difference between "this app is still reading your mail" and "this
+            app does not work", which are indistinguishable on an empty page. */}
+        <WarmingNotice />
 
         {/* This page owns the request (the OI-3 gate above is the single place
             that decides whether a briefing may be generated); `BriefingView`

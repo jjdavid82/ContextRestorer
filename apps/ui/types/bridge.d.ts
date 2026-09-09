@@ -387,6 +387,15 @@ export interface PipelineStatus {
   synthesisInFlight: number;
   /** Threads the scheduler gave up on after `maxAttempts` failures — "look at this". */
   parkedThreads: number;
+  /**
+   * Roughly how long the extraction backlog will take to clear, in ms; `null`
+   * when there is no backlog or not enough measured evidence to estimate one.
+   *
+   * `null` means "cannot say yet", never "instant" — a first-run user has no
+   * completed Layer-1 calls to average over, and the renderer must show the
+   * count alone rather than invent a promise.
+   */
+  extractionEtaMs: number | null;
 }
 
 /** Time window a briefing should cover (epoch milliseconds), half-open. */
