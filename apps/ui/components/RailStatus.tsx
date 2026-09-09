@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { getBridge, hasBridge } from '../lib/bridge';
+import { formatEta, formatLag } from '../lib/pipelineFormat';
 import type { PipelineStatus, SourceHealth, SourceId } from '../types/bridge';
 
 /**
@@ -56,30 +57,6 @@ const RefreshIcon = (
     <path d="M21 4v5h-5" />
   </svg>
 );
-
-function formatLag(lagMs: number | null): string {
-  if (lagMs === null) return 'lag unknown';
-  if (lagMs < 60_000) return 'up to date';
-  const minutes = Math.round(lagMs / 60_000);
-  return minutes < 60 ? `${minutes}m behind` : `${Math.round(minutes / 60)}h behind`;
-}
-
-/**
- * A duration as the roughest honest unit (F2).
- *
- * Rounded hard on purpose. The ETA is an order-of-magnitude answer to "is this
- * minutes or hours" — the only question a waiting user actually has — and
- * quoting it to the minute past the first hour would dress a rough estimate up
- * as a schedule.
- */
-export function formatEta(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return 'under a minute';
-  if (minutes < 60) return `~${minutes} min`;
-  const hours = ms / 3_600_000;
-  if (hours < 10) return `~${Math.round(hours * 2) / 2} h`;
-  return `~${Math.round(hours)} h`;
-}
 
 function pipelineLine(status: PipelineStatus | null): string {
   if (status === null) return 'Waiting for first status…';

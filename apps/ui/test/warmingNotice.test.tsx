@@ -98,7 +98,9 @@ describe('WarmingNotice', () => {
 
     h.emit(status(420, 90 * 60_000));
 
-    expect(screen.getByText(/about ~1\.5 h to go/)).toBeTruthy();
+    // `~` is the only hedge — no "about ~1.5 h".
+    expect(screen.getByText(/— ~1\.5 h to go/)).toBeTruthy();
+    expect(screen.queryByText(/about ~/)).toBeNull();
   });
 
   it('explains that newest messages are read first', () => {

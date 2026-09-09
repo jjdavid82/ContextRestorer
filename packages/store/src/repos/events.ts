@@ -83,6 +83,7 @@ export class EventsRepo {
   private readonly stmtByThread: Database.Statement<[string]>;
   private readonly stmtWindow: Database.Statement<[number, number]>;
   private readonly stmtCountUnextracted: Database.Statement<[]>;
+  private readonly stmtUnextractedThreadCounts: Database.Statement<[]>;
   private readonly stmtListUnextracted: Database.Statement<[number]>;
   private readonly stmtNewestByPrefix: Database.Statement<[string, string]>;
   private readonly stmtNewestBySource: Database.Statement<[string]>;
@@ -111,6 +112,15 @@ export class EventsRepo {
     this.stmtCountUnextracted = this.db.prepare(
       `SELECT COUNT(*) AS n FROM events e
        WHERE NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)`,
+    );
+
+    // Per-thread unextracted counts, for the Layer-1 call estimate. Layer 1
+    // batches per thread, so the number of model calls the backlog costs is
+    // `SUM(ceil(threadCount / batchSize))`, not `total / batchSize`.
+    this.stmtUnextractedThreadCounts = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM events e
+        WHERE NOT EXISTS (SELECT 1 FROM extractions x WHERE x.event_id = e.event_id)
+        GROUP BY e.thread_key`,
     );
 
     // Same predicate as the count above, returning the rows themselves. SQLite
@@ -261,6 +271,31 @@ export class EventsRepo {
   }
 
   /**
+   * Roughly how many Layer-1 **model calls** the current extraction backlog
+   * costs — `SUM(ceil(threadUnextracted / batchSize))` over every thread that
+   * has unextracted events.
+   *
+   * `countUnextracted() / batchSize` is wrong for a real mailbox: Layer 1
+   * batches a *thread's* events into one call (`extractThread`), so 400 events
+   * scattered across 300 threads is ~300 calls, not 100, and an ETA built on
+   * the event count alone understates the wait by the fan-out.
+   *
+   * Still an estimate: it counts structural-noise events the pre-filter drops
+   * for free, so it can overstate a noise-heavy backlog — the safe direction
+   * for a "how long will this take" number.
+   *
+   * @param batchSize - `MAX_BATCH_EVENTS` from `@cr/ai`, passed in so the store
+   *   keeps no dependency on the extractor. Values `< 1` are treated as `1`.
+   */
+  unextractedModelCallEstimate(batchSize: number): number {
+    const size = Math.max(1, Math.trunc(batchSize));
+    const rows = this.stmtUnextractedThreadCounts.all() as Array<{ cnt: number }>;
+    let calls = 0;
+    for (const { cnt } of rows) calls += Math.ceil(cnt / size);
+    return calls;
+  }
+
+  /**
    * The events behind {@link countUnextracted}, **newest first** — the work list
    * for Layer 1 and for the periodic recovery sweep.
    *
@@ -280,10 +315,14 @@ export class EventsRepo {
    * user cares about least. A returning user asks "what happened while I was
    * out"; newest-first is what makes that window answerable in minutes.
    *
-   * Nothing downstream depends on extraction order. Each event is classified
-   * independently, and `WatermarkRepo`'s `DUE_SQL` holds a thread out of
-   * synthesis until EVERY event on it has a row — so a thread cannot be
-   * summarized from a partial, out-of-order read of itself.
+   * This is a THREAD-selection order, not a within-thread reading order. Each
+   * `extractions` row is written independently, and `WatermarkRepo`'s `DUE_SQL`
+   * holds a thread out of synthesis until EVERY event on it has a row — so a
+   * thread cannot be summarized from a partial read of itself. But the model
+   * DOES read a thread's events in sequence during batched Layer-1 extraction,
+   * so `Layer1Extractor.extractThread` re-sorts each thread's slice back into
+   * `(occurred_at, event_id)` order before prompting: this ordering decides
+   * which threads are reached first, not how any one of them is read.
    *
    * @param limit - Maximum rows to return. Omit for all of them.
    */

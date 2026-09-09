@@ -283,6 +283,39 @@ describe('Layer1Extractor.extractThread', () => {
     expect(prompt.indexOf('[event 1]')).toBeLessThan(close);
   });
 
+  it('reads a thread chronologically even when handed it newest-first', async () => {
+    // The recovery sweep feeds `listUnextracted()`, which is `occurred_at DESC`.
+    // Without the sort in `extractThread`, the model would see "message number
+    // 3" before "message number 1" and classify the conversation backwards.
+    generateJson.mockResolvedValue(batchOf([0, 1, 2]));
+
+    await makeExtractor().extractThread([seed(3), seed(1), seed(2)], 'trace-1');
+
+    const prompt = generateJson.mock.calls[0]?.[0]?.prompt as string;
+    const p1 = prompt.indexOf('message number 1');
+    const p2 = prompt.indexOf('message number 2');
+    const p3 = prompt.indexOf('message number 3');
+    expect(p1).toBeGreaterThan(-1);
+    expect(p1).toBeLessThan(p2);
+    expect(p2).toBeLessThan(p3);
+  });
+
+  it('splits batches on chronological order, not arrival order', async () => {
+    // 5 events over 2 batches (MAX_BATCH_EVENTS = 4): the first batch must be
+    // events 1-4, not whatever 4 arrived first.
+    generateJson.mockResolvedValue(batchOf([0, 1, 2, 3]));
+
+    await makeExtractor().extractThread(
+      [seed(5), seed(3), seed(1), seed(4), seed(2)],
+      'trace-1',
+    );
+
+    const firstBatchPrompt = generateJson.mock.calls[0]?.[0]?.prompt as string;
+    expect(firstBatchPrompt).toContain('message number 1');
+    expect(firstBatchPrompt).toContain('message number 4');
+    expect(firstBatchPrompt).not.toContain('message number 5');
+  });
+
   it('writes exactly one ai_calls row per batch, not per event', async () => {
     generateJson.mockResolvedValue(batchOf([0, 1, 2]));
 

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { RailStatus, formatEta } from '../components/RailStatus';
+import { RailStatus } from '../components/RailStatus';
 import type {
   ContextRestorerBridge,
   PipelineStatus,
@@ -308,15 +308,3 @@ describe('the extraction ETA (F2)', () => {
   });
 });
 
-describe('formatEta', () => {
-  it('rounds to the roughest honest unit', () => {
-    // Deliberately coarse past the first hour: the ETA answers "minutes or
-    // hours", and quoting it to the minute would dress an estimate as a schedule.
-    expect(formatEta(20_000)).toBe('under a minute');
-    expect(formatEta(9 * 60_000)).toBe('~9 min');
-    expect(formatEta(59 * 60_000)).toBe('~59 min');
-    expect(formatEta(90 * 60_000)).toBe('~1.5 h');
-    expect(formatEta(3 * 3_600_000)).toBe('~3 h');
-    expect(formatEta(14 * 3_600_000)).toBe('~14 h');
-  });
-});

@@ -4,8 +4,8 @@ import Alert from '@mui/material/Alert';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { getBridge, hasBridge } from '../lib/bridge';
+import { formatEta } from '../lib/pipelineFormat';
 import type { PipelineStatus } from '../types/bridge';
-import { formatEta } from './RailStatus';
 
 /**
  * "Still reading your backlog" — the first-run contract (F2).
@@ -45,7 +45,9 @@ export function WarmingNotice(): ReactNode {
   return (
     <Alert severity="info" sx={{ mb: 2 }}>
       Still reading {messages} from your sources
-      {status.extractionEtaMs === null ? '' : ` — about ${formatEta(status.extractionEtaMs)} to go`}.
+      {/* `formatEta` already returns a hedged phrase ("~12 min", "under a
+          minute") — no "about" in front of it. */}
+      {status.extractionEtaMs === null ? '' : ` — ${formatEta(status.extractionEtaMs)} to go`}.
       Newest messages are read first, so recent conversations show up before older ones. Your
       briefing fills in as they land; nothing is lost while you wait.
     </Alert>

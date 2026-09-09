@@ -70,17 +70,19 @@ export interface PipelineStatus {
    * false promise this field exists to replace. The renderer shows the count
    * alone until an estimate is earned.
    *
-   * Estimated as `ceil(backlog / MAX_BATCH_EVENTS) × recent mean call latency`,
-   * because Layer 1 batches a thread's events into one model call. It is an
-   * order-of-magnitude answer to "is this minutes or hours", which is the
-   * question a new user actually has, and it is deliberately not presented as
-   * more precise than that.
+   * Estimated as `estimatedModelCalls × recent mean call latency`, where the
+   * call count is `SUM(ceil(threadEvents / MAX_BATCH_EVENTS))` — Layer 1
+   * batches a *thread's* events into one call, so a backlog spread thin across
+   * many threads costs far more calls than `backlog / MAX_BATCH_EVENTS` would
+   * suggest. It is an order-of-magnitude answer to "is this minutes or hours",
+   * which is the question a new user actually has, and it is deliberately not
+   * presented as more precise than that.
    */
   extractionEtaMs: number | null;
 }
 
 export interface PipelineStatusDeps {
-  events: Pick<EventsRepo, 'countUnextracted'>;
+  events: Pick<EventsRepo, 'countUnextracted' | 'unextractedModelCallEstimate'>;
   watermarks: Pick<WatermarkRepo, 'due'>;
   scheduler: Pick<DebounceScheduler, 'pending'>;
   /**
@@ -111,7 +113,7 @@ export function computePipelineStatus(deps: PipelineStatusDeps): PipelineStatus 
 
   return {
     extractionBacklog: backlog,
-    extractionEtaMs: estimateExtractionEta(backlog, deps.aiCalls),
+    extractionEtaMs: estimateExtractionEta(deps.events, deps.aiCalls),
     // Queued = due and still within the retry budget.
     synthesisDue: dueNow.filter((t) => t.attempts < deps.maxAttempts).length,
     synthesisInFlight: inFlight.size,
@@ -123,18 +125,28 @@ export function computePipelineStatus(deps: PipelineStatusDeps): PipelineStatus 
 }
 
 /**
- * Turn a backlog into a wall-clock estimate, or `null` when it cannot be
- * honestly estimated.
+ * Turn the extraction backlog into a wall-clock estimate, or `null` when it
+ * cannot be honestly estimated.
  *
  * Exported for tests: this is the one piece of arithmetic in this module a
  * regression could quietly get wrong by an order of magnitude.
  */
 export function estimateExtractionEta(
-  backlog: number,
+  events: Pick<EventsRepo, 'unextractedModelCallEstimate'>,
   aiCalls?: Pick<AiCallsRepo, 'recentMeanLatencyMs'>,
 ): number | null {
-  if (backlog <= 0) return null;
   if (aiCalls === undefined) return null;
+
+  let calls: number;
+  try {
+    // Per-thread batching: a backlog spread across many threads costs one call
+    // per (partial) batch per thread, not `total / MAX_BATCH_EVENTS`.
+    calls = events.unextractedModelCallEstimate(MAX_BATCH_EVENTS);
+  } catch (error) {
+    console.error('[pipeline] extraction backlog read failed', error);
+    return null;
+  }
+  if (calls <= 0) return null;
 
   let meanMs: number | null;
   try {
@@ -146,9 +158,7 @@ export function estimateExtractionEta(
   }
   if (meanMs === null || meanMs <= 0) return null;
 
-  // Layer 1 sends up to `MAX_BATCH_EVENTS` events per model call, so the
-  // backlog costs calls, not events. Ceil: a partial batch still costs a call.
-  return Math.ceil(backlog / MAX_BATCH_EVENTS) * meanMs;
+  return calls * meanMs;
 }
 
 export interface PipelineStatusPushOptions {
