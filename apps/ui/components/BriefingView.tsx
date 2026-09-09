@@ -747,7 +747,7 @@ export function BriefingView({
   // good here — it is not re-backed by an open pending item, so the check above
   // would otherwise let the streamed "Waiting on you" bullet reappear.
   const isLive = (chunk: ClaimChunk): boolean => !resolvedArtifactIds.has(claimIdOf(chunk));
-  const waitingOnYouClaims = claims.filter(
+  const allWaitingOnYouClaims = claims.filter(
     (chunk) =>
       sectionOf(chunk) === 'Waiting on you' &&
       !pendingArtifactIds.has(claimIdOf(chunk)) &&
@@ -779,7 +779,7 @@ export function BriefingView({
   // P2: every non-obligation claim, in canonical section order. Sorted rather
   // than concatenated per section so one flat list still reads in the order the
   // four-section layout would have shown.
-  const changedClaims = CHANGED_SECTIONS.flatMap((section) =>
+  const allChangedClaims = CHANGED_SECTIONS.flatMap((section) =>
     claims.filter((chunk) => sectionOf(chunk) === section && isLive(chunk)),
   );
 
