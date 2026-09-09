@@ -127,7 +127,13 @@ function installBridge(
   const openExternal = vi.fn(async () => ({ ok: true }));
 
   const bridge: ContextRestorerBridge = {
-    onboarding: { status: vi.fn(async () => ({ sourcesConnected: [], projectsDeclared: [], ollamaReady: true })) },
+    onboarding: { status: vi.fn(async () => ({
+        sourcesConnected: [],
+        projectsDeclared: [],
+        ollamaReady: true,
+        minDeclaredProjects: 3,
+      })),
+    },
     oauth: { connect: vi.fn(async () => ({ ok: true })), revoke: vi.fn(async () => ({ ok: true })) },
     projects: {
       suggest: vi.fn(async () => ({ candidates: [] })),

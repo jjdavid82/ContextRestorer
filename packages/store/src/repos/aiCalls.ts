@@ -182,21 +182,35 @@ export class AiCallsRepo {
    * Model calls that did NOT succeed, newest first, within `[sinceMs, now]`
    * (Diagnostics "recent activity").
    *
-   * `outcome != 'ok'` is the only filter: what counts as a *failure* versus a
-   * benign non-success (`not_meaningful`) is a judgement the reader makes, for
-   * the same reason {@link outcomeStats} does not collapse an "errors" number.
+   * What counts as a *failure* versus a benign non-success (`not_meaningful`) is
+   * a judgement the reader makes, for the same reason {@link outcomeStats} does
+   * not collapse an "errors" number — so the reader passes the exact `outcomes`
+   * it wants to see. This matters for correctness, not just tidiness: the two
+   * highest-volume non-`ok` Layer-2 outcomes (`not_meaningful`, `no_context`)
+   * would otherwise fill every one of the `limit` slots and push a rare but
+   * genuine `fallback_template_*` row off the end, so the panel would never
+   * show the incident it exists to surface. Omitting `outcomes` keeps the old
+   * "anything but `ok`" behaviour.
+   *
    * The panel wants a short recent list, so `limit` is mandatory and small.
    */
-  listRecentNotable(sinceMs: number, limit: number): AiCallNotable[] {
+  listRecentNotable(sinceMs: number, limit: number, outcomes?: readonly string[]): AiCallNotable[] {
+    const filter =
+      outcomes && outcomes.length > 0
+        ? `outcome IN (${outcomes.map(() => '?').join(', ')})`
+        : `outcome <> 'ok'`;
+    const params =
+      outcomes && outcomes.length > 0 ? [...outcomes, sinceMs, limit] : [sinceMs, limit];
+
     const rows = this.db
       .prepare(
         `SELECT layer, outcome, created_at
            FROM ai_calls
-          WHERE outcome <> 'ok' AND created_at >= ?
+          WHERE ${filter} AND created_at >= ?
           ORDER BY created_at DESC
           LIMIT ?`,
       )
-      .all(sinceMs, limit) as { layer: number; outcome: string; created_at: number }[];
+      .all(...params) as { layer: number; outcome: string; created_at: number }[];
 
     return rows.map((row) => ({
       layer: row.layer,

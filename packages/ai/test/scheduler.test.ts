@@ -471,6 +471,178 @@ describe('DebounceScheduler — robustness', () => {
     expect(traces.some((t) => t.event === 'degraded' && t.threadKey === K)).toBe(true);
   });
 
+  it('SETTLES a `no_signal` thread instead of retrying it', async () => {
+    // The counterpart to the `no_context` test above, and the whole point of
+    // Layer 2 reporting two outcomes: this thread is fully extracted and holds
+    // nothing citable, so there is nothing to summarize and never will be.
+    // Retrying it ten times and then parking it is what filled the Diagnostics
+    // feed with "a conversation couldn't be summarized" for conversations that
+    // were simply chatter.
+    const empty = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      maxAttempts: 2,
+      onSynthesize: async (k) => {
+        synthesized.push(k);
+        return 'no_signal';
+      },
+      onTrace: (t) => {
+        traces.push(t);
+      },
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+
+    await empty.tick();
+
+    expect(synthesized).toEqual([K]);
+    // Settled exactly like `not_meaningful`: caught up, budget untouched.
+    expect(watermarks.get(K)?.oldestUnsynthAt).toBeNull();
+    expect(watermarks.get(K)?.lastSynthesizedAt).not.toBeNull();
+    expect(watermarks.get(K)?.attempts).toBe(0);
+
+    // And it is not offered again, nor parked, no matter how long passes.
+    clock.advance(60 * MIN);
+    await empty.tick();
+    expect(synthesized).toEqual([K]);
+    expect(traces.some((t) => t.event === 'degraded')).toBe(false);
+  });
+
+  it('reports no_signal as a success outcome, not a failure', async () => {
+    const empty = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      onSynthesize: async () => 'no_signal',
+      onTrace: (t) => {
+        traces.push(t);
+      },
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+    await empty.tick();
+
+    const settled = traces.filter((t) => t.event === 'success');
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({ outcome: 'no_signal' });
+    expect(traces.some((t) => t.event === 'failure')).toBe(false);
+  });
+
+  it('revives a parked thread that has gained signal, and offers it again', async () => {
+    const events = new EventsRepo(db);
+    const extractions = new ExtractionsRepo(db);
+    const raced = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      maxAttempts: 2,
+      onSynthesize: async (k) => {
+        synthesized.push(k);
+        return 'no_context';
+      },
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+    await raced.tick();
+    clock.advance(30_000);
+    await raced.tick();
+    expect(watermarks.get(K)?.attempts).toBe(2);
+
+    // Parked: the next tick offers it nothing.
+    clock.advance(30_000);
+    await raced.tick();
+    expect(synthesized).toEqual([K, K]);
+
+    // A real message lands and Layer 1 finds something citable in it. Parking
+    // used to be terminal, so this content would never have been looked at.
+    events.insertIfAbsent({
+      eventId: 'e-real',
+      source: 'slack',
+      sourceEventId: 's-real',
+      threadKey: K,
+      actorId: 'U1',
+      occurredAt: clock.now(),
+      ingestedAt: clock.now(),
+      payload: { text: 'can you approve this by Friday' },
+      redactionCount: 0,
+    });
+    extractions.insert({
+      eventId: 'e-real',
+      class: 'question',
+      confidence: 0.9,
+      participants: [],
+      artifacts: [],
+      model: 'm',
+      promptVersion: 'v1',
+      createdAt: clock.now(),
+    });
+
+    clock.advance(30_000);
+    await raced.tick();
+
+    expect(synthesized).toEqual([K, K, K]);
+  });
+
+  it('does not revive a parked thread whose signal predates the park', async () => {
+    // The loop this guard prevents: a thread that keeps failing usually HAS
+    // context — that is what it is failing on — so reviving on "has signal"
+    // would un-park it every tick, forever.
+    const events = new EventsRepo(db);
+    const extractions = new ExtractionsRepo(db);
+
+    events.insertIfAbsent({
+      eventId: 'e-old',
+      source: 'slack',
+      sourceEventId: 's-old',
+      threadKey: K,
+      actorId: 'U1',
+      occurredAt: 0,
+      ingestedAt: 0,
+      payload: { text: 'a real message' },
+      redactionCount: 0,
+    });
+    extractions.insert({
+      eventId: 'e-old',
+      class: 'question',
+      confidence: 0.9,
+      participants: [],
+      artifacts: [],
+      model: 'm',
+      promptVersion: 'v1',
+      createdAt: 1,
+    });
+
+    const doomed = new DebounceScheduler({
+      clock,
+      config: cfg,
+      watermarks,
+      maxAttempts: 2,
+      onSynthesize: async (k) => {
+        synthesized.push(k);
+        throw new Error('poison thread');
+      },
+    });
+
+    watermarks.touch(K, 'slack', 0);
+    clock.advance(6 * MIN);
+    await doomed.tick();
+    clock.advance(30_000);
+    await doomed.tick();
+    expect(watermarks.get(K)?.attempts).toBe(2);
+
+    for (let i = 0; i < 4; i += 1) {
+      clock.advance(30_000);
+      await doomed.tick();
+    }
+
+    // Two attempts, then nothing more. Parking still means parked.
+    expect(synthesized).toEqual([K, K]);
+  });
+
   it('does nothing when no thread is due, including on an empty database', async () => {
     await expect(sched.tick()).resolves.toBeUndefined();
     expect(synthesized).toEqual([]);

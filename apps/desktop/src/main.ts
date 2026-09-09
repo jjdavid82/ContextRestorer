@@ -961,6 +961,13 @@ function createLayer12(
     appConfig.model.chat,
     `layer2-synthesize.${appConfig.promptVersions.layer2}`,
     systemClock,
+    // Lets Layer 2 tell "no context YET" from "no context, ever". Without it
+    // every thread whose events are all `noise` — 72% of them on a real
+    // install — burns its whole retry budget and parks, which the Diagnostics
+    // panel then reports as a summarization failure. The SAME `EventsRepo`
+    // instance the extraction sweep reads, so the two can never disagree about
+    // what is extracted.
+    events,
   );
 
   const scheduler = new DebounceScheduler({

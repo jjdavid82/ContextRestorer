@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
@@ -168,3 +168,90 @@ describe('migrations directory resolution', () => {
     }
   });
 });
+
+describe('010_watermark_parked_at — backfilling threads parked by an older build', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = openDb(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  /**
+   * Insert a watermark row the way a build without `parked_at` would have left
+   * it: attempts burned, no reference point. Written column-by-column so the
+   * insert keeps working when the table gains more columns.
+   */
+  const seedWatermark = (threadKey: string, attempts: number): void => {
+    db.prepare(
+      `INSERT INTO synthesis_watermark
+         (thread_key, source, oldest_unsynth_at, last_event_at, last_synthesized_at, attempts)
+       VALUES (?, 'slack', 1000, 1000, NULL, ?)`,
+    ).run(threadKey, attempts);
+  };
+
+  const parkedAt = (threadKey: string): number | null => {
+    const row = db
+      .prepare(`SELECT parked_at FROM synthesis_watermark WHERE thread_key = ?`)
+      .get(threadKey) as { parked_at: number | null } | undefined;
+    return row?.parked_at ?? null;
+  };
+
+  it('gives every row that had burned attempts a reference point', () => {
+    // Migrate to 009 first, then seed, then let 010 run — the actual upgrade
+    // path a user's existing database takes.
+    migrateThrough(db, 9);
+    seedWatermark('parked', 10);
+    seedWatermark('mid-retry', 3);
+    seedWatermark('healthy', 0);
+
+    migrate(db);
+
+    // Without this, the revive's comparison against NULL matches nothing and a
+    // thread parked by an older build stays parked forever — which is the
+    // defect the migration exists to fix.
+    expect(parkedAt('parked')).not.toBeNull();
+    expect(parkedAt('mid-retry')).not.toBeNull();
+    // A thread that never failed is not parked and needs no reference point.
+    expect(parkedAt('healthy')).toBeNull();
+  });
+
+  it('leaves a fresh install with no stamped rows', () => {
+    migrate(db);
+
+    expect(
+      (
+        db
+          .prepare(`SELECT COUNT(*) AS n FROM synthesis_watermark WHERE parked_at IS NOT NULL`)
+          .get() as { n: number }
+      ).n,
+    ).toBe(0);
+  });
+});
+
+/**
+ * Apply only the migrations up to and including `version`, so a test can stand
+ * a database up at an older schema and then observe one upgrade in isolation.
+ *
+ * Duplicates a little of `migrate()`'s file walk on purpose: the point is to
+ * stop BEFORE the migration under test, which the real function cannot do.
+ */
+function migrateThrough(db: Database, version: number): void {
+  const dir = join(import.meta.dirname, '..', 'src', 'migrations');
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`);
+  for (const file of files) {
+    const n = Number.parseInt(file.slice(0, 3), 10);
+    if (n > version) break;
+    db.exec(readFileSync(join(dir, file), 'utf8'));
+    db.prepare(`INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)`).run(
+      n,
+      Date.now(),
+    );
+  }
+}

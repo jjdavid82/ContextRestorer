@@ -346,6 +346,101 @@ describe('Layer2Synthesizer — citation gate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 5b. The two kinds of empty. Retrieval returning nothing has two causes with
+//     opposite lifetimes, and the outcome has to say WHICH — the scheduler
+//     retries one and settles the other. Collapsing them parked 79 all-noise
+//     threads on a real install and reported them as summarization failures.
+// ---------------------------------------------------------------------------
+
+describe('Layer2Synthesizer — no_context vs no_signal', () => {
+  /** A `ThreadExtractionReader` double, so no events table is needed here. */
+  const reader = (state: { events: number; unextracted: number; signal: number }) => ({
+    threadExtractionState: () => state,
+  });
+
+  function synthWith(read: ReturnType<typeof reader>): Layer2Synthesizer {
+    return new Layer2Synthesizer(
+      ollama,
+      retrieval,
+      deltas,
+      pending,
+      watermarks,
+      aiCalls,
+      MODEL,
+      PROMPT_VERSION,
+      clock,
+      read,
+    );
+  }
+
+  it('reports no_signal when every event is extracted and none produced a chunk', async () => {
+    retrieval.chunks = [];
+
+    // Terminal: chunks are upserted BEFORE their `extractions` row, so once
+    // every event has a row, every chunk this thread will ever have exists —
+    // and there are none.
+    await expect(
+      synthWith(reader({ events: 4, unextracted: 0, signal: 0 })).synthesize(K),
+    ).resolves.toBe('no_signal');
+
+    expect(ollama.calls).toEqual([]);
+    expect(loggedCalls()[0]).toMatchObject({ layer: 2, outcome: 'no_signal' });
+  });
+
+  it('reports the retryable no_context while Layer 1 is still working through the thread', async () => {
+    retrieval.chunks = [];
+
+    await expect(
+      synthWith(reader({ events: 4, unextracted: 2, signal: 1 })).synthesize(K),
+    ).resolves.toBe('no_context');
+  });
+
+  it('is terminal on unextracted === 0 even when signal says a chunk should exist', async () => {
+    // A non-noise extraction whose event text was blank writes no chunk
+    // (`layer1/extract.ts` skips empty bodies). Retrying that forever is what
+    // the old collapse did; `unextracted === 0` is the load-bearing half.
+    retrieval.chunks = [];
+
+    await expect(
+      synthWith(reader({ events: 1, unextracted: 0, signal: 1 })).synthesize(K),
+    ).resolves.toBe('no_signal');
+  });
+
+  it('never calls a thread with no events terminal', async () => {
+    // `events: 0` is not "fully extracted, nothing to say" — it is a watermark
+    // that has outrun its events. Retryable, so nothing is settled on a race.
+    retrieval.chunks = [];
+
+    await expect(
+      synthWith(reader({ events: 0, unextracted: 0, signal: 0 })).synthesize(K),
+    ).resolves.toBe('no_context');
+  });
+
+  it('keeps the old behaviour when no reader is wired', async () => {
+    // The dep is optional and last, so every pre-existing call site — including
+    // the eval harness — still compiles and still gets `no_context`.
+    retrieval.chunks = [];
+
+    await expect(makeSynth().synthesize(K)).resolves.toBe('no_context');
+  });
+
+  it('stays retryable when retrieval timed out, even on a fully-extracted thread', async () => {
+    // `partial: true` with no chunks is retrieval timing out (or the vector
+    // store rejecting), NOT a thread that has been fully read and has nothing
+    // in it. Settling the watermark here would strand a real delta the next
+    // retrieval pass would have found.
+    retrieval.chunks = [];
+    retrieval.partial = true;
+
+    await expect(
+      synthWith(reader({ events: 4, unextracted: 0, signal: 2 })).synthesize(K),
+    ).resolves.toBe('no_context');
+
+    expect(loggedCalls()[0]).toMatchObject({ layer: 2, outcome: 'no_context' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 6. Watermark ownership: the SCHEDULER closes the cycle, not the synthesizer.
 // ---------------------------------------------------------------------------
 

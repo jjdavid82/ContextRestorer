@@ -36,6 +36,17 @@ export interface OnboardingStatus {
   projectsDeclared: string[];
   /** Whether the local Ollama endpoint answered a health probe. */
   ollamaReady: boolean;
+  /**
+   * How many projects `projects:declare` will actually accept
+   * (`config.onboarding.minDeclaredProjects`, OI-3).
+   *
+   * Reported rather than hardcoded in the renderer because the two had already
+   * drifted once: the config said 3 while the onboarding screen called the
+   * step optional and offered a "Skip for now" button that could only fail.
+   * The number the UI states and the number the handler enforces are now the
+   * same value, read from one place.
+   */
+  minDeclaredProjects: number;
 }
 
 /** `model:get` — the chat-model picker (Settings page). */
@@ -306,7 +317,7 @@ export interface ActivityEvent {
     | 'thread_parked'
     | 'gate_injection'
     | 'gate_drops'
-    | 'template_fallback'
+    | 'briefing_fallback'
     | 'extraction_writeoff'
     | 'model_error'
     | 'noise_skipped';
@@ -564,21 +575,32 @@ function assertScheduleInput(input: unknown): asserts input is BriefingScheduleI
   }
 }
 
-/** Shape-check the selection `slack:setSelected` takes. */
+/**
+ * Shape-check the selection `slack:setSelected` takes.
+ *
+ * `projectId` is tri-state and validated only when PRESENT: absent means "leave
+ * the existing tag alone", `null` clears it, a non-empty string sets it. That
+ * vocabulary is `SlackChannelsRepo.setSelected`'s, and this gate has to speak
+ * it exactly — coercing an absent key into `null` here would silently wipe
+ * every tag on a plain checkbox save.
+ */
 function assertChannelSelection(
   channels: unknown,
-): asserts channels is Array<{ channelId: string; name: string }> {
+): asserts channels is Array<{ channelId: string; name: string; projectId?: string | null }> {
   if (
     !Array.isArray(channels) ||
     channels.some((c: unknown) => {
-      const row = c as { channelId?: unknown; name?: unknown } | null;
+      const row = c as { channelId?: unknown; name?: unknown; projectId?: unknown } | null;
       return (
         row === null ||
         typeof row !== 'object' ||
         typeof row.channelId !== 'string' ||
         row.channelId.length === 0 ||
         typeof row.name !== 'string' ||
-        row.name.length === 0
+        row.name.length === 0 ||
+        (row.projectId !== undefined &&
+          row.projectId !== null &&
+          (typeof row.projectId !== 'string' || row.projectId.length === 0))
       );
     })
   ) {
@@ -719,7 +741,13 @@ export interface ContextRestorerBridge {
     /** Live `conversations.list` call over the connected token. */
     listAvailable(): Promise<SlackChannelsResult>;
     getSelected(): Promise<SelectedSlackChannel[]>;
-    setSelected(channels: Array<{ channelId: string; name: string }>): Promise<OkResult>;
+    /**
+     * `projectId` is tri-state (A-2): omit it to leave existing tags alone,
+     * `null` clears one, a string sets it. The plain checkbox save omits it.
+     */
+    setSelected(
+      channels: Array<{ channelId: string; name: string; projectId?: string | null }>,
+    ): Promise<OkResult>;
   };
   /**
    * The chat-model picker (Settings page). `setChat` only PERSISTS the
@@ -880,8 +908,19 @@ const bridge: ContextRestorerBridge = {
       assertChannelSelection(channels);
       // Rebuilt field by field, not forwarded: only structured-cloneable plain
       // data crosses the bridge.
+      // `projectId` was MISSING from this map, and dropping it is why channel →
+      // project tagging never worked from the UI: the settings page sent the
+      // tag, this line discarded it, and `slack:setSelected` read the absent
+      // key as "leave the existing tag alone" — so a save looked like it
+      // succeeded, the channel selection persisted, and the tag silently never
+      // did. Spread, not assigned: an explicit `undefined` would cross the
+      // bridge as a present key and mean the opposite (clear the tag).
       return ipcRenderer.invoke('slack:setSelected', {
-        channels: channels.map((c) => ({ channelId: c.channelId, name: c.name })),
+        channels: channels.map((c) => ({
+          channelId: c.channelId,
+          name: c.name,
+          ...(c.projectId === undefined ? {} : { projectId: c.projectId }),
+        })),
       }) as Promise<OkResult>;
     },
   },

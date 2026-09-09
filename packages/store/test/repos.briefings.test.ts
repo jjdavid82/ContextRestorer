@@ -310,29 +310,6 @@ describe('AiCallsRepo.listRecentNotable', () => {
   });
 });
 
-describe('BriefingsRepo.recentTemplateFallbacks', () => {
-  it('returns delivered template-mode briefings in the window, newest first', () => {
-    const a = createBriefing(GENERATED_AT + 1_000);
-    const b = createBriefing(GENERATED_AT + 2_000);
-    createBriefing(GENERATED_AT + 3_000); // stays llm
-    const old = createBriefing(GENERATED_AT - 10_000);
-
-    briefings.markTemplateMode(a.briefingId);
-    briefings.markTemplateMode(b.briefingId);
-    briefings.markTemplateMode(old.briefingId);
-
-    expect(briefings.recentTemplateFallbacks(GENERATED_AT, 10)).toEqual([
-      { briefingId: b.briefingId, generatedAt: GENERATED_AT + 2_000 },
-      { briefingId: a.briefingId, generatedAt: GENERATED_AT + 1_000 },
-    ]);
-  });
-
-  it('is empty when every briefing is llm-mode', () => {
-    createBriefing();
-    expect(briefings.recentTemplateFallbacks(0, 10)).toEqual([]);
-  });
-});
-
 describe('BriefingsRepo.lastDeliveredAt', () => {
   it('is null with no briefings, then tracks the newest generated_at', () => {
     expect(briefings.lastDeliveredAt()).toBeNull();
