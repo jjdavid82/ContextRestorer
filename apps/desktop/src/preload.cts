@@ -483,6 +483,50 @@ export interface SourceHealth {
 }
 
 /** `pipeline:status` — a live "what is the pipeline doing right now" snapshot. */
+/** `privacy:stats` — what the app is currently holding (SEC-8's read-only half). */
+export interface DataSummary {
+  /** Raw source messages stored. */
+  messages: number;
+  /** Derived state changes a wipe also removes. */
+  summaries: number;
+  /** Briefings written. */
+  briefings: number;
+  /** Obligations, open and closed. */
+  obligations: number;
+  /** Every row a wipe would delete, across every table. */
+  totalRows: number;
+  /** Epoch ms of the oldest stored message; `null` when nothing is stored. */
+  oldestEventAt: number | null;
+  /** Messages already past the retention cutoff — what the next purge takes. */
+  expiredRawEvents: number;
+  /** `config.retention.rawEventDays`. */
+  retentionDays: number;
+  /** Sources whose credentials a wipe would revoke. */
+  connectedSources: Source[];
+}
+
+/**
+ * `privacy:deleteEverything` — what each step of the erasure managed.
+ *
+ * `ok` reports the SQLite wipe specifically: once that commits, the user's
+ * messages are gone in every sense that matters to them. Anything the process
+ * could not finish afterwards is named in `incomplete` and shown, rather than
+ * downgrading a real erasure to a failure or hiding a partial one behind a
+ * green tick.
+ */
+export interface DeleteEverythingReport {
+  ok: boolean;
+  reason?: string;
+  rowsDeleted?: number;
+  /** `null` when the vector store could not be reached — not the same as `0`. */
+  vectorsDeleted?: number | null;
+  filesDeleted?: number;
+  filesFailed?: number;
+  credentialsRevoked?: Source[];
+  /** Steps that did not complete: `vectors`, `files`, `credentials`. */
+  incomplete?: string[];
+}
+
 export interface PipelineStatus {
   /** Ingested events with no `extractions` row yet. */
   extractionBacklog: number;
@@ -804,6 +848,16 @@ export interface ContextRestorerBridge {
     get(): Promise<ModelInfo>;
     setChat(model: string): Promise<OkResult>;
   };
+  /**
+   * SEC-8: the "Your data" panel. `deleteEverything` takes the literal
+   * confirmation phrase, re-checked in the main process — see `ipc/privacy.ts`
+   * for why a channel that erases everything cannot be callable bare from a
+   * renderer that displays untrusted ingested text.
+   */
+  privacy: {
+    stats(): Promise<DataSummary>;
+    deleteEverything(confirm: string): Promise<DeleteEverythingReport>;
+  };
 }
 
 
@@ -994,6 +1048,18 @@ const bridge: ContextRestorerBridge = {
     setChat: (model) => {
       assertNonEmptyString(model, 'model');
       return ipcRenderer.invoke('model:setChat', { model }) as Promise<OkResult>;
+    },
+  },
+  privacy: {
+    stats: () => ipcRenderer.invoke('privacy:stats') as Promise<DataSummary>,
+    deleteEverything: (confirm) => {
+      // Shape only. The authoritative check is the exact-phrase comparison in
+      // `ipc/privacy.ts` — this gate cannot be the one that matters, since a
+      // compromised renderer controls what it sends.
+      assertNonEmptyString(confirm, 'confirm');
+      return ipcRenderer.invoke('privacy:deleteEverything', {
+        confirm,
+      }) as Promise<DeleteEverythingReport>;
     },
   },
 };

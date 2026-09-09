@@ -43,8 +43,11 @@ import {
   migrate,
   openDb,
   openVectors,
+  purgeRawEventsOlderThan,
   rebuildProjectLinks,
   SlackChannelProjectResolver,
+  deleteEverything,
+  userDataSummary,
   type SelectedSlackChannel,
   type VectorStore,
 } from '@cr/store';
@@ -76,6 +79,7 @@ import { projectNameFor } from './ipc/briefing.js';
 import { ensureFreshTokens } from './ipc/oauth.js';
 import { registerPipelineStatusPush } from './ipc/pipelineStatus.js';
 import { BriefingScheduleRunner } from './scheduler/briefingSchedule.js';
+import { startRetentionPurge } from './scheduler/retentionPurge.js';
 import { notify } from './notifications.js';
 import type { BriefingChunk, BriefingDone, Citation } from './preload.cjs';
 
@@ -219,6 +223,12 @@ let stopHealthPush: (() => void) | null = null;
 
 /** Disposer for the `pipeline:status` push loop, returned by `registerPipelineStatusPush`. */
 let stopPipelineStatusPush: (() => void) | null = null;
+
+/**
+ * Disposer for the 90-day raw-event purge loop (NFR retention), returned by
+ * `startRetentionPurge`. Stopped on quit like every other timer here.
+ */
+let stopRetentionPurge: (() => void) | null = null;
 
 // Set before any `app.getPath()` call. Electron derives `userData` from the app name,
 // which otherwise comes from package.json — i.e. the scoped `@cr/desktop`. Pinning it
@@ -1577,6 +1587,36 @@ if (!app.requestSingleInstanceLock()) {
         // are set by `runPreflightGate`, which always runs before this point.
         modelSettings: appSettings!,
         defaultChatModel: defaultChatModel!,
+        // SEC-8 "Your data" panel. The adapter is where `retention.ts` gets
+        // bound to the live handle — `ipc/privacy.ts` holds no `better-sqlite3`
+        // reference of its own, for the same reason every other handler module
+        // takes a narrow structural store.
+        privacyStore: {
+          summary: (cutoffMs) => userDataSummary(db!, cutoffMs),
+          deleteEverything: () => deleteEverything(db!),
+        },
+        // The vector half of a wipe. `vectors!` is non-null here (the vector
+        // gate ran and returned true), but the dep stays optional so a build
+        // whose gate failed still owes the user a SQLite erasure.
+        privacyVectors: vectors!,
+        // A completed wipe leaves this closure holding channel tags for
+        // projects that no longer exist, and the ingestion pipeline reads it on
+        // every new thread — so re-derive it from the (now empty) selection
+        // rather than letting the next poll cycle tag artifacts onto deleted
+        // project ids.
+        onDataDeleted: () => relinkProjects(slackChannels.list()),
+      });
+
+      // NFR retention, the acting half: `config.retention.rawEventDays` named a
+      // promise nothing kept until this call — raw Slack/Gmail payloads
+      // accumulated for the life of the install. Same `db` handle and the same
+      // vector store the wipe above uses, so the two paths cannot disagree
+      // about what "aged out" means.
+      stopRetentionPurge = startRetentionPurge({
+        purge: (cutoffMs) => purgeRawEventsOlderThan(db!, cutoffMs),
+        evictVectors: (eventIds) => vectors!.deleteByEventIds(eventIds),
+        rawEventDays: config!.retention.rawEventDays,
+        clock: systemClock,
       });
 
       // FR-3, the acting half: saved schedules now actually fire. Called WITHOUT
@@ -1667,6 +1707,11 @@ if (!app.requestSingleInstanceLock()) {
     isQuitting = true;
     stopHealthPush?.();
     stopHealthPush = null;
+    // Cancels the pending purge timer; an in-flight purge is left to finish —
+    // it holds an open SQLite transaction, and `db.close()` below would fail
+    // rather than corrupt anything if it were still running.
+    stopRetentionPurge?.();
+    stopRetentionPurge = null;
     stopPipelineStatusPush?.();
     stopPipelineStatusPush = null;
     // Cancels pending timers; an in-flight cycle is allowed to finish.
