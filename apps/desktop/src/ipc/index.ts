@@ -589,6 +589,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
             // Auto-detection reads the declared project names out of the same
             // `GraphRepo` instance the artifact lookup above uses.
             projects: deps.projectStore,
+            // …and the channel tags out of the same graph the briefing badge
+            // reads, so a suggestion and the badge on one row cannot disagree.
+            // `graph` and `projectStore` are the same `GraphRepo` in production;
+            // this takes the narrow slice, and falls back to the full repo so a
+            // host that wired only `projectStore` still gets tag-first
+            // detection rather than silently dropping to name matching.
+            tags: deps.graph ?? deps.projectStore,
           }
         : {}),
     });

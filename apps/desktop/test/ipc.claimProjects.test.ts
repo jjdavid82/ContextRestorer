@@ -88,6 +88,8 @@ function makeDeps(
   options: {
     projects?: ReadonlyArray<{ projectId: string; name: string }>;
     threadTexts?: Record<string, string[]>;
+    /** artifact id → the project id its channel is tagged with (`belongs_to`). */
+    tags?: Record<string, string>;
   } = {},
 ): Deps & { labels: ReturnType<typeof makeStore> } {
   const threadTexts = options.threadTexts ?? {};
@@ -114,6 +116,22 @@ function makeDeps(
     labels: store,
     clock: { now: () => CLOCK_NOW },
     ...(options.projects === undefined ? {} : { projects: { listProjects: () => options.projects } }),
+    // The narrow `StakesReader` slice detection reads channel tags through —
+    // the same shape, and in production the same object, the briefing badge uses.
+    ...(options.tags === undefined
+      ? {}
+      : {
+          tags: {
+            relatedIds: (fromId: string, rel: string) =>
+              rel === 'belongs_to' && options.tags![fromId] !== undefined
+                ? [options.tags![fromId]!]
+                : [],
+            getProject: (projectId: string) => {
+              const declared = (options.projects ?? []).find((p) => p.projectId === projectId);
+              return declared === undefined ? undefined : { stakesWeight: 3, name: declared.name };
+            },
+          },
+        }),
   } as unknown as Deps & { labels: ReturnType<typeof makeStore> };
 }
 
@@ -310,6 +328,52 @@ describe('detectClaimProjects', () => {
       { claimId: 'a1', projectId: 'p-dsp', origin: 'auto' },
     ]);
     expect(deps.labels.suggestProject).toHaveBeenCalledWith('a1', 'p-dsp', CLOCK_NOW, BRIEFING_ID);
+  });
+
+  // The channel tag outranks the name matcher. Both still land as `origin:
+  // 'auto'` — neither is a per-claim decision the user made — but a tag IS a
+  // decision they made per channel, so suggesting the weaker signal while the
+  // stronger one sat unread is what let one row show a badge naming one project
+  // and a dropdown naming another.
+  it('suggests the CHANNEL TAG in preference to what the text happens to name', () => {
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      // The text names AI Academy; the channel is tagged DSP. The tag wins.
+      threadTexts: { a1: ['Blocked on the AI Academy launch.'] },
+      tags: { a1: 'p-dsp' },
+    });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([
+      { claimId: 'a1', projectId: 'p-dsp', origin: 'auto' },
+    ]);
+    expect(deps.labels.suggestProject).toHaveBeenCalledWith('a1', 'p-dsp', CLOCK_NOW, BRIEFING_ID);
+  });
+
+  it('falls back to the name matcher when the thread carries no channel tag', () => {
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      threadTexts: { a1: ['Can you review the DSP dashboard today?'] },
+      tags: {},
+    });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([
+      { claimId: 'a1', projectId: 'p-dsp', origin: 'auto' },
+    ]);
+  });
+
+  // A channel keeps its tag after the project is deleted, so the edge can name
+  // an id no dropdown option carries. Offering it would preselect a value the
+  // user cannot see or confirm.
+  it('ignores a tag pointing at a project that is no longer declared', () => {
+    const deps = makeDeps(makeStore(), {
+      projects: PROJECTS,
+      threadTexts: { a1: ['Can you review the DSP dashboard today?'] },
+      tags: { a1: 'p-deleted' },
+    });
+
+    expect(detectClaimProjects({ briefingId: BRIEFING_ID, claimIds: ['a1'] }, deps)).toEqual([
+      { claimId: 'a1', projectId: 'p-dsp', origin: 'auto' },
+    ]);
   });
 
   it('leaves a claim BLANK when the text names no project', () => {

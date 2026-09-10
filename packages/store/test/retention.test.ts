@@ -56,6 +56,14 @@ function insertArtifact(artifactId: string): void {
   ).run(artifactId);
 }
 
+/** A Layer 1 write-off row for `eventId` (migration 009's audit trail). */
+function insertExtractionFailure(eventId: string): void {
+  db.prepare(
+    `INSERT INTO extraction_failures (event_id, attempts, first_at, last_at)
+     VALUES (?, 3, 1000, 2000)`,
+  ).run(eventId);
+}
+
 function countRows(table: string): number {
   const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number };
   return row.n;
@@ -185,6 +193,28 @@ describe('purgeRawEventsOlderThan — 90-day retention (NFR)', () => {
     expect(purgeRawEventsOlderThan(db, 3_000).rowsDeleted).toBe(1);
     expectAppendOnlyEnforced('new');
   });
+
+  // `extraction_failures.event_id` is a foreign key into `events` (migration
+  // 009). Without an explicit delete the purge aborted on FOREIGN KEY
+  // constraint failed — and did so on an unattended daily sweep, so retention
+  // simply stopped happening. Every earlier test in this file seeds events with
+  // no write-off row, which is why a whole suite of green tests missed it.
+  it('purges the write-off rows of the events it deletes, rather than aborting on the FK', () => {
+    insertEvent('old', 1_000);
+    insertEvent('new', 5_000);
+    insertExtractionFailure('old');
+    insertExtractionFailure('new');
+
+    const purged = purgeRawEventsOlderThan(db, 3_000);
+
+    expect(purged.rowsDeleted).toBe(1);
+    // The surviving event keeps its write-off row: that event is still live,
+    // and its attempt count is what keeps Layer 1 from retrying it forever.
+    const left = db
+      .prepare(`SELECT event_id FROM extraction_failures`)
+      .all() as { event_id: string }[];
+    expect(left.map((r) => r.event_id)).toEqual(['new']);
+  });
 });
 
 /** Every table `deleteEverything` is required to empty. */
@@ -195,6 +225,7 @@ const USER_DATA_TABLES = [
   'projects',
   'relationships',
   'extractions',
+  'extraction_failures',
   'state_deltas',
   'pending_items',
   'synthesis_watermark',
@@ -230,6 +261,9 @@ function seedEverything(): void {
         model, prompt_version, created_at)
      VALUES ('x1', 'e1', 'decision', 0.9, '["p1"]', '["a1"]', 'm', 'v1', 1000)`,
   ).run();
+  // Layer 1's write-off audit trail, FK'd to `events` — seeded on `e2` so a
+  // wipe has to clear it before its parent rather than abort on the FK.
+  insertExtractionFailure('e2');
 
   // A two-link supersedes chain, so the self-referencing FK is exercised.
   db.prepare(
@@ -418,5 +452,40 @@ describe('userDataSummary — the read-only half of SEC-8', () => {
 
     expect(countRows('events')).toBe(1);
     expectAppendOnlyEnforced('e-1');
+  });
+
+  /**
+   * The drift guard. `extraction_failures` reached `main` on one branch while
+   * `DELETE_ORDER` was written on another, and nothing failed: every test here
+   * enumerated its own hand-maintained table list, so a table in neither list
+   * was simply invisible. This asserts against the LIVE schema instead, so the
+   * next migration that adds a table either lands in `DELETE_ORDER` or fails
+   * here.
+   *
+   * Two tables are named as deliberate exclusions rather than filtered by a
+   * pattern — a new table must not be able to join them by accident.
+   */
+  it('accounts for every table in the live schema, so a new migration cannot slip through', () => {
+    const EXCLUDED = new Set([
+      // Bookkeeping, not user data: erasing it would strand the DB mid-migration.
+      'schema_version',
+      // A UI preference the user chose (the selected chat model), not anything
+      // observed about them. See `deleteEverything`'s doc comment.
+      'app_settings',
+    ]);
+
+    const live = (
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+        )
+        .all() as { name: string }[]
+    )
+      .map((row) => row.name)
+      .filter((name) => !EXCLUDED.has(name));
+
+    const accounted = Object.keys(userDataSummary(db, 0).rowsByTable);
+    expect([...live].sort()).toEqual([...accounted].sort());
   });
 });

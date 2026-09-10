@@ -1097,7 +1097,7 @@ describe('BriefingView — per-claim project label', () => {
     mock.emitChunk(chunk());
     await screen.findByText('Auth refactor shipped to staging.');
 
-    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'Project' })[0]!);
+    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'File under' })[0]!);
     fireEvent.click(await screen.findByRole('option', { name: 'Migration' }));
 
     await waitFor(() =>
@@ -1127,7 +1127,7 @@ describe('BriefingView — per-claim project label', () => {
     mock.emitChunk(chunk());
     await screen.findByText('Auth refactor shipped to staging.');
 
-    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'Project' })[0]!);
+    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'File under' })[0]!);
     fireEvent.click(await screen.findByRole('option', { name: 'No project' }));
 
     // `null`, not '' — clearing is its own instruction on the wire.
@@ -1145,7 +1145,7 @@ describe('BriefingView — per-claim project label', () => {
     mock.emitChunk(chunk());
     await screen.findByText('Auth refactor shipped to staging.');
 
-    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'Project' })[0]!);
+    fireEvent.mouseDown(screen.getAllByRole('combobox', { name: 'File under' })[0]!);
     fireEvent.click(await screen.findByRole('option', { name: 'Migration' }));
 
     // The optimistic selection must not survive a failed write, or the user
@@ -1263,6 +1263,56 @@ describe('BriefingView — project filter', () => {
     expect(screen.getByText(/1 item hidden by this filter/)).toBeTruthy();
   });
 
+  // The regression this filter shipped with: `art-1` carries a CHANNEL TAG for
+  // DSP — the badge on the row says so — but no per-claim filing. Reading only
+  // `claimProjects` meant filtering to DSP hid the row that was visibly badged
+  // DSP, so the filter contradicted the screen it was filtering.
+  it('keeps a row whose channel tag names the filtered project, even with no per-claim filing', async () => {
+    const mock = installBridge({ declaredProjects: PROJECTS, claimProjects: [] });
+    await renderBriefing(mock);
+    mock.emitChunk(
+      chunk({
+        claim: 'DSP dashboard shipped.',
+        citation: citation({ artifactId: 'art-1', projectName: 'DSP', projectId: 'p-dsp' }),
+      }),
+    );
+    mock.emitChunk(
+      chunk({ claim: 'Unrelated thing happened.', citation: citation({ artifactId: 'art-2' }) }),
+    );
+    await screen.findByText('DSP dashboard shipped.');
+    mock.emitDone(doneEvent());
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by project' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'DSP' }));
+
+    await waitFor(() => expect(screen.queryByText('Unrelated thing happened.')).toBeNull());
+    expect(screen.getByText('DSP dashboard shipped.')).toBeTruthy();
+  });
+
+  // …and the same tag makes the row count as FILED, so it must not also show up
+  // under "Not filed". The two halves have to agree or the row is in both lists.
+  it('treats a channel-tagged row as filed, so "Not filed" excludes it', async () => {
+    const mock = installBridge({ declaredProjects: PROJECTS, claimProjects: [] });
+    await renderBriefing(mock);
+    mock.emitChunk(
+      chunk({
+        claim: 'DSP dashboard shipped.',
+        citation: citation({ artifactId: 'art-1', projectName: 'DSP', projectId: 'p-dsp' }),
+      }),
+    );
+    mock.emitChunk(
+      chunk({ claim: 'Unrelated thing happened.', citation: citation({ artifactId: 'art-2' }) }),
+    );
+    await screen.findByText('Unrelated thing happened.');
+    mock.emitDone(doneEvent());
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by project' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Not filed' }));
+
+    await waitFor(() => expect(screen.queryByText('DSP dashboard shipped.')).toBeNull());
+    expect(screen.getByText('Unrelated thing happened.')).toBeTruthy();
+  });
+
   it('"Not filed" shows only the rows carrying no label', async () => {
     const mock = installBridge({
       declaredProjects: PROJECTS,
@@ -1373,7 +1423,7 @@ describe('the project badge', () => {
     // NFR-9: the name is the whole signal and it is plain text, so the badge
     // survives greyscale and a screen reader. The label says what it IS,
     // because "Platform Migration" alone does not read as a project.
-    expect(badge.getAttribute('aria-label')).toBe('Project: Platform Migration');
+    expect(badge.getAttribute('aria-label')).toBe('Ranked under project: Platform Migration');
   });
 
   it('labels an obligation with its project too', async () => {

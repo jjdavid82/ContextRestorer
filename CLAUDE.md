@@ -122,12 +122,18 @@ loosening is `style-src-attr 'unsafe-inline'` for MUI (inline style
 **Design decisions worth knowing before changing behavior** (`OI-n` in the
 requirements doc): the latency budget is a 45s synchronous-path cap (OI-1);
 model choice is fixed-stack, config-file only, not runtime-selectable
-(OI-2); declaring projects at onboarding is mandatory but not yet wired into
-ranking — `onboarding.minDeclaredProjects` accepts any non-negative integer
-because no code path creates the `belongs_to` graph edge `wStakes` reads yet
-(OI-3); eval-set size is fixed at ~70 labeled examples — any reported metric
-must state that size alongside the number, an unqualified percentage is not
-acceptable (OI-5/RO-2).
+(OI-2); declaring projects at onboarding is mandatory and IS now wired into
+ranking — `rebuildProjectLinks` (`packages/store/src/projectLinks.ts`, called
+from `main.ts`) materialises the `belongs_to` edge `wStakes` reads from each
+channel's project tag, so the shipped `onboarding.minDeclaredProjects` is `3`
+again; the validator stays permissive (any non-negative integer) only so an
+advanced user can lower it locally, which is the reverse of the old reason
+(OI-3). That same edge is the project a briefing item's badge names, and the
+strongest input to per-claim project suggestion — outranking the name matcher
+in `apps/desktop/src/ipc/projectMatch.ts`, which is an inference rather than a
+user decision; eval-set size is fixed at ~70 labeled examples — any reported
+metric must state that size alongside the number, an unqualified percentage is
+not acceptable (OI-5/RO-2).
 
 ## Project layout
 

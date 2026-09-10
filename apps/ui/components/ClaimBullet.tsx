@@ -59,6 +59,13 @@ export interface ClaimBulletProps {
    * placed FIRST: the project is the largest ranking weight after obligation,
    * and until it appeared here the user had no way to see that the declaration
    * they made at onboarding was doing anything at all.
+   *
+   * This is RANKING PROVENANCE, not a filing — it answers "why is this here?",
+   * and it comes from the tag on the item's channel. The "File under" control
+   * in the expanded row answers the different question of where the user wants
+   * this one item kept. The two are read together (a filing wins over the tag,
+   * and the tag is what seeds the suggestion), so they no longer disagree; the
+   * wording keeps them from reading as two answers to one question.
    */
   projectName?: string | undefined;
   /** Model confidence in [0, 1]. Omitted for claims that carry no score. */
@@ -127,7 +134,7 @@ export function ClaimBullet({
               size="small"
               color="primary"
               label={project}
-              aria-label={`Project: ${project}`}
+              aria-label={`Ranked under project: ${project}`}
               data-testid="project-badge"
               sx={PROJECT_CHIP_SX}
             />
